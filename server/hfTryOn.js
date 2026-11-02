@@ -4,6 +4,7 @@
 //   3) POST {base}{prefix}/call/tryon         → { event_id }
 //   4) GET  {base}{prefix}/call/tryon/{id}    → SSE로 결과(FileData) 수신
 //   5) 결과 이미지를 내려받아 data URI로 돌려줌 (브라우저는 hf.space에 접속하지 않고, 링크 만료도 없음)
+//      결과 주소는 Space 자신의 주소(origin)일 때만 내려받아요. 토큰도 그 주소로만 보내요.
 // 토큰(HF_TOKEN)은 선택이에요. 없어도 무료 ZeroGPU 쿼터로 동작하고, 있으면 하루 쿼터가 늘어나요.
 import { createHash } from 'node:crypto'
 
@@ -11,7 +12,14 @@ export const DEFAULT_SPACE = 'yisol/IDM-VTON'
 // 같은 IDM-VTON /tryon API를 쓰는 Space 목록 (기본 Space가 잠들었거나 붐빌 때 HF_SPACE로 바꿔 쓸 수 있어요)
 export const KNOWN_SPACES = ['yisol/IDM-VTON', 'John6666/IDM-VTON', 'LPDoctor/IDM-VTON-demo', 'jjlealse/IDM-VTON']
 
-const GARMENT_FALLBACK = { top: 'a top', outer: 'an outer jacket', bottom: 'a pair of pants', dress: 'a dress' }
+// 공개 IDM-VTON Space의 자동 마스크는 상반신('upper_body')만 칠해요. 그래서 상의·아우터만 지원하고,
+// 하의·원피스는 다리를 그대로 둔 채 상체만 다시 그리게 되므로 받지 않아요.
+export const TRYON_CATEGORIES = ['top', 'outer']
+export const isTryOnSupported = (category) => category == null || TRYON_CATEGORIES.includes(category)
+// 옷 설명은 SDXL의 영어 CLIP 프롬프트("model is wearing ...")로 들어가요. 한글 상품명은 거의 도움이 안 돼서
+// 영어(ASCII) 이름일 때만 쓰고, 아니면 카테고리별 영어 문구를 써요.
+const GARMENT_DESC = { top: 'a top', outer: 'an outer jacket' }
+const MAX_REDIRECTS = 2
 const DENOISE_STEPS = 30
 const SEED = 42
 const CACHE_MAX = 20
@@ -89,6 +97,20 @@ const EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'imag
 
 const fileData = (path, origName, url) => ({ path, ...(url ? { url } : {}), orig_name: origName, meta: { _type: 'gradio.FileData' } })
 
+export function garmentDescription(category, garmentName) {
+  const name = typeof garmentName === 'string' ? garmentName.trim().slice(0, 100) : ''
+  if (name && /^[\x20-\x7e]+$/.test(name)) return name
+  return GARMENT_DESC[category] || GARMENT_DESC.top
+}
+
+const originOf = (url) => {
+  try {
+    return new URL(url).origin
+  } catch {
+    return null
+  }
+}
+
 export async function runHfTryOn({
   personImage,
   garmentImage,
@@ -99,8 +121,10 @@ export async function runHfTryOn({
   fetchImpl = fetch,
   signal,
 } = {}) {
-  const garmentDesc =
-    typeof garmentName === 'string' && garmentName.trim() ? garmentName.trim().slice(0, 100) : GARMENT_FALLBACK[category] || 'a top'
+  if (!isTryOnSupported(category)) {
+    throw hfError(400, 'UNSUPPORTED', 'AI 합성은 상의·아우터만 지원해요. 무료 IDM-VTON Space는 상반신만 인식해요.')
+  }
+  const garmentDesc = garmentDescription(category, garmentName)
   const model = `IDM-VTON (Hugging Face ${space})`
   const key = createHash('sha256')
     .update([space, category, garmentDesc, personImage, garmentImage].join('\n'))
@@ -189,29 +213,52 @@ export async function runHfTryOn({
     logUpstream('결과 없음', JSON.stringify(events.map((e) => e.event)))
     throw hfError(502, 'TRYON_FAILED', '합성 결과가 비어 있어요.')
   }
-  const resultUrl = /^https?:\/\//i.test(out.url || '') ? out.url : `${api}/file=${out.path}`
+  // Space가 준 주소는 믿지 않아요. 절대 주소는 Space 자신의 주소일 때만 쓰고, 아니면 path로 직접 만들어요.
+  // (다른 호스트로 토큰이 새거나, 서버가 엉뚱한 주소를 대신 내려받는 일을 막아요)
+  let resultUrl = null
+  if (/^https:\/\//i.test(out.url || '') && originOf(out.url) === base) resultUrl = out.url
+  else if (typeof out.path === 'string' && out.path && !/^[a-z][\w+.-]*:/i.test(out.path)) resultUrl = `${api}/file=${out.path}`
+  if (!resultUrl || originOf(resultUrl) !== base) {
+    logUpstream('결과 주소 거절', out.url || out.path)
+    throw hfError(502, 'TRYON_FAILED', '합성 결과를 받아오지 못했어요. 다시 시도해주세요.')
+  }
 
-  // 5) 결과를 data URI로 바꿔요. 실패하면 주소를 그대로 넘겨요.
-  let image = resultUrl
-  try {
-    const r = await hf(resultUrl)
-    if (r.ok) {
-      const type = (r.headers.get('content-type') || 'image/png').split(';')[0].trim()
-      const buf = Buffer.from(await r.arrayBuffer())
-      image = `data:${type.startsWith('image/') ? type : 'image/png'};base64,${buf.toString('base64')}`
-    } else {
-      logUpstream(`결과 다운로드 ${r.status}`, '')
+  // 5) 결과를 data URI로 바꿔요. 같은 Space 안의 리디렉션만 따라가고, 실패하면 오류로 알려요.
+  const downloadFailed = () => hfError(502, 'TRYON_FAILED', '합성 결과 이미지를 받아오지 못했어요. 다시 시도해주세요.')
+  let r = null
+  for (let hop = 0; ; hop++) {
+    r = await hf(resultUrl, { redirect: 'manual' })
+    if (r.status < 300 || r.status >= 400) break
+    const next = r.headers.get('location')
+    let nextUrl = null
+    try {
+      nextUrl = next ? new URL(next, resultUrl).href : null
+    } catch {
+      // 잘못된 Location은 아래에서 거절
     }
+    if (hop >= MAX_REDIRECTS || !nextUrl || originOf(nextUrl) !== base) {
+      logUpstream(`결과 리디렉션 거절 ${r.status}`, next)
+      throw downloadFailed()
+    }
+    resultUrl = nextUrl
+  }
+  if (!r.ok) {
+    logUpstream(`결과 다운로드 ${r.status}`, '')
+    throw downloadFailed()
+  }
+  let buf
+  try {
+    buf = Buffer.from(await r.arrayBuffer())
   } catch (e) {
     if (e?.name === 'AbortError') throw e
-    // 다운로드 실패는 주소로 대신해요
+    logUpstream('결과 다운로드 끊김', e?.message)
+    throw downloadFailed()
   }
+  const type = (r.headers.get('content-type') || 'image/png').split(';')[0].trim()
+  const image = `data:${type.startsWith('image/') ? type : 'image/png'};base64,${buf.toString('base64')}`
 
   const result = { image, model }
-  // 만료될 수 있는 주소 결과는 보관하지 않아요.
-  if (image.startsWith('data:')) {
-    cache.set(key, result)
-    if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value)
-  }
+  cache.set(key, result)
+  if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value)
   return result
 }

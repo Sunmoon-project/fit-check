@@ -5,10 +5,11 @@
 // 키 없이도 동작해요. 선택 토큰(HF_TOKEN)은 서버에만 있고 브라우저로 보내지 않습니다.
 import { safeFetchHtml, FetchError } from './safeFetch.js'
 import { parseProductHtml } from './productParser.js'
-import { runHfTryOn, isValidSpaceId, DEFAULT_SPACE } from './hfTryOn.js'
+import { runHfTryOn, isValidSpaceId, isTryOnSupported, DEFAULT_SPACE } from './hfTryOn.js'
 
 const MAX_BODY = 15 * 1024 * 1024 // 사진 두 장(data URI) 기준
-const TRYON_TIMEOUT = 180000 // ZeroGPU 대기열이 길 수 있어요
+// ZeroGPU 대기열이 길 수 있어요. 중간에 끊어도 Space의 작업은 취소되지 않고 쿼터를 쓰므로 넉넉히 기다려요.
+const TRYON_TIMEOUT = 300000
 
 function readJson(req) {
   return new Promise((resolve, reject) => {
@@ -81,7 +82,9 @@ async function handleTryOn(req, res, hf) {
   if (!isImageInput(personImage) || !isImageInput(garmentImage)) {
     return send(res, 400, { error: 'INVALID_IMAGE', message: '사진 형식을 확인해주세요 (PNG, JPG, WEBP).' })
   }
-  if (category === 'shoes') return send(res, 400, { error: 'UNSUPPORTED', message: '신발은 AI 합성을 지원하지 않아요.' })
+  if (!isTryOnSupported(category)) {
+    return send(res, 400, { error: 'UNSUPPORTED', message: 'AI 합성은 상의·아우터만 지원해요. 무료 IDM-VTON Space는 상반신만 인식해요.' })
+  }
 
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), TRYON_TIMEOUT)
@@ -97,7 +100,12 @@ async function handleTryOn(req, res, hf) {
     })
     return send(res, 200, result)
   } catch (e) {
-    if (e.name === 'AbortError') return send(res, 504, { error: 'TIMEOUT', message: 'AI 합성이 너무 오래 걸려요. 잠시 후 다시 시도해주세요.' })
+    if (e.name === 'AbortError') {
+      return send(res, 504, {
+        error: 'TIMEOUT',
+        message: 'AI 합성이 5분 넘게 걸려 기다리기를 멈췄어요. Space가 붐비는 중이에요. 다시 시도하면 무료 GPU 사용량을 한 번 더 쓰니 잠시 뒤에 눌러주세요.',
+      })
+    }
     if (e.status && e.code) return send(res, e.status, { error: e.code, message: e.message })
     throw e
   } finally {

@@ -13,8 +13,9 @@ const BASE_LAYOUT = {
 }
 
 const NO_STATUS_TEXT = 'AI 합성 서버에 연결하지 못했어요.'
-// IDM-VTON은 주로 상의로 학습돼서 하의·원피스는 결과가 부정확할 수 있어요.
-const TOP_FOCUSED_NOTE = 'IDM-VTON은 주로 상의로 학습된 모델이라 하의·원피스는 결과가 부정확할 수 있어요.'
+// 무료 IDM-VTON Space의 자동 마스크는 상반신만 칠해서 하의·원피스는 AI 합성을 받지 않아요 (서버도 400으로 거절).
+const AI_CATEGORIES = ['top', 'outer']
+const UPPER_ONLY_NOTE = '무료 IDM-VTON Space는 상반신만 인식해서 하의·원피스는 AI 합성을 지원하지 않아요. 위 미리보기를 참고해주세요.'
 
 // 선택한 사이즈의 여유분(판정 단계 0~4)이 클수록 옷을 조금 더 크게 그려 헐렁한 느낌을 줍니다.
 function easeScale(verdicts) {
@@ -166,6 +167,7 @@ export default function TryOnPanel({ product, verdicts, selectedSize, captureRef
   }
 
   const chips = verdicts.filter((v) => !v.isLength || v.level !== 2)
+  const aiCategoryOk = AI_CATEGORIES.includes(product.category)
 
   return (
     <div className="card tryon">
@@ -246,21 +248,19 @@ export default function TryOnPanel({ product, verdicts, selectedSize, captureRef
         <button
           type="button"
           className="btn primary block"
-          disabled={!aiAvailable || ai.loading}
+          disabled={!aiAvailable || !aiCategoryOk || ai.loading}
           onClick={runAi}
         >
           {ai.loading ? `AI 합성 중… ${elapsed}초` : 'AI로 합성하기'}
         </button>
         {aiAvailable === false && <p className="muted small">{NO_SERVER ? NO_SERVER_TEXT : NO_STATUS_TEXT}</p>}
-        {aiAvailable && (
+        {aiAvailable && !aiCategoryOk && <p className="muted small">{UPPER_ONLY_NOTE}</p>}
+        {aiAvailable && aiCategoryOk && (
           <p className="muted small">
             AI 합성을 누르면 내 전신 사진과 옷 이미지가 Hugging Face Space{aiStatus.space ? ` (${aiStatus.space})` : ''}로 전송돼요. 무료이고, 하루 GPU 사용량 제한이 있어요.
           </p>
         )}
-        {aiAvailable && (product.category === 'bottom' || product.category === 'dress') && (
-          <p className="muted small">{TOP_FOCUSED_NOTE}</p>
-        )}
-        {ai.loading && <p className="muted small">무료 GPU 대기열을 거쳐서 보통 30초~2분 걸려요. 창을 닫지 말아주세요.</p>}
+        {ai.loading && <p className="muted small">무료 GPU 대기열을 거쳐서 보통 30초~2분 걸려요(최대 5분). 창을 닫지 말아주세요. 도중에 끊겨도 GPU 사용량은 쓰여요.</p>}
         {ai.error && <p className="error">{ai.error}</p>}
         {ai.image && (
           <figure className="ai-result">

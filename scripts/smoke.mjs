@@ -14,7 +14,7 @@ import { parseProductHtml } from '../server/productParser.js'
 import { findSimilar, describeDiff, categoryGroup, makeWardrobeItem } from '../src/lib/wardrobe.js'
 import { isPrivateIp, decodeHtml } from '../server/safeFetch.js'
 import { checkPostRequest } from '../server/api.js'
-import { runHfTryOn, parseSse, spaceBaseUrl, isValidSpaceId, clearTryOnCache, DEFAULT_SPACE } from '../server/hfTryOn.js'
+import { runHfTryOn, parseSse, spaceBaseUrl, isValidSpaceId, clearTryOnCache, garmentDescription, isTryOnSupported, DEFAULT_SPACE } from '../server/hfTryOn.js'
 
 let passed = 0
 function test(name, fn) {
@@ -246,11 +246,13 @@ const resp = (body, { status = 200, type = 'application/json' } = {}) =>
   })
 
 // 호출을 기록하는 가짜 fetch. sse로 결과 스트림 본문을 바꿀 수 있어요.
-function fakeHf({ prefix = '/gradio_api', sse } = {}) {
+function fakeHf({ prefix = '/gradio_api', sse, extra } = {}) {
   const calls = []
   const api = `${BASE}${prefix}`
   const fetchImpl = async (url, opts = {}) => {
     calls.push({ url, opts })
+    const special = extra && (await extra(url, opts))
+    if (special) return special
     if (url === `${BASE}/config`) return resp({ api_prefix: prefix })
     if (url === `${api}/upload`) return resp([`/tmp/gradio/upload${calls.length}.png`])
     if (url === `${api}/call/tryon`) return resp({ event_id: 'ev123' })
@@ -313,7 +315,7 @@ await atest('hfTryOn: config → upload → call → SSE → 결과 data URI (�
     composite: null,
   })
   assert.equal(data[1].path, '/tmp/gradio/upload3.png')
-  assert.deepEqual(data.slice(2), ['오버핏 셔츠', true, false, 30, 42])
+  assert.deepEqual(data.slice(2), ['a top', true, false, 30, 42]) // 한글 이름 대신 영어 문구
   for (const c of calls) assert.equal(authOf(c), undefined)
   assert.equal(r.image, 'data:image/webp;base64,AQID')
   assert.equal(r.model, 'IDM-VTON (Hugging Face yisol/IDM-VTON)')
@@ -324,13 +326,13 @@ await atest('hfTryOn: 토큰은 있을 때만 보내고, https 옷 주소는 업
   clearTryOnCache()
   const { calls, fetchImpl } = fakeHf({ prefix: '' })
   const garment = 'https://cdn.example.com/shirt.jpg'
-  await runHfTryOn({ personImage: PNG_1PX, garmentImage: garment, category: 'bottom', token: 'hf_test', fetchImpl })
+  await runHfTryOn({ personImage: PNG_1PX, garmentImage: garment, category: 'outer', token: 'hf_test', fetchImpl })
   assert.equal(calls.filter((c) => c.url.endsWith('/upload')).length, 1)
   assert.equal(calls[1].url, `${BASE}/upload`) // Gradio 4: 접두사 없음
   for (const c of calls) assert.equal(authOf(c), 'Bearer hf_test')
   const { data } = JSON.parse(calls.find((c) => c.url.endsWith('/call/tryon')).opts.body)
   assert.deepEqual(data[1], { path: garment, url: garment, orig_name: 'garment.jpg', meta: { _type: 'gradio.FileData' } })
-  assert.equal(data[2], 'a pair of pants')
+  assert.equal(data[2], 'an outer jacket')
 })
 
 await atest('hfTryOn: 쿼터 소진 SSE 오류 → 429 QUOTA, Space 없음 → 503', async () => {
@@ -361,7 +363,7 @@ await atest('hfTryOn: 쿼터 소진 SSE 오류 → 429 QUOTA, Space 없음 → 5
 await atest('hfTryOn: 같은 입력은 캐시에서 바로 반환 (fetch 0회)', async () => {
   clearTryOnCache()
   const first = fakeHf()
-  const args = { personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'outer', garmentName: '자켓' }
+  const args = { personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'outer', garmentName: 'Wool Jacket' }
   const a = await runHfTryOn({ ...args, fetchImpl: first.fetchImpl })
   const second = fakeHf()
   const b = await runHfTryOn({ ...args, fetchImpl: second.fetchImpl })
@@ -369,8 +371,141 @@ await atest('hfTryOn: 같은 입력은 캐시에서 바로 반환 (fetch 0회)',
   assert.equal(b.cached, true)
   assert.equal(b.image, a.image)
   // 입력이 다르면 다시 호출
-  await runHfTryOn({ ...args, garmentName: '다른 자켓', fetchImpl: second.fetchImpl })
+  await runHfTryOn({ ...args, garmentName: 'Denim Jacket', fetchImpl: second.fetchImpl })
   assert.ok(second.calls.length > 0)
+})
+
+// 테스트 중 [tryon] 로그를 숨겨요.
+async function quiet(fn) {
+  const origError = console.error
+  console.error = () => {}
+  try {
+    await fn()
+  } finally {
+    console.error = origError
+  }
+}
+const sseWith = (out) => `event: complete\ndata: ${JSON.stringify([out])}\n\n`
+const isFailed = (e) => e.status === 502 && e.code === 'TRYON_FAILED'
+
+test('hfTryOn: 옷 설명은 영어 이름만 그대로, 한글은 카테고리 영어 문구', () => {
+  assert.equal(garmentDescription('top', 'Oversized Cotton Shirt'), 'Oversized Cotton Shirt')
+  assert.equal(garmentDescription('top', '오버핏 코튼 셔츠'), 'a top')
+  assert.equal(garmentDescription('outer', 'Wool 코트'), 'an outer jacket')
+  assert.equal(garmentDescription(undefined, ''), 'a top')
+  assert.equal(garmentDescription('top', 'x'.repeat(200)).length, 100)
+  assert.equal(isTryOnSupported('top'), true)
+  assert.equal(isTryOnSupported('outer'), true)
+  for (const c of ['bottom', 'dress', 'shoes']) assert.equal(isTryOnSupported(c), false)
+})
+
+await atest('hfTryOn: 하의·원피스·신발은 업스트림 호출 없이 400 UNSUPPORTED', async () => {
+  clearTryOnCache()
+  for (const category of ['bottom', 'dress', 'shoes']) {
+    const { calls, fetchImpl } = fakeHf()
+    await assert.rejects(
+      runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category, fetchImpl }),
+      (e) => e.status === 400 && e.code === 'UNSUPPORTED',
+    )
+    assert.equal(calls.length, 0)
+  }
+})
+
+await atest('hfTryOn: 다른 호스트 결과 주소는 쓰지 않고 토큰도 보내지 않음', async () => {
+  await quiet(async () => {
+    const api = `${BASE}/gradio_api`
+    // 절대 주소가 다른 호스트면 path로 Space 주소를 직접 만들어요.
+    clearTryOnCache()
+    let f = fakeHf({ sse: sseWith({ path: '/tmp/gradio/out.webp', url: 'https://attacker.example/x.png' }) })
+    let r = await runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'top', token: 'hf_secret', fetchImpl: f.fetchImpl })
+    assert.equal(r.image, 'data:image/webp;base64,AQID')
+    assert.equal(f.calls.at(-1).url, `${api}/file=/tmp/gradio/out.webp`)
+    assert.ok(f.calls.every((c) => c.url.startsWith(`${BASE}/`)))
+    // 같은 호스트라도 http:// 주소는 쓰지 않아요.
+    clearTryOnCache()
+    f = fakeHf({ sse: sseWith({ path: '/tmp/gradio/out.webp', url: 'http://yisol-idm-vton.hf.space/gradio_api/file=/tmp/gradio/out.webp' }) })
+    await runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'top', token: 'hf_secret', fetchImpl: f.fetchImpl })
+    assert.equal(f.calls.at(-1).url, `${api}/file=/tmp/gradio/out.webp`)
+    // path도 없으면 오류이고, 그 주소로는 요청하지 않아요.
+    for (const out of [{ url: 'https://attacker.example/x.png' }, { path: 'https://attacker.example/x.png' }]) {
+      clearTryOnCache()
+      f = fakeHf({ sse: sseWith(out) })
+      await assert.rejects(runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'top', token: 'hf_secret', fetchImpl: f.fetchImpl }), isFailed)
+      assert.ok(f.calls.every((c) => c.url.startsWith(`${BASE}/`)))
+    }
+  })
+})
+
+await atest('hfTryOn: path만 있는 결과는 {api}/file= 주소로 내려받음', async () => {
+  clearTryOnCache()
+  const f = fakeHf({ sse: sseWith({ path: '/tmp/gradio/out.webp' }) })
+  const r = await runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'top', fetchImpl: f.fetchImpl })
+  assert.equal(f.calls.at(-1).url, `${BASE}/gradio_api/file=/tmp/gradio/out.webp`)
+  assert.equal(f.calls.at(-1).opts.redirect, 'manual')
+  assert.equal(r.image, 'data:image/webp;base64,AQID')
+})
+
+await atest('hfTryOn: 결과 다운로드 실패는 주소 대신 오류, 캐시하지 않음', async () => {
+  await quiet(async () => {
+    clearTryOnCache()
+    const fileUrl = `${BASE}/gradio_api/file=/tmp/gradio/out.webp`
+    const fail = fakeHf({ extra: (url) => url === fileUrl && resp('boom', { status: 500, type: 'text/plain' }) })
+    const args = { personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'top' }
+    await assert.rejects(runHfTryOn({ ...args, fetchImpl: fail.fetchImpl }), isFailed)
+    // 실패 결과는 보관하지 않아서 다시 누르면 다시 호출해요.
+    const again = fakeHf()
+    const r = await runHfTryOn({ ...args, fetchImpl: again.fetchImpl })
+    assert.ok(again.calls.length > 0)
+    assert.equal(r.cached, undefined)
+  })
+})
+
+await atest('hfTryOn: 결과 리디렉션은 같은 Space 안에서만 따라감', async () => {
+  await quiet(async () => {
+    const fileUrl = `${BASE}/gradio_api/file=/tmp/gradio/out.webp`
+    const moved = `${BASE}/gradio_api/file=/tmp/gradio/moved.webp`
+    const redirect = (location) => new Response(null, { status: 302, headers: { location } })
+    clearTryOnCache()
+    let f = fakeHf({
+      extra: (url) => (url === fileUrl ? redirect('/gradio_api/file=/tmp/gradio/moved.webp') : url === moved && resp(new Uint8Array([9]), { type: 'image/png' })),
+    })
+    const r = await runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'top', token: 'hf_secret', fetchImpl: f.fetchImpl })
+    assert.equal(r.image, 'data:image/png;base64,CQ==')
+    assert.equal(f.calls.at(-1).url, moved)
+    clearTryOnCache()
+    f = fakeHf({ extra: (url) => url === fileUrl && redirect('https://attacker.example/x.png') })
+    await assert.rejects(runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'top', token: 'hf_secret', fetchImpl: f.fetchImpl }), isFailed)
+    assert.ok(f.calls.every((c) => c.url.startsWith(`${BASE}/`)))
+  })
+})
+
+await atest('hfTryOn: 중단 신호는 AbortError로 그대로 전달, 캐시하지 않음', async () => {
+  clearTryOnCache()
+  const ctrl = new AbortController()
+  const f = fakeHf({
+    extra: (url, opts) =>
+      url.endsWith('/call/tryon/ev123') &&
+      new Promise((_, reject) => {
+        ctrl.abort()
+        if (opts.signal?.aborted) reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+      }),
+  })
+  const args = { personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'top' }
+  await assert.rejects(runHfTryOn({ ...args, fetchImpl: f.fetchImpl, signal: ctrl.signal }), (e) => e.name === 'AbortError')
+  const again = fakeHf()
+  await runHfTryOn({ ...args, fetchImpl: again.fetchImpl })
+  assert.ok(again.calls.length > 0)
+})
+
+await atest('hfTryOn: 토큰이 있는데 401이면 BAD_TOKEN', async () => {
+  await quiet(async () => {
+    clearTryOnCache()
+    const denied = async () => resp('Unauthorized', { status: 401, type: 'text/plain' })
+    await assert.rejects(
+      runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'top', token: 'hf_bad', fetchImpl: denied }),
+      (e) => e.status === 502 && e.code === 'BAD_TOKEN',
+    )
+  })
 })
 
 console.log(`\n${passed}개 통과`)
