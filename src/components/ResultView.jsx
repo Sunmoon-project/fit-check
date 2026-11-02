@@ -1,41 +1,104 @@
+import { useMemo, useRef, useState } from 'react'
 import { generateFitComment } from '../lib/fitEngine.js'
+import { CATEGORY_LABEL } from '../data/measurements.js'
+import { makeWardrobeItem } from '../lib/wardrobe.js'
 import FitComment from './FitComment.jsx'
-import MatchedReviews from './MatchedReviews.jsx'
-import VirtualFitting from './VirtualFitting.jsx'
-import SizeChart from './SizeChart.jsx'
 import MeasureMatch from './MeasureMatch.jsx'
+import MatchedReviews from './MatchedReviews.jsx'
+import SizeChart from './SizeChart.jsx'
+import FeedbackForm from './FeedbackForm.jsx'
+import TryOnPanel from './TryOnPanel.jsx'
+import { SimilarInWardrobe } from './Wardrobe.jsx'
 
-export default function ResultView({ product, profile, onRestart }) {
-  const result = generateFitComment(profile, product)
+export default function ResultView({ product, profile, calibration, feedbackCount, existingFeedback, onFeedback, onRestart, wardrobe = [], onSaveWardrobe }) {
+  const result = useMemo(() => generateFitComment(profile, product, calibration), [profile, product, calibration])
+  const [picked, setPicked] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [saveNote, setSaveNote] = useState('')
+  const captureRef = useRef(null)
+  const selectedSize = picked || result.recommendedSize || result.perSize[0]?.size || null
+  const verdicts = result.perSize.find((p) => p.size === selectedSize)?.verdicts || []
+  const isLive = product.source === 'live'
+  // 지금 보는 옷 (옷장 비교용)
+  const currentTarget = useMemo(
+    () => ({ ...makeWardrobeItem({ product, size: selectedSize, verdicts, now: 0 }), id: 'current' }),
+    [product, selectedSize, verdicts],
+  )
+
+  async function handleSave() {
+    setSaving(true)
+    const shot = (await captureRef.current?.()) || { image: null, kind: null }
+    const item = makeWardrobeItem({ product, size: selectedSize, verdicts, image: shot.image, imageKind: shot.kind })
+    const res = onSaveWardrobe?.(item)
+    setSaving(false)
+    setSaveNote(res?.trimmed ? '옷장에 담았어요. 저장 공간이 부족해 오래된 이미지 일부를 뺐어요.' : '옷장에 담았어요. 위쪽 ‘옷장’에서 비교할 수 있어요.')
+  }
 
   return (
     <section className="result">
-      <div className="product-head card">
-        <span className="product-emoji" aria-hidden>{product.emoji}</span>
+      <div className="card product-head">
+        {product.image ? (
+          <img className="product-thumb" src={product.image} alt="" referrerPolicy="no-referrer" />
+        ) : (
+          <span className="product-emoji" aria-hidden>{product.emoji}</span>
+        )}
         <div className="product-info">
-          <span className="muted small">{product.mall}</span>
+          <div className="product-meta">
+            <span className={`source-badge ${isLive ? 'live' : 'demo'}`}>{isLive ? 'live' : '데모'}</span>
+            <span className="muted small">{product.mall} · {CATEGORY_LABEL[product.category]}</span>
+          </div>
           <h2>{product.name}</h2>
-          <span className="price">{product.price}</span>
+          {product.price && <span className="price">{product.price}</span>}
+          {isLive && (
+            <a className="small source-link" href={product.url} target="_blank" rel="noopener noreferrer">원본 페이지 보기</a>
+          )}
         </div>
-        <button className="btn ghost" onClick={onRestart}>다시 검색</button>
       </div>
 
-      {/* 기능 ③ */}
+      {product.notes?.length > 0 && (
+        <div className="info-box">
+          {product.notes.map((n) => <p key={n} className="small">{n}</p>)}
+        </div>
+      )}
+
       <FitComment result={result} />
 
-      <div className="result-grid">
-        {/* 기능 ② */}
-        <MatchedReviews matched={result.matched} />
-        <div className="result-col">
-          {/* 상세 치수 대조 (입력한 경우에만) */}
-          {result.measureResult && profile.measurements && (
-            <MeasureMatch product={product} profile={profile} measureResult={result.measureResult} />
-          )}
-          {/* 사이즈표 대조 */}
-          <SizeChart chart={product.sizeChart} recommendedSize={result.recommendedSize} />
-          {/* 기능 ④ */}
-          <VirtualFitting product={product} profile={profile} />
-        </div>
+      <MeasureMatch
+        perSize={result.perSize}
+        selectedSize={selectedSize}
+        recommendedSize={result.recommendedSize}
+        measured={result.measured}
+        onSelect={setPicked}
+      />
+
+      <TryOnPanel product={product} profile={profile} selectedSize={selectedSize} verdicts={verdicts} captureRef={captureRef} />
+
+      <SimilarInWardrobe target={currentTarget} wardrobe={wardrobe} />
+
+      <div className="save-row">
+        <button type="button" className="btn ghost block" onClick={handleSave} disabled={saving}>
+          {saving ? '담는 중…' : `옷장에 담기${selectedSize ? ` (${selectedSize})` : ''}`}
+        </button>
+        {saveNote && <p className="muted small">{saveNote}</p>}
+      </div>
+
+      <MatchedReviews matched={result.matched} others={result.otherReviews} />
+
+      <SizeChart chart={product.sizeChart} recommendedSize={result.recommendedSize} selectedSize={selectedSize} />
+
+      <FeedbackForm
+        key={product.url}
+        product={product}
+        perSize={result.perSize}
+        defaultSize={selectedSize}
+        existing={existingFeedback}
+        calibration={calibration}
+        feedbackCount={feedbackCount}
+        onSave={onFeedback}
+      />
+
+      <div className="result-actions">
+        <button type="button" className="btn ghost block" onClick={onRestart}>다른 옷 찾기</button>
       </div>
     </section>
   )

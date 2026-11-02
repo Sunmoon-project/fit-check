@@ -1,13 +1,13 @@
 import { CONFIDENCE_LABEL } from '../lib/fitEngine.js'
 
-// 핏 코멘트 (후기 종합 + 치수 대조 결과)
+// 추천 사이즈 카드 (후기 투표 + 실측 비교 종합)
 export default function FitComment({ result }) {
   const conf = CONFIDENCE_LABEL[result.confidence]
 
   return (
-    <div className="card fit-comment">
+    <div className="card reco-card">
       <div className="fit-head">
-        <span className="eyebrow">핏 분석 결과</span>
+        <span className="eyebrow">내 체형 추천</span>
         <span className="conf-badge" style={{ color: conf.color }}>
           <span className="conf-dot" style={{ background: conf.color }} />
           {conf.text}
