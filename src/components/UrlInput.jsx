@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { SAMPLE_URLS, PRODUCTS, findProductByUrl } from '../data/mockData.js'
 import { CATEGORY_LABEL } from '../data/measurements.js'
+import { NO_SERVER } from '../lib/runtime.js'
 
 // 다른 쇼핑몰 상품 링크를 붙여넣으면 서버(/api/product)가 페이지를 읽어 상품·사이즈표·리뷰를 가져옵니다.
 // 데모 상품은 서버 없이 바로 열려요.
@@ -26,6 +27,10 @@ export default function UrlInput({ onProduct }) {
       new URL(target)
     } catch {
       setError('주소 형식이 올바르지 않아요.')
+      return
+    }
+    if (NO_SERVER) {
+      setError('파일로 연 화면에서는 상품 링크를 분석할 수 없어요. 아래 데모 상품으로 체험하거나 npm run dev로 실행해주세요.')
       return
     }
 

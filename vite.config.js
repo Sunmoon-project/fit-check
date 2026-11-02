@@ -1,10 +1,13 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { fitCheckApi } from './server/api.js'
+import { singleFile } from './scripts/singleFile.js'
 
 export default defineConfig(({ mode }) => {
   // 접두사 없이 모두 읽지만, 서버 플러그인에만 넘기고 브라우저 번들에는 넣지 않습니다.
   const env = loadEnv(mode, process.cwd(), '')
+  // `npm run build:file`: 서버 없이 여는 단일 HTML 파일(dist/fit-check.html)
+  if (mode === 'file') return { plugins: [react(), singleFile()] }
   return {
     plugins: [react(), fitCheckApi(env)],
   }

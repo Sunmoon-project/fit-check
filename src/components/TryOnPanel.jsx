@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { loadPhoto, savePhoto } from '../lib/storage.js'
 import { fileToDataUrl, removeBackground, composePreview } from '../lib/imageTools.js'
 import { CATEGORY_LABEL } from '../data/measurements.js'
+import { NO_SERVER, NO_SERVER_TEXT } from '../lib/runtime.js'
 
 // 카테고리별 기본 위치 (사진 대비 %). 정면 전신 사진 기준의 대략값이에요.
 const BASE_LAYOUT = {
@@ -50,6 +51,10 @@ export default function TryOnPanel({ product, verdicts, selectedSize, captureRef
   // 서버에 AI 합성 키가 있는지 확인
   useEffect(() => {
     let alive = true
+    if (NO_SERVER) {
+      setAiAvailable(false)
+      return () => { alive = false }
+    }
     fetch('/api/status')
       .then((r) => r.json())
       .then((d) => alive && setAiAvailable(Boolean(d.tryon)))
@@ -240,7 +245,7 @@ export default function TryOnPanel({ product, verdicts, selectedSize, captureRef
         >
           {ai.loading ? `AI 합성 중… ${elapsed}초` : 'AI로 합성하기'}
         </button>
-        {aiAvailable === false && <p className="muted small">{NO_KEY_TEXT}</p>}
+        {aiAvailable === false && <p className="muted small">{NO_SERVER ? NO_SERVER_TEXT : NO_KEY_TEXT}</p>}
         {aiAvailable && (
           <p className="muted small">AI 합성을 누르면 내 전신 사진과 옷 이미지가 fal.ai 서버로 전송돼요.</p>
         )}

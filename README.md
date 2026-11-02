@@ -55,11 +55,22 @@ npm run dev      # http://localhost:5173
 | --- | --- |
 | `npm run dev` | 개발 서버 + API (`/api/*`) 실행 |
 | `npm run build` | 화면 파일만 빌드 (`dist/`) |
+| `npm run build:file` | 서버 없이 여는 HTML 파일 하나 빌드 (`dist/fit-check.html`) |
 | `npm run preview` | 빌드 결과를 API와 함께 실행 |
 | `npm run smoke` | 추천 로직·파서·보안 검사 스모크 테스트 |
 
 > ⚠️ API(`/api/status`, `/api/product`, `/api/tryon`)는 Vite 개발·미리보기 서버에 붙는 플러그인이에요.
 > `dist/` 폴더만 정적 호스팅에 올리면 **상품 링크 분석과 AI 합성이 동작하지 않아요.** `npm run preview`로 실행하거나 별도 서버가 필요해요.
+
+### 서버 없이 파일 하나로 보기
+
+```bash
+npm run build:file   # dist/fit-check.html 생성
+```
+
+`dist/fit-check.html`을 더블클릭하면 브라우저에서 바로 열려요. JS·CSS가 모두 파일 안에 들어 있어서 다른 파일이 필요 없어요.
+온보딩, 데모 상품 사이즈·핏 추천과 리뷰, 사진 합성 미리보기, 옷장은 동작해요. 상품 링크 분석과 AI 합성은 서버가 필요해서 이 파일에서는 꺼져 있어요.
+`npm run build`를 다시 돌리면 `dist/`가 비워지니 그 뒤에 `npm run build:file`을 다시 실행하세요.
 
 ## 🤖 AI 합성 켜기
 
