@@ -12,7 +12,9 @@ const BASE_LAYOUT = {
   bottom: { top: 45, width: 42 },
 }
 
-const NO_KEY_TEXT = 'AI 합성은 FAL_KEY를 .env에 설정하면 사용할 수 있어요 (fal.ai FASHN)'
+const NO_STATUS_TEXT = 'AI 합성 서버에 연결하지 못했어요.'
+// IDM-VTON은 주로 상의로 학습돼서 하의·원피스는 결과가 부정확할 수 있어요.
+const TOP_FOCUSED_NOTE = 'IDM-VTON은 주로 상의로 학습된 모델이라 하의·원피스는 결과가 부정확할 수 있어요.'
 
 // 선택한 사이즈의 여유분(판정 단계 0~4)이 클수록 옷을 조금 더 크게 그려 헐렁한 느낌을 줍니다.
 function easeScale(verdicts) {
@@ -40,7 +42,8 @@ export default function TryOnPanel({ product, verdicts, selectedSize, captureRef
   const [offsetPct, setOffsetPct] = useState(0)
   const [error, setError] = useState('')
   const [aiAvailable, setAiAvailable] = useState(null) // null=확인 중
-  const [ai, setAi] = useState({ loading: false, image: null, model: '', error: '' })
+  const [aiStatus, setAiStatus] = useState({ provider: '', space: '' })
+  const [ai, setAi] = useState({ loading: false, image: null, model: '', error: '', cached: false })
   const [elapsed, setElapsed] = useState(0)
   const personInput = useRef(null)
   const garmentInput = useRef(null)
@@ -48,7 +51,7 @@ export default function TryOnPanel({ product, verdicts, selectedSize, captureRef
   const garmentSrc = source === 'product' ? product.image : uploaded
   const layout = previewLayout(product.category, verdicts, scalePct, offsetPct)
 
-  // 서버에 AI 합성 키가 있는지 확인
+  // 서버의 AI 합성 사용 여부와 Space 확인
   useEffect(() => {
     let alive = true
     if (NO_SERVER) {
@@ -57,7 +60,11 @@ export default function TryOnPanel({ product, verdicts, selectedSize, captureRef
     }
     fetch('/api/status')
       .then((r) => r.json())
-      .then((d) => alive && setAiAvailable(Boolean(d.tryon)))
+      .then((d) => {
+        if (!alive) return
+        setAiAvailable(Boolean(d.tryon))
+        setAiStatus({ provider: d.provider || '', space: d.space || '' })
+      })
       .catch(() => alive && setAiAvailable(false))
     return () => { alive = false }
   }, [])
@@ -132,21 +139,20 @@ export default function TryOnPanel({ product, verdicts, selectedSize, captureRef
     const garmentImage = source === 'upload' ? uploaded : /^https:\/\//i.test(product.image || '') ? product.image : null
     if (!photo) return setAi((a) => ({ ...a, error: '먼저 내 전신 사진을 올려주세요.' }))
     if (!garmentImage) return setAi((a) => ({ ...a, error: '옷 이미지를 직접 올려주세요.' }))
-    setAi({ loading: true, image: null, model: '', error: '' })
+    setAi({ loading: true, image: null, model: '', error: '', cached: false })
     try {
       const r = await fetch('/api/tryon', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ personImage: photo, garmentImage, category: product.category }),
+        body: JSON.stringify({ personImage: photo, garmentImage, category: product.category, garmentName: product.name }),
       })
       const data = await r.json().catch(() => ({}))
       if (!r.ok) {
-        if (data.error === 'NO_KEY') setAiAvailable(false)
-        return setAi({ loading: false, image: null, model: '', error: data.message || 'AI 합성에 실패했어요.' })
+        return setAi({ loading: false, image: null, model: '', error: data.message || 'AI 합성에 실패했어요.', cached: false })
       }
-      setAi({ loading: false, image: data.image, model: data.model || '', error: '' })
+      setAi({ loading: false, image: data.image, model: data.model || '', error: '', cached: Boolean(data.cached) })
     } catch {
-      setAi({ loading: false, image: null, model: '', error: '서버에 연결하지 못했어요.' })
+      setAi({ loading: false, image: null, model: '', error: '서버에 연결하지 못했어요.', cached: false })
     }
   }
 
@@ -245,16 +251,21 @@ export default function TryOnPanel({ product, verdicts, selectedSize, captureRef
         >
           {ai.loading ? `AI 합성 중… ${elapsed}초` : 'AI로 합성하기'}
         </button>
-        {aiAvailable === false && <p className="muted small">{NO_SERVER ? NO_SERVER_TEXT : NO_KEY_TEXT}</p>}
+        {aiAvailable === false && <p className="muted small">{NO_SERVER ? NO_SERVER_TEXT : NO_STATUS_TEXT}</p>}
         {aiAvailable && (
-          <p className="muted small">AI 합성을 누르면 내 전신 사진과 옷 이미지가 fal.ai 서버로 전송돼요.</p>
+          <p className="muted small">
+            AI 합성을 누르면 내 전신 사진과 옷 이미지가 Hugging Face Space{aiStatus.space ? ` (${aiStatus.space})` : ''}로 전송돼요. 무료이고, 하루 GPU 사용량 제한이 있어요.
+          </p>
         )}
-        {ai.loading && <p className="muted small">보통 10~60초 걸려요. 창을 닫지 말아주세요.</p>}
+        {aiAvailable && (product.category === 'bottom' || product.category === 'dress') && (
+          <p className="muted small">{TOP_FOCUSED_NOTE}</p>
+        )}
+        {ai.loading && <p className="muted small">무료 GPU 대기열을 거쳐서 보통 30초~2분 걸려요. 창을 닫지 말아주세요.</p>}
         {ai.error && <p className="error">{ai.error}</p>}
         {ai.image && (
           <figure className="ai-result">
             <img src={ai.image} alt="AI 합성 결과" referrerPolicy="no-referrer" />
-            <figcaption className="muted small">{ai.model} 합성 결과 · 실제 핏과 다를 수 있어요</figcaption>
+            <figcaption className="muted small">{ai.model} 합성 결과{ai.cached ? ' (저장된 결과)' : ''} · 실제 핏과 다를 수 있어요</figcaption>
           </figure>
         )}
       </div>

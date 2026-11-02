@@ -1,5 +1,5 @@
 // 브라우저(localStorage)에만 저장합니다. 서버로 보내지 않아요.
-// 예외: 사용자가 'AI로 합성하기'를 누르면 그때만 전신 사진이 /api/tryon을 거쳐 fal.ai로 전송돼요.
+// 예외: 사용자가 'AI로 합성하기'를 누르면 그때만 전신 사진이 /api/tryon을 거쳐 Hugging Face Space로 전송돼요.
 const PROFILE_KEY = 'fitcheck.profile.v2'
 const PHOTO_KEY = 'fitcheck.photo.v1'
 const FEEDBACK_KEY = 'fitcheck.feedback.v1'

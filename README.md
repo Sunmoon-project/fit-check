@@ -10,7 +10,7 @@
 ![React](https://img.shields.io/badge/React-18-1f3a2e?logo=react&logoColor=white)
 ![Vite](https://img.shields.io/badge/Vite-5-e2683c?logo=vite&logoColor=white)
 ![Node](https://img.shields.io/badge/Node.js-18%2B-3c873a?logo=node.js&logoColor=white)
-![AI 합성](https://img.shields.io/badge/AI%20합성-fal.ai%20FASHN%20v1.6-d9a441)
+![AI 합성](https://img.shields.io/badge/AI%20합성-Hugging%20Face%20IDM--VTON%20무료-d9a441)
 ![UI](https://img.shields.io/badge/UI-한국어-8a5a44)
 
 [주요 기능](#-주요-기능) · [사용 흐름](#-사용-흐름) · [시작하기](#-시작하기) · [AI 합성 켜기](#-ai-합성-켜기) · [개인정보와 보안](#-개인정보와-보안) · [한계](#%EF%B8%8F-한계) · [폴더 구조](#%EF%B8%8F-폴더-구조)
@@ -28,7 +28,7 @@
 | 📏 **사이즈·핏 추천** | 사이즈표 실측과 내 치수의 차이(여유분)로 부위별 핏(타이트 / 적당 / 넉넉 등)을 판정하고 추천 사이즈를 골라요. |
 | 💬 **비슷한 체형 리뷰** | 리뷰에 적힌 키·몸무게·구매 사이즈를 읽어 나와 비슷한 사람의 후기를 먼저 보여줘요. |
 | 🖼️ **사진 합성 미리보기** | 내 전신 사진 위에 배경을 지운 옷 이미지를 얹어 대략적인 모습을 보여줘요. 선택한 사이즈가 넉넉할수록 조금 크게 그려요. |
-| 🤖 **AI 합성** | `FAL_KEY`를 설정하면 fal.ai FASHN v1.6으로 실제 착용 이미지를 만들어요. |
+| 🤖 **AI 합성** | Hugging Face의 무료 IDM-VTON Space로 실제 착용 이미지를 만들어요. 키 없이 바로 동작해요. |
 | 🗂️ **옷장** | 마음에 든 옷을 사이즈·핏 판정·합성 이미지와 함께 담고, 나란히 비교하거나 비슷한 옷과 치수 차이를 볼 수 있어요. 같은 상품·같은 사이즈는 한 칸만 차지해요. |
 | 🎯 **착용 후기 보정** | 산 옷이 작았는지, 컸는지 기록하면 다음 추천부터 부위별로 보정해요. |
 
@@ -74,41 +74,48 @@ npm run build:file   # dist/fit-check.html 생성
 
 ## 🤖 AI 합성 켜기
 
-AI 합성은 [fal.ai](https://fal.ai)의 **FASHN v1.6** 가상 피팅 모델을 써요. 이미지 한 장에 약 **$0.075**예요.
+AI 합성은 Hugging Face Space [yisol/IDM-VTON](https://huggingface.co/spaces/yisol/IDM-VTON)을 **무료**로 써요.
+`npm run dev`로 실행하면 키 없이 바로 결과 화면의 **AI로 합성하기** 버튼이 켜져요. 서버(`server/hfTryOn.js`)가 Gradio API로 Space를 호출하고, 결과 이미지를 받아 브라우저에 넘겨요.
 
-1. [fal.ai 대시보드](https://fal.ai/dashboard/keys)에서 API 키를 만들어요.
-2. `.env.example`을 `.env`로 복사하고 키를 넣어요.
+- **기다리는 시간**: 무료 GPU(ZeroGPU) 대기열을 거쳐서 보통 **30초~2분** 걸려요.
+- **하루 사용량**: 무료 GPU 시간은 하루 단위로 제한돼요(토큰 없이 약 2분). 다 쓰면 "오늘 쓸 수 있는 무료 GPU 시간을 다 썼어요" 안내가 나와요. 내일 다시 시도하거나 아래처럼 토큰을 넣어주세요.
+- **같은 사진·같은 옷**으로 다시 누르면 서버에 저장해둔 결과를 바로 보여줘서 사용량을 쓰지 않아요(서버를 다시 시작하면 비워져요).
+- **상의 위주 모델**: IDM-VTON은 주로 상의로 학습돼서 하의·원피스는 결과가 부정확할 수 있어요. 신발은 지원하지 않아요.
+- **라이선스**: IDM-VTON 모델은 **CC BY-NC-SA 4.0**이라 **비상업적 용도로만** 쓸 수 있어요.
 
-   ```bash
-   cp .env.example .env
-   # .env
-   FAL_KEY=여기에_키
-   ```
+### 선택 설정 (`.env`)
 
-3. 개발 서버를 다시 시작하면 결과 화면의 **AI로 합성하기** 버튼이 켜져요.
+```bash
+cp .env.example .env
+# .env
+HF_TOKEN=hf_여기에_토큰        # 선택: 무료 토큰을 넣으면 하루 GPU 사용량이 약 5분으로 늘어나요
+HF_SPACE=yisol/IDM-VTON        # 선택: 기본 Space가 잠들었거나 붐빌 때 다른 Space로 바꿔요
+```
 
-키가 없으면 버튼이 꺼진 채로 안내 문구가 나오고, 사진 합성 미리보기는 그대로 쓸 수 있어요.
+- 토큰은 [Hugging Face 설정](https://huggingface.co/settings/tokens)에서 무료로 만들 수 있어요(읽기 권한이면 충분해요).
+- 같은 API를 쓰는 다른 Space: `John6666/IDM-VTON`, `LPDoctor/IDM-VTON-demo`, `jjlealse/IDM-VTON`
+- `.env`를 바꾼 뒤에는 개발 서버를 다시 시작하세요.
 
 <details>
 <summary>검토한 다른 API</summary>
 
 | 후보 | 메모 |
 | --- | --- |
-| **fal.ai FASHN v1.6** ✅ | 상의·하의·원피스 지원, REST 한 번 호출로 결과 URL 반환. 채택 |
+| **Hugging Face Spaces IDM-VTON** ✅ | 무료(하루 GPU 사용량 제한), 키 없이 동작. 비상업적 라이선스. 채택 |
+| fal.ai FASHN v1.6 | 유료(이미지 한 장에 약 $0.075), 상업적 이용 가능. 상의·하의·원피스 지원. 유료 대안으로 남겨둠 |
 | Kling Kolors Virtual Try-On | 품질은 좋지만 상의 위주, 비동기 작업 조회가 필요 |
 | Leffa | 오픈소스 모델, 직접 GPU 서버를 띄워야 함 |
 | Google Vertex AI Virtual Try-On | GCP 프로젝트·결제 설정이 필요 |
-| Hugging Face Spaces | 요청에 따라 쓰지 않음 |
 
 </details>
 
 ## 🔒 개인정보와 보안
 
 - 체형 정보, 사진, 옷장은 **이 브라우저(localStorage)에 저장**되고 서버에 따로 보관하지 않아요.
-- **예외: AI로 합성하기**를 누르면 그때만 내 전신 사진과 옷 이미지가 fal.ai로 전송돼요. 버튼 아래에도 같은 안내가 나와요.
-- `FAL_KEY`는 서버(`server/api.js`)에서만 읽고 브라우저로 보내지 않아요. `.env`는 git에 올라가지 않아요.
+- **예외: AI로 합성하기**를 누르면 그때만 내 전신 사진과 옷 이미지가 Hugging Face Space로 전송돼요. 버튼 아래에도 같은 안내가 나와요.
+- `HF_TOKEN`은 서버(`server/api.js`)에서만 읽고 브라우저로 보내지 않아요. `.env`는 git에 올라가지 않아요.
 - 상품 페이지를 가져올 때 localhost·사설 IP·클라우드 메타데이터 주소(IPv4-mapped IPv6 표기 포함)는 막아요. 리다이렉트마다 다시 검사해요.
-- `/api/*` POST 요청은 `Content-Type: application/json`이고 같은 출처일 때만 받아요. 다른 사이트가 몰래 AI 합성을 호출해 요금이 나가는 일을 막아요.
+- `/api/*` POST 요청은 `Content-Type: application/json`이고 같은 출처일 때만 받아요. 다른 사이트가 몰래 AI 합성을 호출해 함께 쓰는 무료 GPU 사용량을 써버리는 일을 막아요.
 
 ## ⚠️ 한계
 
@@ -123,6 +130,7 @@ AI 합성은 [fal.ai](https://fal.ai)의 **FASHN v1.6** 가상 피팅 모델을 
 fit-check/
 ├─ server/             # Vite 플러그인으로 붙는 API
 │  ├─ api.js           #   /api/status, /api/product, /api/tryon
+│  ├─ hfTryOn.js       #   Hugging Face IDM-VTON Space 호출(Gradio API)
 │  ├─ productParser.js #   HTML → 상품·사이즈표·리뷰
 │  └─ safeFetch.js     #   내부망 차단(SSRF 방지) + 인코딩 판별 fetch
 ├─ src/

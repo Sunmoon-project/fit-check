@@ -14,11 +14,22 @@ import { parseProductHtml } from '../server/productParser.js'
 import { findSimilar, describeDiff, categoryGroup, makeWardrobeItem } from '../src/lib/wardrobe.js'
 import { isPrivateIp, decodeHtml } from '../server/safeFetch.js'
 import { checkPostRequest } from '../server/api.js'
+import { runHfTryOn, parseSse, spaceBaseUrl, isValidSpaceId, clearTryOnCache, DEFAULT_SPACE } from '../server/hfTryOn.js'
 
 let passed = 0
 function test(name, fn) {
   try {
     fn()
+    passed += 1
+    console.log(`ok - ${name}`)
+  } catch (e) {
+    console.error(`not ok - ${name}`)
+    throw e
+  }
+}
+async function atest(name, fn) {
+  try {
+    await fn()
     passed += 1
     console.log(`ok - ${name}`)
   } catch (e) {
@@ -222,6 +233,144 @@ test('checkPostRequest: JSON + 같은 출처만 허용', () => {
   assert.equal(checkPostRequest({ host }).status, 415)
   assert.equal(checkPostRequest({ host, 'content-type': 'application/json', origin: 'https://evil.example' }).status, 403)
   assert.equal(checkPostRequest({ host, 'content-type': 'application/json', origin: 'null' }).status, 403)
+})
+
+// ---- Hugging Face IDM-VTON (가짜 fetch로 Gradio 흐름 검사) ----
+const BASE = 'https://yisol-idm-vton.hf.space'
+const PNG_1PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+
+const resp = (body, { status = 200, type = 'application/json' } = {}) =>
+  new Response(typeof body === 'string' || body instanceof Uint8Array ? body : JSON.stringify(body), {
+    status,
+    headers: { 'content-type': type },
+  })
+
+// 호출을 기록하는 가짜 fetch. sse로 결과 스트림 본문을 바꿀 수 있어요.
+function fakeHf({ prefix = '/gradio_api', sse } = {}) {
+  const calls = []
+  const api = `${BASE}${prefix}`
+  const fetchImpl = async (url, opts = {}) => {
+    calls.push({ url, opts })
+    if (url === `${BASE}/config`) return resp({ api_prefix: prefix })
+    if (url === `${api}/upload`) return resp([`/tmp/gradio/upload${calls.length}.png`])
+    if (url === `${api}/call/tryon`) return resp({ event_id: 'ev123' })
+    if (url === `${api}/call/tryon/ev123`) {
+      const body = sse ?? `event: generating\ndata: null\n\nevent: complete\ndata: ${JSON.stringify([
+        { path: '/tmp/gradio/out.webp', url: `${api}/file=/tmp/gradio/out.webp`, meta: { _type: 'gradio.FileData' } },
+        { path: '/tmp/gradio/mask.webp' },
+      ])}\n\n`
+      return resp(body, { type: 'text/event-stream' })
+    }
+    if (url === `${api}/file=/tmp/gradio/out.webp`) return resp(new Uint8Array([1, 2, 3]), { type: 'image/webp' })
+    return resp('not found', { status: 404, type: 'text/plain' })
+  }
+  return { calls, fetchImpl }
+}
+
+const authOf = (c) => c.opts.headers?.Authorization
+
+test('hfTryOn: Space 주소·ID 검사·SSE 파싱', () => {
+  assert.equal(spaceBaseUrl('yisol/IDM-VTON'), 'https://yisol-idm-vton.hf.space')
+  assert.equal(spaceBaseUrl('LPDoctor/IDM-VTON-demo'), 'https://lpdoctor-idm-vton-demo.hf.space')
+  assert.equal(isValidSpaceId(DEFAULT_SPACE), true)
+  assert.equal(isValidSpaceId('a/b/c'), false)
+  assert.equal(isValidSpaceId('evil.com#'), false)
+  assert.equal(isValidSpaceId(''), false)
+  const events = parseSse('event: heartbeat\ndata: null\n\nevent: complete\ndata: [{"path":"/x.png"}]\n\n')
+  assert.deepEqual(events, [
+    { event: 'heartbeat', data: null },
+    { event: 'complete', data: [{ path: '/x.png' }] },
+  ])
+  assert.deepEqual(parseSse('event: error\ndata: GPU quota exceeded'), [{ event: 'error', data: 'GPU quota exceeded' }])
+})
+
+await atest('hfTryOn: config → upload → call → SSE → 결과 data URI (토큰 없음)', async () => {
+  clearTryOnCache()
+  const { calls, fetchImpl } = fakeHf()
+  const r = await runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'top', garmentName: '  오버핏 셔츠  ', fetchImpl })
+  const api = `${BASE}/gradio_api`
+  assert.deepEqual(calls.map((c) => c.url), [
+    `${BASE}/config`,
+    `${api}/upload`,
+    `${api}/upload`,
+    `${api}/call/tryon`,
+    `${api}/call/tryon/ev123`,
+    `${api}/file=/tmp/gradio/out.webp`,
+  ])
+  // 업로드는 multipart, 필드 이름 files
+  const form = calls[1].opts.body
+  assert.ok(form instanceof FormData)
+  const file = form.get('files')
+  assert.equal(file.name, 'person.png')
+  assert.equal(file.type, 'image/png')
+  assert.equal(calls[2].opts.body.get('files').name, 'garment.png')
+  // /call/tryon 입력 모양
+  const { data } = JSON.parse(calls[3].opts.body)
+  assert.equal(data.length, 7)
+  assert.deepEqual(data[0], {
+    background: { path: '/tmp/gradio/upload2.png', orig_name: 'person.png', meta: { _type: 'gradio.FileData' } },
+    layers: [],
+    composite: null,
+  })
+  assert.equal(data[1].path, '/tmp/gradio/upload3.png')
+  assert.deepEqual(data.slice(2), ['오버핏 셔츠', true, false, 30, 42])
+  for (const c of calls) assert.equal(authOf(c), undefined)
+  assert.equal(r.image, 'data:image/webp;base64,AQID')
+  assert.equal(r.model, 'IDM-VTON (Hugging Face yisol/IDM-VTON)')
+  assert.equal(r.cached, undefined)
+})
+
+await atest('hfTryOn: 토큰은 있을 때만 보내고, https 옷 주소는 업로드 없이 넘김', async () => {
+  clearTryOnCache()
+  const { calls, fetchImpl } = fakeHf({ prefix: '' })
+  const garment = 'https://cdn.example.com/shirt.jpg'
+  await runHfTryOn({ personImage: PNG_1PX, garmentImage: garment, category: 'bottom', token: 'hf_test', fetchImpl })
+  assert.equal(calls.filter((c) => c.url.endsWith('/upload')).length, 1)
+  assert.equal(calls[1].url, `${BASE}/upload`) // Gradio 4: 접두사 없음
+  for (const c of calls) assert.equal(authOf(c), 'Bearer hf_test')
+  const { data } = JSON.parse(calls.find((c) => c.url.endsWith('/call/tryon')).opts.body)
+  assert.deepEqual(data[1], { path: garment, url: garment, orig_name: 'garment.jpg', meta: { _type: 'gradio.FileData' } })
+  assert.equal(data[2], 'a pair of pants')
+})
+
+await atest('hfTryOn: 쿼터 소진 SSE 오류 → 429 QUOTA, Space 없음 → 503', async () => {
+  clearTryOnCache()
+  const origError = console.error
+  console.error = () => {}
+  try {
+    const { fetchImpl } = fakeHf({ sse: 'event: error\ndata: "You have exceeded your GPU quota (60s requested vs. 0s left)."\n\n' })
+    await assert.rejects(
+      runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'top', fetchImpl }),
+      (e) => e.status === 429 && e.code === 'QUOTA' && /HF_TOKEN/.test(e.message),
+    )
+    const gone = async () => resp('Not Found', { status: 404, type: 'text/plain' })
+    await assert.rejects(
+      runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'top', fetchImpl: gone }),
+      (e) => e.status === 503 && e.code === 'SPACE_UNAVAILABLE',
+    )
+    const offline = async () => { throw new TypeError('fetch failed') }
+    await assert.rejects(
+      runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'top', fetchImpl: offline }),
+      (e) => e.status === 502 && e.code === 'HF_UNREACHABLE',
+    )
+  } finally {
+    console.error = origError
+  }
+})
+
+await atest('hfTryOn: 같은 입력은 캐시에서 바로 반환 (fetch 0회)', async () => {
+  clearTryOnCache()
+  const first = fakeHf()
+  const args = { personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'outer', garmentName: '자켓' }
+  const a = await runHfTryOn({ ...args, fetchImpl: first.fetchImpl })
+  const second = fakeHf()
+  const b = await runHfTryOn({ ...args, fetchImpl: second.fetchImpl })
+  assert.equal(second.calls.length, 0)
+  assert.equal(b.cached, true)
+  assert.equal(b.image, a.image)
+  // 입력이 다르면 다시 호출
+  await runHfTryOn({ ...args, garmentName: '다른 자켓', fetchImpl: second.fetchImpl })
+  assert.ok(second.calls.length > 0)
 })
 
 console.log(`\n${passed}개 통과`)
