@@ -68,7 +68,7 @@ export default function Wardrobe({ items, onDelete, onBack }) {
           <p className="muted small">최대 {MAX_COMPARE}벌을 골라 나란히 비교할 수 있어요. 이 브라우저에만 저장돼요.</p>
           <ul className="wd-grid">
             {items.map((w) => {
-              const peer = findSimilar(w, items)
+              const peer = findSimilar(w, items.filter((o) => o.product.url !== w.product.url))
               return (
                 <li key={w.id} className={`wd-item ${selected.includes(w.id) ? 'selected' : ''}`}>
                   <button type="button" className="wd-thumb" onClick={() => toggle(w.id)} aria-pressed={selected.includes(w.id)}>

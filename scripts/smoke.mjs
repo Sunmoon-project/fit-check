@@ -12,6 +12,8 @@ import {
 import { PRODUCTS } from '../src/data/mockData.js'
 import { parseProductHtml } from '../server/productParser.js'
 import { findSimilar, describeDiff, categoryGroup, makeWardrobeItem } from '../src/lib/wardrobe.js'
+import { isPrivateIp, decodeHtml } from '../server/safeFetch.js'
+import { checkPostRequest } from '../server/api.js'
 
 let passed = 0
 function test(name, fn) {
@@ -188,6 +190,38 @@ test('옷장: 같은 그룹에서 가장 비슷한 옷과 부위별 차이', () 
   assert.deepEqual(item.measures, product.sizeChart.measures[size])
   assert.deepEqual(Object.keys(item.verdicts[0]), ['part', 'label', 'verdict', 'key', 'ease'])
   assert.equal(item.image, null)
+})
+
+test('isPrivateIp: 내부망·IPv4-mapped IPv6 차단, 공인 주소 허용', () => {
+  const blocked = [
+    '127.0.0.1', '10.1.2.3', '172.16.0.1', '172.31.255.255', '192.168.0.1', '169.254.169.254',
+    '100.64.0.1', '0.0.0.0', '198.18.0.1', '224.0.0.1', '255.255.255.255',
+    '::1', '::', 'fc00::1', 'fd12::1', 'fe80::1', 'ff02::1', '64:ff9b::7f00:1',
+    '::ffff:127.0.0.1', '::ffff:7f00:1', '::ffff:a9fe:a9fe', '::FFFF:C0A8:0001', 'not-an-ip',
+  ]
+  for (const ip of blocked) assert.equal(isPrivateIp(ip), true, ip)
+  for (const ip of ['8.8.8.8', '1.1.1.1', '172.32.0.1', '211.231.99.80', '2606:4700::1111']) {
+    assert.equal(isPrivateIp(ip), false, ip)
+  }
+})
+
+test('decodeHtml: Content-Type·meta charset으로 EUC-KR 해석', () => {
+  const euckr = Buffer.from([0xc7, 0xd1, 0xb1, 0xdb]) // '한글'
+  assert.equal(decodeHtml(euckr, 'text/html; charset=EUC-KR'), '한글')
+  const meta = Buffer.concat([Buffer.from('<meta charset="euc-kr"><p>'), euckr])
+  assert.equal(decodeHtml(meta, 'text/html').endsWith('한글'), true)
+  assert.equal(decodeHtml(Buffer.from('<p>한글</p>'), 'text/html'), '<p>한글</p>')
+  assert.equal(decodeHtml(Buffer.from('abc'), 'text/html; charset=bogus-x'), 'abc')
+})
+
+test('checkPostRequest: JSON + 같은 출처만 허용', () => {
+  const host = 'localhost:5173'
+  assert.equal(checkPostRequest({ host, 'content-type': 'application/json' }), null)
+  assert.equal(checkPostRequest({ host, 'content-type': 'application/json; charset=utf-8', origin: 'http://localhost:5173' }), null)
+  assert.equal(checkPostRequest({ host, 'content-type': 'text/plain' }).status, 415)
+  assert.equal(checkPostRequest({ host }).status, 415)
+  assert.equal(checkPostRequest({ host, 'content-type': 'application/json', origin: 'https://evil.example' }).status, 403)
+  assert.equal(checkPostRequest({ host, 'content-type': 'application/json', origin: 'null' }).status, 403)
 })
 
 console.log(`\n${passed}개 통과`)

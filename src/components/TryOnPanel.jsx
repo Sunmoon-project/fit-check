@@ -241,6 +241,9 @@ export default function TryOnPanel({ product, verdicts, selectedSize, captureRef
           {ai.loading ? `AI 합성 중… ${elapsed}초` : 'AI로 합성하기'}
         </button>
         {aiAvailable === false && <p className="muted small">{NO_KEY_TEXT}</p>}
+        {aiAvailable && (
+          <p className="muted small">AI 합성을 누르면 내 전신 사진과 옷 이미지가 fal.ai 서버로 전송돼요.</p>
+        )}
         {ai.loading && <p className="muted small">보통 10~60초 걸려요. 창을 닫지 말아주세요.</p>}
         {ai.error && <p className="error">{ai.error}</p>}
         {ai.image && (

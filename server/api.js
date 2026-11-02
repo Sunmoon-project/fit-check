@@ -43,6 +43,25 @@ function send(res, status, body) {
 const isImageInput = (v) =>
   typeof v === 'string' && (/^data:image\/(png|jpe?g|webp);base64,/.test(v) || /^https:\/\//.test(v))
 
+// 다른 사이트에서 몰래 보낸 POST를 막아요 (유료 AI 합성 호출, 서버 대리 fetch 악용 방지).
+// - Content-Type이 application/json이어야 해요. 그래야 브라우저가 preflight를 보내고, 다른 출처는 통과하지 못해요.
+// - Origin 헤더가 있으면 이 서버의 주소(Host)와 같아야 해요. curl처럼 Origin이 없는 요청은 허용해요.
+export function checkPostRequest(headers = {}) {
+  const type = String(headers['content-type'] || '').split(';')[0].trim().toLowerCase()
+  if (type !== 'application/json') return { status: 415, error: 'BAD_CONTENT_TYPE', message: 'JSON 요청만 받아요.' }
+  const origin = headers.origin
+  if (origin) {
+    let host = null
+    try {
+      host = new URL(origin).host
+    } catch {
+      // 잘못된 Origin은 아래에서 거절
+    }
+    if (!host || host !== headers.host) return { status: 403, error: 'FORBIDDEN_ORIGIN', message: '허용되지 않은 출처의 요청이에요.' }
+  }
+  return null
+}
+
 async function handleProduct(req, res) {
   const { url } = await readJson(req)
   if (typeof url !== 'string' || url.length > 2000) return send(res, 400, { error: 'INVALID_URL', message: '상품 주소를 확인해주세요.' })
@@ -107,6 +126,10 @@ export function fitCheckApi(env) {
     if (!path.startsWith('/api/')) return next()
     try {
       if (path === '/api/status' && req.method === 'GET') return send(res, 200, { tryon: Boolean(falKey) })
+      if (req.method === 'POST') {
+        const bad = checkPostRequest(req.headers)
+        if (bad) return send(res, bad.status, { error: bad.error, message: bad.message })
+      }
       if (path === '/api/product' && req.method === 'POST') return await handleProduct(req, res)
       if (path === '/api/tryon' && req.method === 'POST') return await handleTryOn(req, res, falKey)
       return send(res, 404, { error: 'NOT_FOUND' })

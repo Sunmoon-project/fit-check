@@ -41,9 +41,11 @@ export default function App() {
     saveFeedback(next)
   }
 
-  // 옷장: 최신 항목을 앞에. 저장 공간이 부족하면 storage.js가 이미지를 덜어내요.
+  // 옷장: 최신 항목을 앞에. 같은 상품·같은 사이즈는 새 항목으로 바꿔요.
+  // 저장 공간이 부족하면 storage.js가 이미지를 덜어내요.
   function handleSaveWardrobe(item) {
-    const res = saveWardrobe([item, ...wardrobe])
+    const rest = wardrobe.filter((w) => !(w.product?.url === item.product?.url && w.size === item.size))
+    const res = saveWardrobe([item, ...rest])
     setWardrobe(res.list)
     return res
   }
