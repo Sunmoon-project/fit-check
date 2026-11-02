@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { BODY_FIELDS, TOP_SIZES, BOTTOM_SIZES, SHOE_SIZES } from '../data/measurements.js'
+import { BODY_FIELDS, TOP_SIZES, BOTTOM_SIZES } from '../data/measurements.js'
 import { estimateBody } from '../lib/bodyEstimate.js'
 import { FIT_PREF_LABEL } from '../lib/fitEngine.js'
 
@@ -11,7 +11,7 @@ const DEFAULT_PROFILE = {
   height: '',
   weight: '',
   shape: { shoulder: 'normal', belly: 'none', lower: 'normal' },
-  usual: { top: '', bottom: '', shoes: '' },
+  usual: { top: '', bottom: '' },
   preferredFit: 'regular',
   measurements: {},
 }
@@ -185,13 +185,6 @@ export default function Onboarding({ initial, onComplete, onCancel }) {
             </select>
           </div>
           <div className="q-group">
-            <strong>신발 (mm)</strong>
-            <select value={profile.usual.shoes} onChange={(e) => setNested('usual', 'shoes', e.target.value)} aria-label="신발 사이즈">
-              <option value="">선택 안 함</option>
-              {SHOE_SIZES.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </div>
-          <div className="q-group">
             <strong>선호하는 핏</strong>
             <Chips name="선호 핏" value={profile.preferredFit} options={Object.entries(FIT_PREF_LABEL)} onChange={(v) => set({ preferredFit: v })} />
           </div>
@@ -274,7 +267,6 @@ function normalize(p) {
     usual: {
       top: p.usual.top || '',
       bottom: p.usual.bottom ? Number(p.usual.bottom) : '',
-      shoes: p.usual.shoes ? Number(p.usual.shoes) : '',
     },
     measurements,
   }
