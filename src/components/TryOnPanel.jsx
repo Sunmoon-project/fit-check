@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { loadPhoto, savePhoto } from '../lib/storage.js'
 import { fileToDataUrl, removeBackground, composePreview } from '../lib/imageTools.js'
 import { CATEGORY_LABEL } from '../data/measurements.js'
@@ -37,7 +37,8 @@ export default function TryOnPanel({ product, verdicts, selectedSize, captureRef
   const [photoNote, setPhotoNote] = useState('')
   const [source, setSource] = useState(canProductImage ? 'product' : 'upload')
   const [uploaded, setUploaded] = useState(null)
-  const [tolerance, setTolerance] = useState(34)
+  const [tolerance, setTolerance] = useState(34) // 슬라이더 즉시 값 (UI 반영용)
+  const [appliedTolerance, setAppliedTolerance] = useState(34) // 디바운스된 값 (배경 제거 실행용)
   const [garment, setGarment] = useState(null) // { dataUrl, removed, reason }
   const [scalePct, setScalePct] = useState(100)
   const [offsetPct, setOffsetPct] = useState(0)
@@ -50,7 +51,10 @@ export default function TryOnPanel({ product, verdicts, selectedSize, captureRef
   const garmentInput = useRef(null)
 
   const garmentSrc = source === 'product' ? product.image : uploaded
-  const layout = previewLayout(product.category, verdicts, scalePct, offsetPct)
+  const layout = useMemo(
+    () => previewLayout(product.category, verdicts, scalePct, offsetPct),
+    [product.category, verdicts, scalePct, offsetPct],
+  )
 
   // 서버의 AI 합성 사용 여부와 Space 확인
   useEffect(() => {
@@ -70,13 +74,20 @@ export default function TryOnPanel({ product, verdicts, selectedSize, captureRef
     return () => { alive = false }
   }, [])
 
-  // 옷 이미지 배경 제거 (모서리 flood fill)
+  // tolerance 슬라이더는 입력마다 바뀌므로, 실제 배경 제거(무거운 flood fill)는 멈춘 뒤에만 돌도록 디바운스
+  useEffect(() => {
+    if (tolerance === appliedTolerance) return
+    const t = setTimeout(() => setAppliedTolerance(tolerance), 200)
+    return () => clearTimeout(t)
+  }, [tolerance, appliedTolerance])
+
+  // 옷 이미지 배경 제거 (모서리 flood fill). 디바운스된 appliedTolerance로만 실행
   useEffect(() => {
     if (!garmentSrc) { setGarment(null); return }
     let alive = true
-    removeBackground(garmentSrc, tolerance).then((g) => alive && setGarment(g))
+    removeBackground(garmentSrc, appliedTolerance).then((g) => alive && setGarment(g))
     return () => { alive = false }
-  }, [garmentSrc, tolerance])
+  }, [garmentSrc, appliedTolerance])
 
   // AI 합성 진행 시간 표시
   useEffect(() => {
@@ -98,7 +109,7 @@ export default function TryOnPanel({ product, verdicts, selectedSize, captureRef
         return { image: null, kind: null }
       }
     }
-  })
+  }, [captureRef, ai.image, photo, garment, layout])
 
   async function handlePerson(e) {
     const file = e.target.files?.[0]

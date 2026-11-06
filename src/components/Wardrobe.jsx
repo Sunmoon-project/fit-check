@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { CATEGORY_LABEL } from '../data/measurements.js'
 import { findSimilar, describeDiff } from '../lib/wardrobe.js'
 
@@ -43,6 +43,15 @@ export default function Wardrobe({ items, onDelete, onBack }) {
   const [selected, setSelected] = useState([])
   const compared = items.filter((w) => selected.includes(w.id))
 
+  // 각 항목의 비슷한 옷은 items가 바뀔 때만 한 번 계산 (매 렌더 O(N²) 재계산 방지)
+  const peers = useMemo(() => {
+    const map = {}
+    for (const w of items) {
+      map[w.id] = findSimilar(w, items.filter((o) => o.product.url !== w.product.url))
+    }
+    return map
+  }, [items])
+
   function toggle(id) {
     setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : s.length >= MAX_COMPARE ? s : [...s, id]))
   }
@@ -68,7 +77,7 @@ export default function Wardrobe({ items, onDelete, onBack }) {
           <p className="muted small">최대 {MAX_COMPARE}벌을 골라 나란히 비교할 수 있어요. 이 브라우저에만 저장돼요.</p>
           <ul className="wd-grid">
             {items.map((w) => {
-              const peer = findSimilar(w, items.filter((o) => o.product.url !== w.product.url))
+              const peer = peers[w.id]
               return (
                 <li key={w.id} className={`wd-item ${selected.includes(w.id) ? 'selected' : ''}`}>
                   <button type="button" className="wd-thumb" onClick={() => toggle(w.id)} aria-pressed={selected.includes(w.id)}>
