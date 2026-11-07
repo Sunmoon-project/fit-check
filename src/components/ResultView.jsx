@@ -41,14 +41,14 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
   const verdicts = result.perSize.find((p) => p.size === selectedSize)?.verdicts || []
   // 지금 보는 옷 (옷장 비교용)
   const currentTarget = useMemo(
-    () => ({ ...makeWardrobeItem({ product, size: selectedSize, verdicts, now: 0 }), id: 'current' }),
-    [product, selectedSize, verdicts],
+    () => ({ ...makeWardrobeItem({ product, size: selectedSize, verdicts, profile, now: 0 }), id: 'current' }),
+    [product, selectedSize, verdicts, profile],
   )
 
   async function handleSave() {
     setSaving(true)
     const shot = (await captureRef.current?.()) || { image: null, kind: null }
-    const item = makeWardrobeItem({ product, size: selectedSize, verdicts, image: shot.image, imageKind: shot.kind })
+    const item = makeWardrobeItem({ product, size: selectedSize, verdicts, profile, image: shot.image, imageKind: shot.kind })
     const res = onSaveWardrobe?.(item)
     setSaving(false)
     setSaveNote(res?.trimmed ? `옷장에 담았어요. ${trimNote(res) || '저장 공간이 부족해 오래된 이미지 일부를 뺐어요.'}` : '옷장에 담았어요. 위쪽 ‘옷장’에서 비교할 수 있어요.')

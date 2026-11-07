@@ -13,8 +13,13 @@ function Thumb({ item }) {
   return <img src={src} alt="" referrerPolicy="no-referrer" />
 }
 
-function VerdictLine({ verdicts }) {
-  if (!verdicts?.length) return <span className="muted small">부위별 판정 없음</span>
+function VerdictLine({ verdicts, item }) {
+  if (!verdicts?.length) {
+    // 신발은 사이즈 이름을 mm로 읽지 못하면 이유를 같이 보여줘요 (S/M/L·FREE 등)
+    const why = item?.verdictStatus === 'unsupported' ? (item.verdictNote || '판정 없음(사이즈 체계 미지원)') : item?.verdictNote
+    if (why) return <span className="muted small wd-unsupported">{why}{item.verdictStatus === 'unsupported' ? ' · 사이즈 이름이 mm가 아니라서 내 발길이와 비교하지 못했어요.' : ''}</span>
+    return <span className="muted small">부위별 판정 없음</span>
+  }
   return (
     <span className="wd-verdicts">
       {verdicts.map((v) => <span key={v.part} className={`v-${v.key}`}>{v.label} {v.verdict}</span>)}
@@ -35,7 +40,7 @@ export function SimilarInWardrobe({ target, wardrobe }) {
           <strong>{cmp.item.product.name}</strong>
           <span className="muted small"> · {cmp.item.size}</span>
           <p className="small">이 옷({target.size})은 {cmp.diffs.map(describeDiff).join(' · ')}</p>
-          <VerdictLine verdicts={cmp.item.verdicts} />
+          <VerdictLine verdicts={cmp.item.verdicts} item={cmp.item} />
         </div>
       </div>
     </div>
@@ -149,7 +154,7 @@ export default function Wardrobe({ items, onDelete, onBack, onImport, onClearRev
                   <div className="wd-info">
                     <strong className="wd-name">{w.product.name}</strong>
                     <span className="muted small">{w.product.mall} · {CATEGORY_LABEL[w.product.category]} · {w.size || '-'}</span>
-                    <VerdictLine verdicts={w.verdicts} />
+                    <VerdictLine verdicts={w.verdicts} item={w} />
                     {peer && (
                       <span className="small wd-peer">‘{peer.item.product.name}’ 대비 {peer.diffs.map(describeDiff).join(' · ')}</span>
                     )}
@@ -183,7 +188,7 @@ export default function Wardrobe({ items, onDelete, onBack, onImport, onClearRev
                     <figcaption>
                       <strong className="small">{w.product.name}</strong>
                       <span className="muted small"> · {w.size || '-'}</span>
-                      <VerdictLine verdicts={w.verdicts} />
+                      <VerdictLine verdicts={w.verdicts} item={w} />
                     </figcaption>
                   </figure>
                 ))}

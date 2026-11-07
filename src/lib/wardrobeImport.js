@@ -2,6 +2,7 @@
 // 확장은 사용자가 누를 때만 JSON을 클립보드에 복사하고, 웹 옷장은 붙여넣거나 고른 파일을 여기서 검사해요.
 // 가져오는 데이터는 믿지 않습니다: 모양·길이·범위를 검사하고, 모르는 키는 버리고, http/https 주소만 남겨요.
 import { CATEGORY_LABEL } from '../data/measurements.js'
+import { SHOE_STATUSES, SHOE_UNSUPPORTED_NOTE, resolveShoeSizeMm, shoeGender } from './shoeFit.js'
 
 export const ENVELOPE_APP = 'fitcheck'
 export const ENVELOPE_KIND = 'wardrobe-item'
@@ -133,6 +134,24 @@ export function sanitizeItem(raw, { now = Date.now() } = {}) {
   if (measures === undefined || verdicts === undefined || reviews === undefined) return null
   if (raw.size != null && typeof raw.size !== 'string') return null
   const size = raw.size == null ? null : str(raw.size, LIMITS.size) || null
+  // 신발은 판정이 비어 있어도 조용히 두지 않고 이유를 남겨요 (verdictStatus는 허용 목록만, 설명 글은 받은 글을 믿지 않고 새로 만듭니다).
+  let status = null
+  let note = ''
+  let outMeasures = measures
+  if (p.category === 'shoes') {
+    if (raw.verdictStatus != null && !SHOE_STATUSES.includes(raw.verdictStatus)) return null
+    if (verdicts.length === 0) {
+      const r = size ? resolveShoeSizeMm(size, { gender: shoeGender(null, name), productName: name }) : null
+      if (r?.converted) {
+        status = 'converted'
+        note = r.text
+        outMeasures = measures || { footLength: r.mm }
+      } else {
+        status = 'unsupported'
+        note = SHOE_UNSUPPORTED_NOTE
+      }
+    }
+  }
   return {
     id: `w${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`,
     savedAt: now,
@@ -145,12 +164,13 @@ export function sanitizeItem(raw, { now = Date.now() } = {}) {
       url: safeUrl(p.url) || '',
     },
     size,
-    measures,
+    measures: outMeasures,
     verdicts,
     image: null,
     imageKind: null,
     source: 'extension',
     reviews,
+    ...(status ? { verdictStatus: status, verdictNote: note } : {}),
   }
 }
 
