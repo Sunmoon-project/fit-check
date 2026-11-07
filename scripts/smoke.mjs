@@ -23,7 +23,7 @@ import {
   fitLinear,
 } from './lib/bodyMetrics.mjs'
 import { PRODUCTS } from '../src/data/mockData.js'
-import { parseReviewText, analyzeSizeCharts } from '../src/lib/productCore.js'
+import { parseReviewText, analyzeSizeCharts, stripColumnNumbers } from '../src/lib/productCore.js'
 import { parseProductHtml } from '../server/productParser.js'
 import { readOptionLabels, parsePage, isProductPage, splitSentences, extractCardView, parseGender } from '../src/lib/pageParser.js'
 import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
@@ -3295,6 +3295,74 @@ test('content.js CSS(소스 분석): 사이즈표 요약 글자·칩 대비가 4
   assert.ok(ratio(col(rule('.ss .sst'), 'color'), '#ffffff') >= 4.5, '제목')
   assert.ok(ratio(col(rule('.ss p'), 'color'), '#ffffff') >= 4.5, '본문')
   assert.ok(ratio(col(rule('.ss p.tiny'), 'color'), '#ffffff') >= 4.5, '보조 글')
+})
+
+// ---- 가짜 HTML(무신사 스크린샷 구조): 실제 무신사 페이지로 확인한 것이 아니라 스크린샷 화면 구조를 옮긴 가짜 HTML이에요.
+const MS_HEADS = ['총장', '어깨너비', '가슴단면', '소매길이', '밑단단면', '소매부리단면', '암홀']
+const MS_DATA = [['0 (S)', '67', '50.5', '59.5', '60.5'], ['1 (M)', '69', '52', '62', '62'], ['2 (L)', '71', '53.5', '64.5', '63.5'], ['3 (XL)', '73', '55', '67', '65'], ['4 (2XL)', '75', '56.5', '69.5', '66.5']]
+const MS_HEAD_CELL = {
+  span: (i, h, t) => `<${t}><span>${i + 1}</span><span>${h}</span></${t}>`,
+  br: (i, h, t) => `<${t}>${i + 1}<br>${h}</${t}>`,
+  div: (i, h, t) => `<${t}><div>${i + 1}</div><div>${h}</div></${t}>`,
+}
+const msHtml = (kind, { tag = 'th', mine = true, fit = true, opts = true } = {}) => {
+  const head = `<tr><${tag}>cm</${tag}>${MS_HEADS.map((h, i) => MS_HEAD_CELL[kind](i, h, tag)).join('')}</tr>`
+  const my = mine ? '<tr><td>내 사이즈</td><td colspan="7">사이즈를 직접 입력해주세요</td></tr>' : ''
+  const body = MS_DATA.map((r) => `<tr>${[...r, '-', '-', '-'].map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')
+  const fitT = fit ? '<h3>핏/계절감</h3><table><tr><td>핏</td><td>스키니</td><td>슬림</td><td>레귤러</td><td>루즈</td><td>오버 사이즈</td></tr><tr><td>촉감</td><td>부드러움</td><td>약간 부드러움</td><td>보통</td><td>약간 뻣뻣함</td><td>뻣뻣함</td></tr><tr><td>신축성</td><td>없음</td><td>거의 없음</td><td>보통</td><td>약간 있음</td><td>있음</td></tr><tr><td>비침</td><td>있음</td><td>약간 있음</td><td>보통</td><td>거의 없음</td><td>없음</td></tr><tr><td>두께</td><td>얇음</td><td>약간 얇음</td><td>보통</td><td>약간 두꺼움</td><td>두꺼움</td></tr><tr><td>계절</td><td>봄</td><td>여름</td><td>가을</td><td>겨울</td></tr></table>' : ''
+  const optH = opts ? MS_DATA.map((r) => `<button>${r[0]}</button>`).join('') : ''
+  return `<html><body><h1>오버핏 맨투맨</h1>${optH}<table>${head}${my}${body}</table>${fitT}</body></html>`
+}
+
+test('가짜 HTML(무신사 스크린샷 구조): 열 번호+항목명 머리글, 내 사이즈 줄, - 열, 핏/계절감 표가 있어도 0 (S)~4 (2XL)의 정확한 값을 읽는다', () => {
+  for (const kind of ['span', 'br', 'div'])
+    for (const tag of ['th', 'td'])
+      for (const opts of [true, false])
+        for (const mine of [true, false]) {
+          const page = parsePage(fakeDocument(msHtml(kind, { tag, opts, mine })), '')
+          const id = `${kind}/${tag}/opts=${opts}/mine=${mine}`
+          assert.deepEqual(Object.keys(page.sizeChart.measures), ['0(S)', '1(M)', '2(L)', '3(XL)', '4(2XL)'], id)
+          assert.deepEqual(page.sizeChart.measures['0(S)'], { topLength: 67, shoulder: 50.5, chest: 119, arm: 60.5 }, id)
+          assert.deepEqual(page.sizeChart.measures['4(2XL)'], { topLength: 75, shoulder: 56.5, chest: 139, arm: 66.5 }, id)
+          assert.deepEqual(page.sizeChartMeta.candidates.filter((c) => c.reason === 'selected').map((c) => c.cols), [8], id)
+        }
+})
+
+test('가짜 HTML(무신사 스크린샷 구조): 핏/계절감 표는 사이즈표 후보로 선택되지 않고 진단에 번호 접두·건너뛴 줄·- 열 수가 남는다', () => {
+  const doc = fakeDocument(msHtml('span'))
+  const meta = parsePage(doc, '').sizeChartMeta
+  const fitCand = meta.candidates.find((c) => c.rows === 6 && c.cols === 6)
+  assert.ok(!fitCand || fitCand.reason === 'no-measure-header')
+  assert.equal(meta.headerPrefixStripped, 1)
+  assert.equal(meta.skippedRows, 1)
+  assert.equal(meta.dashColumns, 3)
+  const d = collectDiagnostics(doc, '')
+  assert.deepEqual([d.chart.headerPrefixStripped, d.chart.skippedRows, d.chart.dashColumns], [1, 1, 3])
+  assert.ok(diagnosticLines(d).some((l) => l.includes('열 번호 접두 제거한 후보 1개') && l.includes('건너뛴 줄(내 사이즈 안내 등) 1개') && l.includes("전부 '-'인 열 3개")))
+})
+
+test('가짜 HTML(무신사 스크린샷 구조): 열 번호 접두 제거는 1부터 이어지는 번호일 때만 한다', () => {
+  assert.deepEqual(stripColumnNumbers(['cm', '1 총장', '2 어깨너비', '3 가슴단면']), { headers: ['cm', '총장', '어깨너비', '가슴단면'], stripped: 3 })
+  assert.equal(stripColumnNumbers(['사이즈', '총장', '어깨']).stripped, 0)
+  assert.equal(stripColumnNumbers(['사이즈', '1 총장', '어깨']).stripped, 0, '한 칸만 번호면 건드리지 않음')
+})
+
+test('가짜 HTML(무신사 스크린샷 구조): 읽은 표로 추천·요약·비교가 동작하고 총장 67이 사이즈로 읽히지 않는다', () => {
+  const profile = buildProfile({ gender: 'male', height: '175', weight: '70' }).profile
+  const r = analyzePage(fakeDocument(msHtml('span')), '', profile)
+  assert.equal(r.status, 'ok')
+  assert.equal(r.sizeChartMissing, false)
+  assert.equal(r.sizeSummary.status, 'ok')
+  assert.deepEqual(r.sizeSummary.sizes, ['0 (S)', '1 (M)', '2 (L)', '3 (XL)', '4 (2XL)'])
+  assert.ok(r.compareView.sizes.length === 5)
+  assert.ok(!r.sizeSummary.sizes.some((x) => ['67', '69', '71'].includes(x)))
+})
+
+await atest('content.js(가짜 DOM, vm): 가짜 HTML(무신사 스크린샷 구조) 표는 못 읽었다는 안내 없이 요약이 나온다', async () => {
+  const { texts } = await runContentInFakeDom(msHtml('span'))
+  assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
+  assert.ok(texts.includes('사이즈표 요약'))
+  assert.ok(!texts.includes(NO_CHART_MESSAGE))
 })
 
 console.log(`\n${passed}개 통과`)

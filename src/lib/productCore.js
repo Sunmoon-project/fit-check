@@ -191,6 +191,18 @@ function normalTableRetry(rows, headerIdx) {
   return { headers: ['사이즈', ...headers.slice(1)], body }
 }
 
+// 머리글 칸이 '1 총장', '2 어깨너비'처럼 열 번호 + 항목명이면 번호를 뗍니다. 번호가 1부터 이어지는 칸이 2개 이상일 때만 열 번호로 봐요.
+const COL_NO_RE = /^(\d{1,2})\s*(?=[가-힣A-Za-z])/
+export function stripColumnNumbers(headers) {
+  const nums = headers.map((h) => Number((displayText(h).match(COL_NO_RE) || [])[1]))
+  const hits = nums.map((n, i) => i > 0 && Number.isFinite(n) && n === i)
+  if (hits.filter(Boolean).length < 2) return { headers, stripped: 0 }
+  return { headers: headers.map((h, i) => (hits[i] ? displayText(h).replace(COL_NO_RE, '') : h)), stripped: hits.filter(Boolean).length }
+}
+// '내 사이즈' 입력 안내 줄처럼 머리글보다 칸이 적거나 '내 사이즈'/'MY'로 시작하는 줄
+const MY_ROW_RE = /^(?:내사이즈|내체형|MY(?:SIZE)?)$/i
+const isDashCell = (c) => /^[-–—~\s]*$/.test(String(c))
+
 const REASON_KEYS = ['too-few-rows', 'no-measure-header', 'no-labeled-rows', 'flipped-no-names', 'numeric-rule', 'flipped-numeric-no-options', 'no-overlap', 'not-best', 'selected']
 
 // ---------- 신발: 사이즈 이름 자체가 발길이(mm)인 표 ----------
@@ -300,7 +312,8 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
   }
   let best = null
   const ignored = []
-  rowsList.forEach((rows, index) => {
+  rowsList.forEach((rowsIn, index) => {
+    let rows = rowsIn
     if (rows.length < 2) return
     const headerIdx = rows.findIndex((r) => r.some(hasMeasureWord))
     cands[index].head = shapeLine(rows[Math.max(0, headerIdx)])
@@ -310,7 +323,11 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
       return why(index, 'no-measure-header')
     }
     meta.withHeader++
-    let headers = rows[headerIdx]
+    const strip = stripColumnNumbers(rows[headerIdx])
+    let headers = strip.headers
+    if (strip.stripped) {
+      rows = rows.map((r, i) => (i === headerIdx ? headers : r))
+    }
     let body
     // 첫 열 제목이 '총장' 같은 실측 항목이면 가로세로가 뒤바뀐 후보예요. 단, 아래 줄들이 사이즈 이름으로 시작하고
     // 칸 수가 하나 많으면 맨 앞 제목 칸만 빠진 일반 표라서 그렇게 읽어요.
@@ -349,6 +366,12 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
       body = rows.slice(headerIdx + 1).filter((r) => r.length === headers.length && isLabelCell(r[0]))
       if (body.length === 0) return why(index, 'no-labeled-rows')
     }
+    let skipped = 0
+    let dashCols = 0
+    if (!flippedCand) {
+      skipped = rows.slice(headerIdx + 1).filter((r) => r.length !== headers.length && (r.length < headers.length || MY_ROW_RE.test(normLabel(r[0])))).length
+      dashCols = headers.slice(1).filter((_, j) => body.length && body.every((r) => isDashCell(r[j + 1] ?? ''))).length
+    }
     const labels = body.map((r) => normLabel(r[0]))
     const labelClass = labelClassOf(labels)
     const monotonic = isIncreasing(labels.filter((l) => labelClassOf([l]) === 'numeric'))
@@ -372,7 +395,7 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
     const keys = headers.slice(1).map((h) => mapHeader(h, category || guessCategory('', headers))?.key).filter(Boolean)
     const wanted = new Set([...(CATEGORY_PARTS[category] || []), ...(category ? [LENGTH_KEY[category]] : [])])
     const fit = keys.filter((k) => wanted.has(k)).length
-    const cand = { index, headers, body, labels, labelClass, monotonic, overlap, rank: CLASS_RANK[labelClass], fit, mapped: keys.length, flipped: flippedCand, source }
+    const cand = { index, headers, body, labels, labelClass, monotonic, overlap, rank: CLASS_RANK[labelClass], fit, mapped: keys.length, flipped: flippedCand, source, prefixStripped: strip.stripped ? 1 : 0, skipped, dashCols }
     const better =
       !best ||
       cand.overlap > best.overlap ||
@@ -442,6 +465,9 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
     monotonic: best.monotonic,
     overlap: best.overlap,
     namesFrom: best.source,
+    headerPrefixStripped: best.prefixStripped,
+    skippedRows: best.skipped,
+    dashColumns: best.dashCols,
   })
   const chart = {
     unit: cat === 'shoes' ? 'mm' : 'cm',
