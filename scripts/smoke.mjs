@@ -1462,6 +1462,10 @@ async function runContentInFakeDom(pageHtml = null) {
         _text: '', set textContent(v) { this._text = String(v); texts.push(this._text) }, get textContent() { return this._text },
         append(...n) { this.children.push(...n) }, appendChild(n) { this.children.push(n); return n }, replaceChildren() { this.children = [] },
         setAttribute() {}, getAttribute() { return null }, addEventListener(type, fn) { (this._l ||= {})[type] = fn },
+        classList: {
+          contains: (c) => e.className.split(' ').includes(c),
+          toggle: (c, on) => { const set = new Set(e.className.split(' ').filter(Boolean)); (on ?? !set.has(c)) ? set.add(c) : set.delete(c); e.className = [...set].join(' ') },
+        },
         attachShadow() { return makeEl('shadow') }, remove() {}, select() {}, querySelectorAll() { return [] }, querySelector() { return null }, closest() { return null },
       }
       return e
@@ -1594,6 +1598,34 @@ await atest('content.js(가짜 DOM, vm): 리뷰 원문·사이즈표 구역이 �
   // 페이지 글에 든 <img ...> 는 요소가 아니라 글자로만 들어간다
   assert.ok(has('<img src=x onerror=alert(1)>'))
   assert.ok(!created.some((e) => e.tagName === 'IMG' || e.tagName === 'SCRIPT'))
+})
+
+await atest('content.js(가짜 DOM, vm): 카드 문구가 줄었고 오래된 안내가 없으며 최소화·닫기가 동작한다', async () => {
+  const { texts, created } = await runContentInFakeDom(VIEW_HTML(chartTable(OPTION_LIST_LABELS())))
+  const all = texts.join('\n')
+  for (const stale of ['자동으로 스크롤하지 않아요', '이 페이지에 불러와진 리뷰만 읽어요', '최종 선택은', '정확도를 측정한 값이 아니에요. 참고용', '이 브라우저 밖으로 나가지 않아요'])
+    assert.ok(!all.includes(stale), stale)
+  // 필수 고지는 한 줄에 합쳐서 한 번만
+  assert.equal(texts.filter((t) => t.includes('확신도는 정확도를 측정한 값이 아니에요')).length, 1)
+  assert.equal(texts.filter((t) => t.includes('참고용이에요')).length, 1)
+  // 기본으로 보이는 영역(fold 바깥)의 문장 수는 적다: card 직계 자식은 헤더, 분류줄, 사이즈, 근거 한 줄, 고지 한 줄, fold뿐
+  const card = created.find((e) => e.className.split(' ').includes('card'))
+  assert.deepEqual(card.children.map((c) => c.className.split(' ')[0]), ['row', 'row', 'size', 'sum', 'tiny', 'fold'])
+  // 최소화하면 fold가 숨겨지는 클래스가 붙고, 다시 누르면 풀린다
+  const mini = created.find((e) => e.tagName === 'BUTTON' && e.textContent === '−')
+  mini._l.click()
+  assert.ok(card.className.split(' ').includes('min'))
+  const plus = created.find((e) => e.tagName === 'BUTTON' && e.textContent === '+')
+  plus._l.click()
+  assert.ok(!card.className.split(' ').includes('min'))
+  const close = created.find((e) => e.tagName === 'BUTTON' && e.textContent === '×')
+  assert.ok(close)
+})
+
+test('content.js 소스: 카드 최대 높이·내부 스크롤·최소화 스타일이 있다', () => {
+  const src = readFileSync(new URL('../extension/content.js', import.meta.url), 'utf8')
+  assert.ok(/\.card\{[^}]*max-height:min\(80vh,560px\)[^}]*overflow-y:auto/.test(src))
+  assert.ok(src.includes('.card.min .fold{display:none}'))
 })
 
 test('formatReport: 오류 위치와 식별자 줄은 검증된 값만 보인다', () => {

@@ -20,12 +20,16 @@ const CSS = `
 .wrap{position:fixed;right:16px;bottom:16px;z-index:2147483647;display:flex;flex-direction:column;align-items:flex-end;gap:8px;color:#111}
 .fab{border:0;border-radius:999px;background:#111;color:#fff;padding:12px 18px;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.25)}
 .fab:disabled{opacity:.6;cursor:default}
-.card{width:300px;max-width:calc(100vw - 32px);background:#fff;border:1px solid #d4d4d4;border-radius:12px;padding:16px;box-shadow:0 8px 28px rgba(0,0,0,.2);font-size:13px;line-height:1.5}
+.card{width:320px;max-width:calc(100vw - 32px);max-height:min(80vh,560px);overflow-y:auto;background:#fff;border:1px solid #d4d4d4;border-radius:12px;padding:12px 14px;box-shadow:0 8px 28px rgba(0,0,0,.2);font-size:13px;line-height:1.5}
+.card.min .fold{display:none}
+.hd{position:sticky;top:-12px;background:#fff;z-index:1;padding-bottom:2px}
+.hd .close{margin-left:6px}
+.tiny{margin:2px 0 0;font-size:11px;color:#8a8a8e}
 .row{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .eyebrow{font-size:11px;color:#8a8a8e}
 .close{border:0;background:none;font-size:18px;line-height:1;cursor:pointer;color:#555}
 .badge{font-size:12px;font-weight:600}
-.size{font-size:30px;font-weight:700;margin:6px 0 2px}
+.size{font-size:28px;font-weight:700;margin:2px 0 0}
 .sum{margin:8px 0 0;color:#555;font-size:12px}
 .why{margin:6px 0 0;padding-left:16px;color:#555;font-size:12px}
 h3{margin:10px 0 2px;font-size:14px}
@@ -35,7 +39,7 @@ p{margin:0}
 .ok{margin-top:6px;font-size:12px;color:#0a7a3c}
 .inp{width:100%;margin-top:6px;border:1px solid #d4d4d4;border-radius:6px;padding:6px;font-size:12px;font-family:inherit}
 .prog{margin-top:6px;font-size:12px;color:#555}
-.note{margin-top:10px;font-size:11px;color:#8a8a8e}
+.note{margin-top:6px;font-size:11px;color:#8a8a8e}
 .sec{margin-top:8px;border-top:1px solid #ececec;padding-top:6px}
 .sec>summary{cursor:pointer;font-size:12px;font-weight:600;color:#111}
 .secbody{margin-top:6px}
@@ -104,16 +108,26 @@ function el(tag, cls, text) {
 function showCard(build) {
   panel.replaceChildren()
   const card = el('div', 'card')
-  const head = el('div', 'row')
+  const head = el('div', 'row hd')
   head.append(el('span', 'eyebrow', '핏체크 · 내 체형 추천'))
+  const ctl = el('span')
+  const mini = el('button', 'close', '−')
+  mini.type = 'button'
+  mini.setAttribute('aria-label', '접기')
+  mini.addEventListener('click', () => {
+    const on = !card.classList.contains('min')
+    card.classList.toggle('min', on)
+    mini.textContent = on ? '+' : '−'
+    mini.setAttribute('aria-label', on ? '펼치기' : '접기')
+  })
   const close = el('button', 'close', '×')
   close.type = 'button'
   close.setAttribute('aria-label', '닫기')
   close.addEventListener('click', () => panel.replaceChildren())
-  head.append(close)
+  ctl.append(mini, close)
+  head.append(ctl)
   card.append(head)
   build(card)
-  card.append(el('p', 'note', '참고용이에요. 최종 선택은 상품 상세의 실측을 꼭 확인해주세요. 입력한 정보는 이 브라우저 밖으로 나가지 않아요.'))
   panel.append(card)
 }
 
@@ -146,7 +160,7 @@ function reportBlock(report) {
     done.textContent = (await copyText(report)) ? '복사했어요' : '복사하지 못했어요. 브라우저 권한을 확인해주세요.'
   })
   box.append(btn, done)
-  box.append(el('p', 'note', '리포트에는 주소 경로(쿼리·해시 제외, 주소에 상품명이 있으면 같이 들어가요), 확장 버전, 찾은 개수, 화면 구조 모양(글자는 L/N/T 기호), 리뷰에서 키·몸무게·사이즈를 읽은 건수만 들어 있어요. 키·몸무게 값 등 체형 정보, 리뷰 글, 페이지 본문은 들어 있지 않아요.'))
+  box.append(el('p', 'tiny', '주소 경로(상품명이 있으면 포함)·개수·화면 구조 기호만 담겨요. 체형 정보와 리뷰 글은 없어요.'))
   return box
 }
 
@@ -184,7 +198,7 @@ function manualForm(r) {
         msg.textContent = '직접 입력한 표로 분석하지 못했어요. 입력 형식을 확인하고 다시 눌러주세요.'
       }
     })
-    box.append(cols, lines, go, msg, el('p', 'note', '입력한 표는 저장하거나 전송하지 않고 이번 분석에만 써요.'))
+    box.append(cols, lines, go, msg, el('p', 'tiny', '저장·전송하지 않고 이번 분석에만 써요.'))
   })
   box.append(open)
   box.openForm = () => open.click()
@@ -417,8 +431,8 @@ function loadMoreBlock(r) {
       fab.disabled = false
     }
   })
+  btn.setAttribute('title', '누를 때만 동작해요. 리뷰 영역을 스크롤하며 리뷰의 더보기 버튼만 누르고, 최대 약 30초 뒤 멈춰요. 끝나면 원래 위치로 돌아와요.')
   box.append(btn, stop, prog)
-  box.append(el('p', 'note', '누를 때만 동작해요. 리뷰 영역으로 스크롤하며 리뷰의 더보기 버튼만 누르고(구매·장바구니 등은 누르지 않아요), 최대 약 30초 또는 20단계 뒤 멈춰요. 끝나면 원래 위치로 돌아와요.'))
   return box
 }
 
@@ -427,9 +441,11 @@ function renderResult(r) {
     if (r.status !== 'ok') {
       card.append(el('p', null, r.message))
       if (r.details?.length) {
+        const diag = section('진단 정보')
         const ul = el('ul', 'det')
         for (const t of r.details) ul.append(el('li', null, t))
-        card.append(ul)
+        diag.body.append(ul)
+        card.append(diag.det)
       }
       if (r.diagnostics) {
         card.append(manualForm(r))
@@ -437,41 +453,45 @@ function renderResult(r) {
       }
       return
     }
-    // 아래 결과 카드 끝에서 사이즈표가 없었으면 직접 입력, 진단 리포트는 항상 붙입니다.
-    if (r.manual) card.append(el('p', 'note', '직접 입력한 사이즈표 값으로 계산한 결과예요. 페이지에서 읽은 값이 아니에요.'))
+    // 기본으로 보이는 것: 추천 사이즈, 확신도, 근거 한 줄, 필수 고지 한 줄, 리뷰 더 불러오기. 나머지는 접어 둡니다.
     const conf = el('span', 'badge', r.confidenceLabel.text)
     conf.style.color = r.confidenceLabel.color
     const row = el('div', 'row')
     row.append(el('span', 'eyebrow', r.categoryLabel), conf)
     card.append(row)
     if (r.recommendedSize) card.append(el('div', 'size', r.recommendedLabel || r.recommendedSize))
-    card.append(el('p', 'sum', r.summary))
+    card.append(el('p', 'sum', r.manual ? `${r.summary} · 직접 입력한 사이즈표` : r.summary))
+    card.append(el('p', 'tiny', '참고용이에요. 확신도는 정확도를 측정한 값이 아니에요.'))
+    const fold = el('div', 'fold')
+    fold.append(loadMoreBlock(r))
+    if (r.loadInfo) fold.append(el('p', 'tiny', r.loadInfo))
+
+    const why = section('추천 이유')
     if (r.reasons.length) {
       const ul = el('ul', 'why')
       for (const t of r.reasons) ul.append(el('li', null, t))
-      card.append(ul)
+      why.body.append(ul)
     }
-    card.append(el('h3', null, r.headline), el('p', null, r.body))
+    why.body.append(el('h3', null, r.headline), el('p', null, r.body))
+    fold.append(why.det)
+
     if (r.reviewViews) {
       const rv = section(`리뷰 원문 (비슷한 체형 ${r.reviewViews.matchedTotal}건 / 불러온 ${r.reviewsLoaded}건)`)
       rv.body.append(reviewsBlock(r.reviewViews))
-      card.append(rv.det)
+      fold.append(rv.det)
     }
-    {
-      const manual = manualForm(r)
-      const ch = section(r.chartView ? '읽은 사이즈표 (페이지 그대로)' : '사이즈표 (읽지 못함)', !r.chartView)
-      if (r.chartView) ch.body.append(chartTable(r.chartView), el('p', 'note', '읽은 표가 다르면 직접 입력으로 고칠 수 있어요.'))
-      ch.body.append(manual)
-      card.append(ch.det)
-    }
-    card.append(loadMoreBlock(r))
-    if (r.loadInfo) card.append(el('p', 'note', r.loadInfo))
-    card.append(el('p', 'note', '이 페이지에 불러와진 리뷰만 읽어요. 더 많은 리뷰를 반영하려면 아래 [리뷰 더 불러오기]를 눌러 보세요. 누를 때만 리뷰 영역을 스크롤하고 리뷰의 더보기 버튼만 눌러요(끝나면 원래 위치로 돌아와요).'))
-    card.append(el('p', 'note', '확신도는 후기·사이즈표 근거가 얼마나 있는지로 나눈 참고 단계예요. 정확도를 측정한 값이 아니에요.'))
+    const manual = manualForm(r)
+    const ch = section(r.chartView ? '읽은 사이즈표 (페이지 그대로)' : '사이즈표 (읽지 못함)', !r.chartView)
+    if (r.chartView) ch.body.append(chartTable(r.chartView), el('p', 'tiny', '읽은 표가 다르면 직접 입력으로 고칠 수 있어요.'))
+    ch.body.append(manual)
+    fold.append(ch.det)
+
     if (r.diagnostics) {
-      card.append(el('p', 'note', '문제가 있나요?'))
-      card.append(reportBlock(formatReport(r.diagnostics)))
+      const rep = section('문제가 있나요? 진단 리포트')
+      rep.body.append(reportBlock(formatReport(r.diagnostics)))
+      fold.append(rep.det)
     }
+    card.append(fold)
   })
 }
 
