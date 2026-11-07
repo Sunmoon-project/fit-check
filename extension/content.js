@@ -58,7 +58,13 @@ tr.rec .cv{color:#9fe0ba}
 .tag{font-size:10px;border-radius:999px;background:#f1f1f1;padding:1px 7px;color:#333}
 .tag.miss{background:#fff;border:1px dashed #c8c8c8;color:#8a8a8e}
 .tag.sim{background:#111;color:#fff}
-.rvt{margin-top:4px;font-size:12px;color:#222;white-space:pre-wrap;word-break:break-word}
+.rvh{margin-bottom:4px}
+.rvn{font-size:12px;color:#111}
+.rvp{font-size:11px;color:#555;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+.rvt{margin-top:4px;font-size:12px;color:#222;word-break:break-word}
+.sent{margin:3px 0 0;padding:2px 0 2px 8px;border-left:2px solid #d4d4d4;white-space:pre-wrap}
+.phs{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.ph{width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid #ececec}
 .lnk{border:0;background:none;padding:0;margin-left:4px;font-size:11px;color:#555;text-decoration:underline;cursor:pointer}
 `
 
@@ -261,9 +267,17 @@ function chartTable(v) {
 }
 
 const REVIEW_PREVIEW = 120
+const SENT_PREVIEW = 3
 
+// 리뷰 한 건: 닉네임·상품명 / 태그 / 문장별 본문 / 사진. 모두 textContent와 createElement로만 만들고 저장·전송하지 않아요.
 function reviewItem(rv) {
   const li = el('li', 'rv')
+  if (rv.nick || rv.productName) {
+    const head = el('div', 'rvh')
+    if (rv.nick) head.append(el('b', 'rvn', rv.nick))
+    if (rv.productName) head.append(el('div', 'rvp', `상품명 ${rv.productName}`))
+    li.append(head)
+  }
   const meta = el('div', 'rvm')
   const tag = (label, value, text) => meta.append(el('span', value == null ? 'tag miss' : 'tag', value == null ? `${label} 못 읽음` : `${label} ${text}`))
   if (rv.similarity != null) meta.append(el('span', 'tag sim', `체형 유사도 ${rv.similarity}`))
@@ -272,19 +286,47 @@ function reviewItem(rv) {
   tag('구매 사이즈', rv.size, rv.size)
   tag('핏 평가', rv.fitLabel, rv.fitLabel)
   li.append(meta)
+
+  const sentences = Array.isArray(rv.sentences) && rv.sentences.length ? rv.sentences : null
+  const body = el('div', 'rvt')
+  li.append(body)
   const full = rv.text
-  const p = el('p', 'rvt', full.length > REVIEW_PREVIEW ? `${full.slice(0, REVIEW_PREVIEW)}…` : full)
-  li.append(p)
-  if (full.length > REVIEW_PREVIEW) {
+  const long = sentences ? sentences.length > SENT_PREVIEW : full.length > REVIEW_PREVIEW
+  let open = false
+  const paint = () => {
+    body.replaceChildren()
+    if (sentences) {
+      for (const s of open ? sentences : sentences.slice(0, SENT_PREVIEW)) body.append(el('p', 'sent', s))
+    } else {
+      body.append(el('p', 'sent', open || full.length <= REVIEW_PREVIEW ? full : `${full.slice(0, REVIEW_PREVIEW)}…`))
+    }
+  }
+  paint()
+  if (long) {
     const more = el('button', 'lnk', '더보기')
     more.type = 'button'
-    let openText = false
     more.addEventListener('click', () => {
-      openText = !openText
-      p.textContent = openText ? full : `${full.slice(0, REVIEW_PREVIEW)}…`
-      more.textContent = openText ? '접기' : '더보기'
+      open = !open
+      paint()
+      more.textContent = open ? '접기' : '더보기'
     })
     li.append(more)
+  }
+
+  const urls = (rv.photos || []).filter((u) => /^https?:\/\//i.test(u))
+  if (urls.length) {
+    const row = el('div', 'phs')
+    for (const url of urls) {
+      const img = document.createElement('img')
+      img.className = 'ph'
+      img.src = url
+      img.alt = '리뷰 사진'
+      img.loading = 'lazy'
+      img.referrerPolicy = 'no-referrer'
+      img.decoding = 'async'
+      row.append(img)
+    }
+    li.append(row)
   }
   return li
 }

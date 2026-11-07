@@ -25,7 +25,7 @@ import {
 import { PRODUCTS } from '../src/data/mockData.js'
 import { parseReviewText } from '../src/lib/productCore.js'
 import { parseProductHtml } from '../server/productParser.js'
-import { parsePage, isProductPage } from '../src/lib/pageParser.js'
+import { parsePage, isProductPage, splitSentences, extractCardView } from '../src/lib/pageParser.js'
 import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
 import { collectDiagnostics, formatReport, REPORT_MAX } from '../src/lib/diagnose.js'
 import { buildProfile, isUsableProfile } from '../src/lib/extProfile.js'
@@ -1471,6 +1471,7 @@ async function runContentInFakeDom(pageHtml = null) {
       return e
     }
     const created = []
+    const storageCalls = []
     const pageDoc = pageHtml ? fakeDocument(pageHtml) : null
     const doc = {
       readyState: 'complete', body: makeEl('body'), documentElement: makeEl('html'),
@@ -1480,13 +1481,13 @@ async function runContentInFakeDom(pageHtml = null) {
     const win = { scrollX: 0, scrollY: 0, scrollTo() {} }
     const profile = buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular', measurements: {} }).profile
     const sandbox = {
-      document: doc, window: win, location: { href: 'https://shop.example/products/1' }, navigator: {},
+      URL, document: doc, window: win, location: { href: 'https://shop.example/products/1' }, navigator: {},
       MutationObserver: class { observe() {} disconnect() {} },
       CSSStyleSheet: class { replaceSync() {} },
       setTimeout: (f) => setTimeout(f, 0), clearTimeout,
       chrome: {
         runtime: { getManifest: () => ({ version: '0.0.0' }), onMessage: { addListener: (f) => { listeners.msg = f } } },
-        storage: { local: { get: (k, cb) => cb({ fitcheckProfile: profile }) } },
+        storage: { local: { get: (k, cb) => cb({ fitcheckProfile: profile }), set: (...a) => storageCalls.push(['set', a]), remove: (...a) => storageCalls.push(['remove', a]), clear: (...a) => storageCalls.push(['clear', a]) } },
       },
     }
     sandbox.window = Object.assign(sandbox.window, sandbox)
@@ -1498,7 +1499,7 @@ async function runContentInFakeDom(pageHtml = null) {
       const f = created.find((e) => e.className === 'fab')
       if (f && !f.disabled && f.textContent === '내 사이즈 찾기') break
     }
-    return { texts, created }
+    return { texts, created, storageCalls }
   } finally {
     rmSync(outDir, { recursive: true, force: true })
   }
@@ -1854,6 +1855,101 @@ await atest('checkGlobals: 임시 폴더에 빌드한 content.js·popup.js에 �
   } finally {
     rmSync(outDir, { recursive: true, force: true })
   }
+})
+
+// ---- 리뷰 카드 항목만 읽기 (직접 만든 가짜 HTML이에요. 실제 무신사·크롬에서 확인한 것이 아니에요) ----
+const RB_BODY = '일단 엄청 가볍고 색상도 예쁜데 따뜻.... 경량과 헤비 아우터 중간정도 되는 거 같음. 매우 만족.'
+const RB_PRODUCT = '[10주년기획] © 모두의 Comfortemp® 미드웨이트 패딩_4 COLOR'
+const RB_PHOTO = 'https://img.example.com/review1.jpg'
+const rbCard = (i, extraImgs = '') =>
+  `<li class="sc-x${i}"><div class="u1"><img src="https://img.example.com/avatar.png" alt="프로필" width="32"><span class="n1">지루한플럼반바지</span></div><span class="d1">26.10.08</span><span class="s1">5</span>` +
+  `<div class="pr"><img src="https://img.example.com/thumb.jpg" alt="" width="80"><dl><span class="l">상품명</span><span class="v">${RB_PRODUCT}</span></dl></div>` +
+  `<div class="o1"><span class="l">구매옵션</span><span class="v">그레이 · 2 (L)</span></div>` +
+  `<div class="b1"><span class="l">체형정보</span><span class="v">남성 · 170cm · 70kg</span></div>` +
+  `<p class="t1">${RB_BODY}</p><p class="t2">${RB_BODY} ...</p><button class="m">더보기</button>` +
+  `<img src="${RB_PHOTO}" alt="" width="300">${extraImgs}<button class="h">도움돼요 11</button><button class="c">댓글</button></li>`
+const RB_HTML = (cards) => wrapBody(`<h1>패딩 아우터</h1><ul class="lst9">${cards}</ul>`)
+const RB_FULL = RB_HTML([rbCard(0), rbCard(1, '<img src="javascript:alert(1)"><img src="data:image/png;base64,AAAA">'), rbCard(2)].map((c, i) => c.replace('26.10.08', `26.10.0${i + 1}`).replace('지루한플럼반바지', i === 0 ? '지루한플럼반바지' : `닉${'abc'[i]}`)).join(''))
+
+test('가짜 HTML: 리뷰 카드에서 닉네임·상품명·사이즈·본문(한 번만)·사진만 읽는다', () => {
+  const p = parsePage(fakeDocument(RB_FULL), '')
+  assert.ok(p.reviews.length >= 3)
+  const r = p.reviews[0]
+  assert.equal(r.view.body, RB_BODY)
+  assert.equal(r.view.nick, '지루한플럼반바지')
+  assert.equal(r.view.productName, RB_PRODUCT)
+  assert.deepEqual([r.height, r.weight, r.size], [170, 70, 'L'])
+  assert.deepEqual(r.view.photos, [RB_PHOTO])
+  for (const bad of ['더보기', '도움돼요', '댓글', '상품명', '26.10', '지루한', '구매옵션']) assert.ok(!r.view.body.includes(bad), bad)
+  const v = extractCardView(fakeDocument(RB_FULL).querySelectorAll('li')[0])
+  assert.equal(v.option, '그레이 · 2 (L)')
+  assert.equal(v.sizePart, '2 (L)')
+  assert.equal(v.bodyInfo, '남성 · 170cm · 70kg')
+  assert.equal(v.deduped, true)
+  assert.deepEqual(p.reviews[1].view.photos, [RB_PHOTO]) // javascript:, data: 제외
+  assert.ok(p.reviews.every((x) => x.view.productName === RB_PRODUCT))
+})
+
+test('splitSentences: 문장 끝 기호에서 나누고 소수점·ver.2는 나누지 않는다', () => {
+  const s = splitSentences(RB_BODY)
+  assert.deepEqual(s, ['일단 엄청 가볍고 색상도 예쁜데 따뜻....', '경량과 헤비 아우터 중간정도 되는 거 같음.', '매우 만족.'])
+  assert.deepEqual(splitSentences('길이 2.5 늘었고 ver.2 입니다! 좋아요?? 네\n다음 줄'), ['길이 2.5 늘었고 ver.2 입니다!', '좋아요??', '네', '다음 줄'])
+  assert.deepEqual(splitSentences(''), [])
+})
+
+test('가짜 HTML: <br>이 든 본문은 줄바꿈으로 읽고 문장을 나눈다', () => {
+  const card = (i) => `<li class="k${i}"><span>닉${i}네임</span><span>상품명</span><span>겨울 패딩 상품</span><span>구매옵션</span><span>블랙 · M</span><span>체형정보</span><span>남성 · 175cm · 72kg</span><p>첫째 줄은 만족해요<br>둘째 줄은 따뜻해요</p></li>`
+  const p = parsePage(fakeDocument(RB_HTML([0, 1, 2].map(card).join(''))), '')
+  assert.equal(p.reviews[0].view.body, '첫째 줄은 만족해요\n둘째 줄은 따뜻해요')
+  assert.deepEqual(splitSentences(p.reviews[0].view.body), ['첫째 줄은 만족해요', '둘째 줄은 따뜻해요'])
+})
+
+test('가짜 HTML: 라벨이 없는 카드는 전체 글에서 화면 글자만 빼고 본문으로 쓴다', () => {
+  const card = (i) => `<li class="z${i}"><span>26.10.0${i + 1}</span><p>키 17${i} 몸무게 6${i} M 사이즈 구매 정사이즈로 잘 맞아요 편해요</p><button>더보기</button><button>도움돼요 3</button></li>`
+  const p = parsePage(fakeDocument(RB_HTML([0, 1, 2].map(card).join(''))), '')
+  assert.ok(p.reviews.length >= 3)
+  assert.equal(p.reviews[0].view.productName, '')
+  assert.ok(p.reviews[0].view.body.includes('정사이즈로 잘 맞아요') && !/더보기|도움돼요|26\.10/.test(p.reviews[0].view.body))
+  const rep = formatReport(collectDiagnostics(fakeDocument(RB_HTML([0, 1, 2].map(card).join(''))), ''))
+  assert.ok(/전체 글 대체 3건/.test(rep))
+})
+
+test('가짜 HTML: 진단 리포트와 기여 기록에는 닉네임·상품명·본문·사진 주소가 없고 추출 건수 줄만 있다', () => {
+  const doc = fakeDocument(RB_FULL)
+  const rep = formatReport(collectDiagnostics(doc, 'https://shop.example/p/1'))
+  for (const piece of ['지루한', 'Comfortemp', '가볍고', 'img.example.com', '170cm', RB_PHOTO]) assert.ok(!rep.includes(piece), piece)
+  assert.ok(/본문 추출: 라벨 구조 3건, 전체 글 대체 0건, 접힘\/펼침 중복 제거 3건 \| 닉네임 읽음 3건, 상품명 읽음 3건, 사진 있는 리뷰 3건/.test(rep))
+  const r = analyzePage(doc, 'https://www.musinsa.com/products/1', fakeProfile)
+  assert.ok(!JSON.stringify(r.diagnostics).includes('지루한'))
+  const fb = { ...FB, url: 'https://www.musinsa.com/products/1' }
+  const rv = parsePage(doc, '').reviews[0]
+  const rec = JSON.stringify(toContribution({ ...fb, reviewNick: rv.view.nick, productName: rv.view.productName, body: rv.view.body, photo: rv.view.photos[0] }, PF, true))
+  for (const piece of [rv.view.nick, rv.view.productName, rv.view.body, 'img.example.com', '지루한']) assert.ok(!rec.includes(piece), piece)
+})
+
+await atest('content.js(가짜 DOM, vm): 문장별 블록·사진 썸네일·닉네임/상품명이 그려지고 저장·전송은 없다', async () => {
+  const { texts, created, storageCalls } = await runContentInFakeDom(RB_FULL)
+  assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')), '오류 카드가 나오면 안 돼요')
+  assert.ok(texts.includes('지루한플럼반바지'))
+  assert.ok(texts.includes(`상품명 ${RB_PRODUCT}`))
+  assert.ok(created.filter((e) => e.className === 'sent').length >= 3, '문장마다 별도 블록')
+  assert.ok(!texts.some((t) => t.includes('도움돼요') || t.includes('더보기도움')))
+  const imgs = created.filter((e) => e.tagName === 'IMG')
+  assert.ok(imgs.length >= 1 && imgs.every((e) => e.src === RB_PHOTO && e.loading === 'lazy' && e.referrerPolicy === 'no-referrer'))
+  assert.ok(!created.some((e) => /^(javascript|data):/i.test(e.src || '')))
+  assert.ok(!created.some((e) => e.tagName === 'A'))
+  assert.equal(storageCalls.length, 0, '리뷰 데이터를 저장하면 안 돼요')
+})
+
+await atest('content.js(가짜 DOM, vm): 본문이 3문장보다 길면 더보기로 전체 문장을 펼친다', async () => {
+  const long = RB_BODY.replace('매우 만족.', '매우 만족. 배송도 빨랐음.')
+  const { created } = await runContentInFakeDom(RB_FULL.replaceAll(RB_BODY, long))
+  const more = created.find((e) => e.className === 'lnk')
+  assert.ok(more && more.textContent === '더보기')
+  const before = created.filter((e) => e.className === 'sent').length
+  more._l.click()
+  assert.equal(more.textContent, '접기')
+  assert.ok(created.filter((e) => e.className === 'sent').length > before)
 })
 
 console.log(`\n${passed}개 통과`)
