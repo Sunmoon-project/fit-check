@@ -1,6 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { CATEGORY_LABEL } from '../data/measurements.js'
 import { findSimilar, describeDiff } from '../lib/wardrobe.js'
+import { parseImportText, LIMITS } from '../lib/wardrobeImport.js'
+import ReviewTab from './ReviewTab.jsx'
 
 const MAX_COMPARE = 4
 
@@ -39,7 +41,64 @@ export function SimilarInWardrobe({ target, wardrobe }) {
   )
 }
 
-export default function Wardrobe({ items, onDelete, onBack }) {
+// 확장에서 복사한 옷 정보를 붙여넣거나 파일로 가져옵니다. 서버를 거치지 않고, 검사를 통과한 것만 이 브라우저에 저장해요.
+function ImportPanel({ onImport }) {
+  const [text, setText] = useState('')
+  const [msg, setMsg] = useState(null)
+  const fileRef = useRef(null)
+
+  function submit(raw) {
+    const res = parseImportText(raw)
+    if (!res.ok) {
+      setMsg({ error: true, text: res.reason })
+      return
+    }
+    const saved = onImport(res.item)
+    if (saved?.failed) setMsg({ error: true, text: '저장 공간이 부족해서 저장하지 못했어요. 오래된 옷을 지운 뒤 다시 해주세요.' })
+    else {
+      setMsg({ error: false, text: `‘${res.item.product.name}’을 옷장에 담았어요.` })
+      setText('')
+    }
+  }
+
+  function onFile(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    if (file.size > LIMITS.text) {
+      setMsg({ error: true, text: '파일이 너무 커요. 확장에서 복사한 글이 맞는지 확인해주세요.' })
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => submit(String(reader.result || ''))
+    reader.onerror = () => setMsg({ error: true, text: '파일을 읽지 못했어요.' })
+    reader.readAsText(file)
+  }
+
+  return (
+    <details className="card wd-import">
+      <summary>확장에서 가져오기</summary>
+      <p className="muted small">확장 카드의 ‘내 옷장으로 보내기’를 누른 뒤 복사된 글을 붙여넣거나, 저장한 .json 파일을 골라주세요.</p>
+      <textarea
+        className="wd-import-text"
+        rows={4}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        aria-label="확장에서 복사한 글"
+        placeholder='{"app":"fitcheck", ...}'
+      />
+      <div className="wd-actions">
+        <button type="button" className="btn" onClick={() => submit(text)}>가져오기</button>
+        <button type="button" className="btn text" onClick={() => fileRef.current?.click()}>파일 고르기</button>
+        <input ref={fileRef} type="file" accept=".json,application/json,text/plain" hidden onChange={onFile} />
+      </div>
+      {msg && <p className={`small ${msg.error ? 'danger' : ''}`} role="status">{msg.text}</p>}
+      <p className="muted small">닉네임·리뷰 원문·사진 주소는 이 브라우저에만 저장돼요. 서버로 보내지 않아요.</p>
+    </details>
+  )
+}
+
+export default function Wardrobe({ items, onDelete, onBack, onImport, onClearReviews }) {
   const [selected, setSelected] = useState([])
   const compared = items.filter((w) => selected.includes(w.id))
 
@@ -67,6 +126,8 @@ export default function Wardrobe({ items, onDelete, onBack }) {
         <h2 className="q-title small-title">내 옷장</h2>
         <button type="button" className="btn text" onClick={onBack}>← 돌아가기</button>
       </div>
+
+      {onImport && <ImportPanel onImport={onImport} />}
 
       {items.length === 0 ? (
         <div className="card">
@@ -97,6 +158,12 @@ export default function Wardrobe({ items, onDelete, onBack }) {
                       )}
                       <button type="button" className="btn text danger" onClick={() => remove(w.id)}>삭제</button>
                     </div>
+                    {w.reviews?.length > 0 && (
+                      <details className="wd-reviews">
+                        <summary className="small">리뷰 {w.reviews.length}건</summary>
+                        <ReviewTab reviews={w.reviews} onClear={onClearReviews ? () => onClearReviews(w.id) : null} />
+                      </details>
+                    )}
                   </div>
                 </li>
               )

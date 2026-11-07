@@ -28,6 +28,7 @@ import { parseProductHtml } from '../server/productParser.js'
 import { parsePage, isProductPage, splitSentences, extractCardView } from '../src/lib/pageParser.js'
 import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
 import { collectDiagnostics, formatReport, REPORT_MAX } from '../src/lib/diagnose.js'
+import { buildExportEnvelope, parseImportText, sanitizeItem, addImportedItem, LIMITS as IMPORT_LIMITS } from '../src/lib/wardrobeImport.js'
 import { buildProfile, isUsableProfile } from '../src/lib/extProfile.js'
 import { fakeDocument } from './lib/cheerioDom.mjs'
 import { checkManifest } from './checkExtension.mjs'
@@ -1594,7 +1595,9 @@ await atest('content.js(가짜 DOM, vm): 리뷰 원문·사이즈표 구역이 �
     d.open = true
     d._l?.toggle?.()
   }
-  assert.ok(has('ZQOTHER'), '나머지 리뷰')
+  assert.ok(!has('ZQOTHER'), '전체 리뷰 탭은 열기 전에는 그리지 않아요')
+  created.find((e) => e.className.split(' ').includes('tab') && e.textContent === '전체 리뷰')._l.click()
+  assert.ok(has('ZQOTHER'), '전체 리뷰 탭')
   assert.ok(texts.some((t) => t.includes('키 못 읽음') && t.length < 20), '못 읽은 항목 표시')
   // 페이지 글에 든 <img ...> 는 요소가 아니라 글자로만 들어간다
   assert.ok(has('<img src=x onerror=alert(1)>'))
@@ -2003,5 +2006,158 @@ test('가짜 HTML: 문장이 40개를 넘으면 잘렸다는 표시를 주고, �
   const wrapped = fakeDocument(`<html><body><a href="/r/1"><div class="card"><span>닉</span><span>상품명</span><span>${RB_PRODUCT}</span><span>구매옵션</span><span>그레이 · 2 (L)</span><p>따뜻하고 가벼워서 만족해요.</p></div></a></body></html>`)
   assert.equal(extractCardView(wrapped.querySelectorAll('div')[0]).body, '따뜻하고 가벼워서 만족해요.')
 })
+
+// ---- 옷장 가져오기·리뷰 탭 (전부 가짜 HTML과 가짜 데이터예요. 실제 무신사·크롬에서 확인한 것이 아니에요) ----
+const fakeEnvelope = (patch = {}) => ({
+  app: 'fitcheck', kind: 'wardrobe-item', v: 1,
+  item: {
+    product: { name: '가짜 니트', mall: 'shop.example', category: 'top', image: 'https://img.example.com/p.jpg', url: 'https://shop.example/p/1' },
+    size: 'M', measures: { chest: 104, shoulder: 50 },
+    verdicts: [{ part: 'chest', label: '가슴', verdict: '적당', key: 'regular', ease: 8 }],
+    reviews: [{ nick: '가짜닉', text: '가짜 리뷰 본문', photos: ['https://img.example.com/r1.jpg'], height: 175, weight: 70, size: 'M', fitLabel: '잘 맞아요', similarity: 80 }],
+    ...patch,
+  },
+})
+
+test('가짜 데이터: 내보낸 봉투를 다시 가져오면 같은 내용이 된다 (왕복)', () => {
+  const r = analyzePage(fakeDocument(VIEW_HTML(chartTable(OPTION_LIST_LABELS()))), 'https://shop.example/products/1', fakeProfile)
+  const env = buildExportEnvelope(r, { now: 1000 })
+  assert.deepEqual([env.app, env.kind, env.v], ['fitcheck', 'wardrobe-item', 1])
+  const back = parseImportText(JSON.stringify(env), { now: 2000 })
+  assert.equal(back.ok, true)
+  assert.equal(back.item.source, 'extension')
+  assert.equal(back.item.product.name, r.name)
+  assert.equal(back.item.product.mall, 'shop.example')
+  assert.equal(back.item.product.url, 'https://shop.example/products/1')
+  assert.equal(back.item.size, r.recommendedLabel)
+  assert.ok(back.item.verdicts.length > 0 && back.item.measures)
+  assert.equal(back.item.reviews.length, Math.min(IMPORT_LIMITS.reviews, r.reviewViews.matched.length + r.reviewViews.others.length))
+  assert.deepEqual(back.item.reviews.map((x) => x.text), env.item.reviews.map((x) => x.text))
+  assert.equal(buildExportEnvelope({ status: 'no-data' }), null)
+})
+
+test('가짜 데이터: 가져오기 거부 (javascript:·data: 주소, 잘못된 형식, 큰 입력, 다른 앱·버전)', () => {
+  const ok = parseImportText(JSON.stringify(fakeEnvelope()))
+  assert.equal(ok.ok, true)
+  const bad = (text) => assert.equal(parseImportText(text).ok, false, String(text).slice(0, 40))
+  bad('')
+  bad('   ')
+  bad('이건 JSON이 아니에요')
+  bad('[1,2]')
+  bad('x'.repeat(IMPORT_LIMITS.text + 1))
+  bad(JSON.stringify({ ...fakeEnvelope(), app: 'other' }))
+  bad(JSON.stringify({ ...fakeEnvelope(), kind: 'profile' }))
+  bad(JSON.stringify({ ...fakeEnvelope(), v: 2 }))
+  bad(JSON.stringify({ ...fakeEnvelope(), item: null }))
+  bad(JSON.stringify(fakeEnvelope({ product: { name: 'x', category: 'weird' } })))
+  bad(JSON.stringify(fakeEnvelope({ product: { name: 123, category: 'top' } })))
+  bad(JSON.stringify(fakeEnvelope({ measures: 'abc' })))
+  bad(JSON.stringify(fakeEnvelope({ reviews: 'abc' })))
+  bad(JSON.stringify(fakeEnvelope({ size: { a: 1 } })))
+  // 나쁜 주소는 항목은 받되 그 주소만 버린다
+  const evil = parseImportText(JSON.stringify(fakeEnvelope({
+    product: { name: '가짜', category: 'top', image: 'javascript:alert(1)', url: 'data:text/html,hi' },
+    reviews: [{ text: '본문', photos: ['javascript:alert(1)', 'data:image/png;base64,AAAA', 'file:///etc/passwd', 'ftp://x/y.jpg', 'https://ok.example/a.jpg', 'https://x.example/' + 'a'.repeat(600)] }],
+  })))
+  assert.equal(evil.ok, true)
+  assert.equal(evil.item.product.image, null)
+  assert.equal(evil.item.product.url, '')
+  assert.deepEqual(evil.item.reviews[0].photos, ['https://ok.example/a.jpg'])
+})
+
+test('가짜 데이터: 가져오기 길이·개수·범위 제한과 모르는 키 버리기', () => {
+  const many = Array.from({ length: 30 }, (_, i) => ({ nick: 'n'.repeat(50), text: `리뷰${i} ` + 'ㅇ'.repeat(900), photos: Array.from({ length: 9 }, (_, k) => `https://img.example.com/${i}-${k}.jpg`), height: 90 + i * 5, weight: 20 + i * 7, evil: '<script>' }))
+  const res = parseImportText(JSON.stringify(fakeEnvelope({
+    product: { name: '이'.repeat(500), mall: 'm'.repeat(100), category: 'top', url: 'https://shop.example/p/1', extra: 'x' },
+    reviews: many, hacked: true, size: 'L'.repeat(100),
+  })))
+  assert.equal(res.ok, true)
+  const it = res.item
+  assert.equal(it.product.name.length, IMPORT_LIMITS.name)
+  assert.equal(it.product.mall.length, IMPORT_LIMITS.mall)
+  assert.equal(it.size.length, IMPORT_LIMITS.size)
+  assert.ok(it.reviews.length <= IMPORT_LIMITS.reviews)
+  assert.ok(it.reviews.every((r) => r.nick.length <= IMPORT_LIMITS.nick && r.text.length <= IMPORT_LIMITS.review && r.photos.length <= IMPORT_LIMITS.photosPerReview))
+  assert.ok(it.reviews.reduce((n, r) => n + r.photos.length, 0) <= IMPORT_LIMITS.photosTotal)
+  assert.ok(it.reviews.every((r) => (r.height == null || (r.height >= 100 && r.height <= 230)) && (r.weight == null || (r.weight >= 30 && r.weight <= 200))))
+  assert.ok(!('hacked' in it) && !('extra' in it.product) && it.reviews.every((r) => !('evil' in r)))
+  assert.equal(sanitizeItem(null), null)
+  // 같은 상품·같은 사이즈는 새 항목으로 바뀐다
+  const a = sanitizeItem(fakeEnvelope().item)
+  const b = sanitizeItem(fakeEnvelope().item)
+  assert.equal(addImportedItem([a], b).length, 1)
+  assert.equal(addImportedItem([a], { ...b, size: 'L' }).length, 2)
+})
+
+test('가짜 데이터: saveWardrobe는 용량이 부족하면 이미지, 그다음 리뷰 순으로 오래된 항목부터 덜어낸다', async () => {
+  const { saveWardrobe } = await import('../src/lib/storage.js')
+  const prev = globalThis.localStorage
+  const mk = (id) => ({ id, product: { name: id, category: 'top', url: `https://s.example/${id}` }, size: 'M', image: 'data:image/png;base64,AAAA', imageKind: 'ai', reviews: [{ text: '리뷰', photos: [] }] })
+  try {
+    const strip = (w, reviews) => ({ ...w, image: null, imageKind: null, reviews })
+    const [a, b, c] = [mk('a'), mk('b'), mk('c')]
+    // 이미지를 다 빼고 c의 리뷰까지 빼야 들어가는 용량
+    const limit = JSON.stringify([strip(a, a.reviews), strip(b, b.reviews), strip(c, [])]).length
+    globalThis.localStorage = { getItem: () => null, removeItem() {}, setItem: (k, v) => { if (v.length > limit) throw new Error('quota') } }
+    const res = saveWardrobe([a, b, c])
+    assert.equal(res.failed, undefined)
+    assert.ok(res.list.every((w) => w.image === null), '이미지가 먼저 모두 빠져요')
+    assert.deepEqual(res.list.map((w) => w.reviews.length), [1, 1, 0], '그다음 가장 오래된 항목의 리뷰부터 빠져요')
+    globalThis.localStorage = { getItem: () => null, removeItem() {}, setItem() { throw new Error('quota') } }
+    assert.equal(saveWardrobe([mk('a')]).failed, true)
+  } finally {
+    if (prev === undefined) delete globalThis.localStorage
+    else globalThis.localStorage = prev
+  }
+})
+
+test('가짜 HTML: 닉네임·리뷰 본문은 진단 리포트와 기여 기록에 들어가지 않는다', () => {
+  const doc = fakeDocument(RB_FULL)
+  const r = analyzePage(doc, 'https://www.musinsa.com/products/1', { height: 170, weight: 70, gender: 'male', preferredFit: 'regular' })
+  assert.equal(r.status, 'ok')
+  const secrets = ['지루한플럼반바지', RB_BODY.slice(0, 20), RB_PHOTO]
+  const mine = [...r.reviewViews.matched, ...r.reviewViews.others]
+  assert.ok(mine.some((v) => v.nick === '지루한플럼반바지' && v.text.includes(RB_BODY.slice(0, 20))), '카드용 값에는 있어요')
+  const report = formatReport(r.diagnostics)
+  const diag = JSON.stringify(r.diagnostics)
+  const rec = toContribution({ url: 'https://www.musinsa.com/products/1', productName: r.name, category: 'top', size: 'M', result: 'true', returned: false, parts: {}, savedAt: 1 }, { gender: 'male', height: 170, weight: 70, preferredFit: 'regular' }, true)
+  assert.ok(rec)
+  for (const piece of secrets) {
+    assert.ok(!report.includes(piece), `리포트: ${piece}`)
+    assert.ok(!diag.includes(piece), `진단 값: ${piece}`)
+    assert.ok(!JSON.stringify(rec).includes(piece), `기여 기록: ${piece}`)
+  }
+  // 내보내기 봉투에는 있다 (사용자가 누를 때만 만들어요)
+  assert.ok(JSON.stringify(buildExportEnvelope(r)).includes('지루한플럼반바지'))
+})
+
+await atest('content.js(가짜 DOM, vm): 리뷰 탭 3개와 사진 모아보기, 내 옷장으로 보내기 버튼이 오류 없이 그려진다', async () => {
+  const { texts, created } = await runContentInFakeDom(RB_FULL)
+  assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
+  const tabs = created.filter((e) => e.className.split(' ').includes('tab'))
+  assert.deepEqual(tabs.map((t) => t.textContent), ['비슷한 체형', '전체 리뷰', '사진 모아보기'])
+  const panel = created.find((e) => e.className === 'tp')
+  assert.ok(panel, '스크롤 패널')
+  tabs[2]._l.click()
+  const imgs = created.filter((e) => e.tagName === 'IMG' && e.className === 'ph big')
+  assert.ok(imgs.length >= 1 && imgs.every((i) => i.src.startsWith('https://') && i.referrerPolicy === 'no-referrer' && i.loading === 'lazy'))
+  assert.ok(!created.some((e) => e.tagName === 'IMG' && /^(javascript|data):/i.test(e.src || '')))
+  const send = created.find((e) => e.tagName === 'BUTTON' && e.textContent === '내 옷장으로 보내기')
+  assert.ok(send, '보내기 버튼')
+  assert.ok(texts.some((t) => t.includes('서버로 보내지 않고')), '저장 위치 안내')
+  assert.ok(!created.some((e) => e.tagName === 'TEXTAREA' && e.readOnly), '누르기 전에는 내용을 만들지 않아요')
+  await send._l.click()
+  await new Promise((r) => setTimeout(r, 20))
+  const ta = created.find((e) => e.tagName === 'TEXTAREA' && e.readOnly)
+  assert.ok(ta, '읽기 전용 칸')
+  assert.equal(parseImportText(ta.value).ok, true)
+})
+
+test('content.js 소스: 보내기는 클릭 핸들러 안에서만 만들고 네트워크 호출을 쓰지 않는다', () => {
+  const src = readFileSync(new URL('../extension/content.js', import.meta.url), 'utf8')
+  assert.ok(!/fetch\(|XMLHttpRequest|sendBeacon|WebSocket/.test(src))
+  assert.ok(/addEventListener\('click', async \(\) => \{\n\s+const env = buildExportEnvelope/.test(src))
+})
+
 
 console.log(`\n${passed}개 통과`)

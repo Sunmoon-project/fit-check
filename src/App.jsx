@@ -3,6 +3,7 @@ import Onboarding from './components/Onboarding.jsx'
 import UrlInput from './components/UrlInput.jsx'
 import ResultView from './components/ResultView.jsx'
 import Wardrobe from './components/Wardrobe.jsx'
+import { addImportedItem } from './lib/wardrobeImport.js'
 import { loadProfile, saveProfile, loadFeedback, saveFeedback, loadWardrobe, saveWardrobe } from './lib/storage.js'
 import { computeCalibration } from './lib/fitEngine.js'
 
@@ -50,6 +51,17 @@ export default function App() {
     return res
   }
 
+  // 확장에서 가져온 항목(이미 검사를 거친 것)을 맨 앞에 저장
+  function handleImportWardrobe(item) {
+    const res = saveWardrobe(addImportedItem(wardrobe, item))
+    setWardrobe(res.list)
+    return res
+  }
+
+  function handleClearReviews(id) {
+    setWardrobe(saveWardrobe(wardrobe.map((w) => (w.id === id ? { ...w, reviews: [] } : w))).list)
+  }
+
   function handleDeleteWardrobe(id) {
     setWardrobe(saveWardrobe(wardrobe.filter((w) => w.id !== id)).list)
   }
@@ -90,7 +102,7 @@ export default function App() {
       )}
 
       <main className="app-main">
-        {wardrobeView && <Wardrobe items={wardrobe} onDelete={handleDeleteWardrobe} onBack={toggleWardrobe} />}
+        {wardrobeView && <Wardrobe items={wardrobe} onDelete={handleDeleteWardrobe} onBack={toggleWardrobe} onImport={handleImportWardrobe} onClearReviews={handleClearReviews} />}
         {!wardrobeView && step === 'onboarding' && (
           <Onboarding
             initial={profile}
