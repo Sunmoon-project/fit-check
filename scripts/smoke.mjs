@@ -2248,6 +2248,48 @@ await atest('content.js(가짜 DOM, vm): 리뷰 탭 4개와 사진 모아보기,
   assert.equal(parseImportText(ta.value).ok, true)
 })
 
+await atest('content.js(가짜 DOM, vm): 비슷한 체형 사진을 누르면 확대 오버레이가 뜨고 Esc·닫기·바깥 클릭으로 닫히며 http는 열리지 않는다', async () => {
+  const { created } = await runContentInFakeDom(RB_FULL)
+  const thumbs = created.filter((e) => e.tagName === 'IMG' && e.className === 'ph')
+  assert.ok(thumbs.length >= 1, '비슷한 체형 탭의 작은 사진')
+  const t = thumbs[0]
+  assert.equal(t.tabIndex, 0, '키보드로 닿아요')
+  const zooms = () => created.filter((e) => e.className === 'zoom')
+  assert.equal(zooms().length, 0, '누르기 전에는 없어요')
+  t._l.click()
+  const ov = zooms()[0]
+  assert.ok(ov, '확대 오버레이')
+  const big = ov.children.find((c) => c.tagName === 'IMG')
+  assert.ok(big.src.startsWith('https://') && big.referrerPolicy === 'no-referrer')
+  let removed = 0
+  ov.remove = () => { removed += 1 }
+  const closeBtn = ov.children.find((c) => c.tagName === 'BUTTON' && c.className.includes('zx'))
+  assert.ok(closeBtn, '닫기 버튼')
+  ov._l.keydown({ key: 'Escape' })
+  assert.equal(removed, 1, 'Esc로 닫혀요')
+  closeBtn._l.click()
+  assert.equal(removed, 2, '닫기 버튼')
+  ov._l.click({ target: ov })
+  assert.equal(removed, 3, '바깥 클릭')
+  ov._l.click({ target: big })
+  assert.equal(removed, 3, '사진 자체를 눌러도 닫히지 않아요')
+  // 키보드: Enter로 열린다
+  const before = zooms().length
+  t._l.keydown({ key: 'Enter' })
+  assert.equal(zooms().length, before + 1)
+})
+
+await atest('content.js(가짜 DOM, vm): http 사진은 확대하지 않는다', async () => {
+  const html = RB_FULL.replace(new RegExp(RB_PHOTO.replace(/[.]/g, '\\.'), 'g'), 'http://img.example.com/insecure.jpg')
+  const { created } = await runContentInFakeDom(html)
+  const thumbs = created.filter((e) => e.tagName === 'IMG' && e.className === 'ph' && e.src.startsWith('http://'))
+  for (const t of thumbs) {
+    assert.ok(!t._l?.click, 'http 사진에는 클릭 핸들러가 없어요')
+    assert.notEqual(t.tabIndex, 0)
+  }
+  assert.ok(!created.some((e) => e.className === 'zoom'))
+})
+
 await atest('content.js(가짜 DOM, vm): 보내기를 누르면 변환된 항목이 확장 저장소 대기열에 들어가고 체형 정보는 없다', async () => {
   const { created, storageCalls } = await runContentInFakeDom(RB_FULL)
   const before = storageCalls.length

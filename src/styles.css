@@ -493,6 +493,17 @@ body {
 .rt-gallery { display: flex; flex-direction: column; gap: 12px; }
 .rt-fig { margin: 0; display: flex; flex-direction: column; gap: 4px; }
 .rt-fig img { width: 100%; height: auto; max-height: 360px; object-fit: contain; background: var(--panel); border-radius: var(--radius-sm); }
+.rt-photo { border: 0; padding: 0; background: none; cursor: zoom-in; display: flex; }
+.rt-fig .rt-photo { width: 100%; }
+.rt-photo:focus-visible img { outline: 2px solid var(--text, #111); outline-offset: 1px; }
+.rt-zoom { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.82); }
+.rt-zoom img { max-width: calc(100vw - 120px); max-height: calc(100vh - 96px); object-fit: contain; border-radius: 6px; }
+.rt-zbtn { position: absolute; border: 0; border-radius: 999px; background: #fff; color: #111; min-width: 44px; height: 44px; font-size: 20px; cursor: pointer; }
+.rt-zbtn:focus-visible { outline: 3px solid #8ab4ff; outline-offset: 2px; }
+.rt-zx { top: 16px; right: 16px; }
+.rt-zp { left: 16px; top: 50%; transform: translateY(-50%); }
+.rt-zn { right: 16px; top: 50%; transform: translateY(-50%); }
+.rt-zc { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); color: #fff; font-size: 13px; }
 .small.danger, p.danger { color: #b00020; }
 
 /* 체형 비교 */
