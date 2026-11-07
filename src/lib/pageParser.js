@@ -2,7 +2,7 @@
 // document 대신 querySelectorAll / textContent / getAttribute만 쓰는 최소 인터페이스를 받아서
 // 브라우저 DOM이 아니어도(테스트용 어댑터) 같은 코드로 읽을 수 있어요.
 // 표 해석과 리뷰 문장 해석은 서버 파서와 같은 productCore.js를 씁니다.
-import { guessCategory, buildSizeChart, parseReviewText, CATEGORY_EMOJI, SIZE_LABEL_RE } from './productCore.js'
+import { guessCategory, analyzeSizeCharts, parseReviewText, CATEGORY_EMOJI, SIZE_LABEL_RE } from './productCore.js'
 
 const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim()
 const all = (root, sel) => Array.from(root.querySelectorAll(sel))
@@ -101,11 +101,11 @@ export function findGridCandidates(root) {
   const found = []
   const seenEl = new Set()
   const seenRows = new Set(readTables(root).map(sig))
-  const add = (el, rows) => {
+  const add = (el, rows, kind = 'grid') => {
     const key = sig(rows)
     if (seenRows.has(key)) return
     seenRows.add(key)
-    found.push({ el, rows })
+    found.push({ el, rows, kind })
   }
 
   // (a) role=table/grid 와 role=row / 셀 역할
@@ -116,7 +116,7 @@ export function findGridCandidates(root) {
     if (rows.length >= 2) {
       add(t, rows)
       const tr = transpose(rows)
-      if (tr) add(t, tr)
+      if (tr) add(t, tr, 'transposed')
     }
   }
 
@@ -134,7 +134,7 @@ export function findGridCandidates(root) {
         add(cur, rows)
         // (d) 한 열이 한 사이즈인 세로 방향 표
         const tr = transpose(rows)
-        if (tr) add(cur, tr)
+        if (tr) add(cur, tr, 'transposed')
       }
     }
   }
@@ -150,16 +150,73 @@ export function readAllSizeRows(root) {
   return [...readTables(root), ...readSizeGrids(root)]
 }
 
+// ---------- 구매 옵션 이름 ('0 (S)', '1 (M)' ...) ----------
+// 페이지의 textContent만 읽어요. 뒤에 배송 안내 같은 글이 붙어 있어도 앞부분의 "번호 (글자)"만 씁니다.
+const OPTION_RE = /^(\d{1,2})\s*\(\s*(XXS|XS|S|M|L|XL|XXL|[2-5]XL|FREE|F)\s*\)(?![A-Za-z0-9])/i
+const MAX_OPTIONS = 20
+
+export function readOptionLabels(root) {
+  const out = []
+  const els = all(root, '*')
+    .filter((e) => childrenOf(e).length <= 4)
+    .slice(0, 6000)
+  for (const e of els) {
+    const text = clean(e.textContent)
+    if (text.length > 80) continue
+    const m = text.match(OPTION_RE)
+    if (!m) continue
+    // 안쪽 요소가 같은 모양이면 안쪽이 대표라 건너뛰어도 결과는 같아요. 중복은 아래에서 합칩니다.
+    const label = `${m[1]} (${m[2].toUpperCase()})`
+    if (!out.includes(label)) out.push(label)
+    if (out.length >= MAX_OPTIONS) break
+  }
+  // 한두 개만 보이면 우연일 수 있어 옵션 목록으로 보지 않아요.
+  return out.length >= 2 ? out : []
+}
+
+// ---------- 페이지에 표시된 전체 리뷰 수 ----------
+// '후기 733', '리뷰 1,234개', '리뷰 (733)', '733개 리뷰'처럼 짧은 글 전체가 이 모양일 때만 읽어요.
+const TOTAL_RES = [/^(?:구매\s*)?(?:리뷰|후기)\s*\(?\s*([\d,]{1,9})\s*\)?\s*(?:건|개)?$/, /^([\d,]{1,9})\s*(?:건|개)의?\s*(?:리뷰|후기)$/]
+export function readReviewTotal(root) {
+  let best = null
+  const els = all(root, '*')
+    .filter((e) => childrenOf(e).length <= 3)
+    .slice(0, 6000)
+  for (const e of els) {
+    const text = clean(e.textContent)
+    if (text.length > 25 || !/리뷰|후기/.test(text)) continue
+    for (const re of TOTAL_RES) {
+      const m = text.match(re)
+      const n = m ? Number(m[1].replace(/,/g, '')) : NaN
+      if (Number.isFinite(n) && n > 0 && n < 10000000 && (best == null || n > best)) best = n
+    }
+  }
+  return best
+}
+
 export { HEADING_RE }
 
 // 리뷰 한 건으로 보이는 요소: class/data-* 에 review가 들어 있고 글이 적당한 길이인 가장 안쪽 요소.
 // 쇼핑몰마다 달라서 일반 규칙일 뿐이며, 특정 쇼핑몰에서 맞는지는 확인하지 않았어요.
-export const REVIEW_SELECTOR = '[class*="review" i],[class*="Review"],[data-testid*="review" i],[itemprop="review"]'
+export const REVIEW_SELECTOR = [
+  '[class*="review" i]',
+  '[class*="Review"]',
+  '[data-testid*="review" i]',
+  '[itemprop="review"]',
+  '[data-review-id]',
+  '[data-review-no]',
+  '[data-review]',
+  // 리뷰 목록 안의 li (컨테이너의 class/id/aria에 review·후기가 있을 때)
+  '[class*="review" i] li',
+  '[id*="review" i] li',
+  '[aria-label*="리뷰"] li',
+  '[aria-label*="후기"] li',
+].join(',')
 const REVIEW_MIN = 15
 const REVIEW_MAX = 600
 
 export function readReviewElements(root) {
-  const els = all(root, REVIEW_SELECTOR)
+  const els = [...new Set(all(root, REVIEW_SELECTOR))]
   const texts = []
   for (const el of els) {
     const text = clean(el.textContent)
@@ -180,7 +237,7 @@ export function readReviewElements(root) {
 export function isProductPage(root) {
   if (collectJsonLd(root).some((n) => isType(n, 'Product'))) return true
   if (/product/i.test(metaContent(root, 'og:type') || '')) return true
-  return buildSizeChart(readAllSizeRows(root), guessCategory(clean(all(root, 'h1')[0]?.textContent))) != null
+  return analyzeSizeCharts(readAllSizeRows(root), guessCategory(clean(all(root, 'h1')[0]?.textContent)), readOptionLabels(root)).chart != null
 }
 
 /**
@@ -197,10 +254,25 @@ export function parsePage(root, pageUrl = '', opts = {}) {
 
   const notes = []
   const preCategory = guessCategory(name)
-  const sizeChart = buildSizeChart([...readAllSizeRows(root), ...(opts.extraRows || [])], preCategory)
+  const optionLabels = readOptionLabels(root)
+  const extra = opts.extraRows || []
+  const tables = readTables(root)
+  const grids = findGridCandidates(root)
+  const kinds = [...tables.map(() => 'table'), ...grids.map((c) => c.kind), ...extra.map(() => 'manual')]
+  const { chart: sizeChart, meta: chartMeta } = analyzeSizeCharts(
+    [...tables, ...grids.map((c) => c.rows), ...extra],
+    preCategory,
+    optionLabels,
+  )
   const category = sizeChart?.category || preCategory
-  if (!sizeChart) notes.push('이 페이지에서 사이즈표를 찾지 못했어요. 사이즈표가 이미지로 올라간 경우가 많아요.')
-  const sizeLabels = sizeChart ? sizeChart.rows.map((r) => r[0]) : []
+  if (!sizeChart) {
+    if (chartMeta.rejectedNoOverlap > 0) notes.push('읽은 사이즈표의 사이즈 이름이 이 페이지의 구매 옵션과 맞지 않아 사용하지 않았어요.')
+    else if (chartMeta.rejectedMeasureHeader > 0 && chartMeta.withHeader === chartMeta.rejectedMeasureHeader)
+      notes.push('읽은 표의 가로세로가 뒤바뀐 것으로 보여(첫 열이 실측 항목) 사이즈표로 쓰지 않았어요.')
+    notes.push('이 페이지에서 사이즈표를 찾지 못했어요. 사이즈표가 이미지로 올라간 경우가 많아요.')
+  }
+  // 리뷰의 'M' 같은 글자가 '1(M)' 표기의 사이즈와 이어지도록 괄호 안 글자도 후보에 넣어요.
+  const sizeLabels = sizeChart ? sizeChart.rows.flatMap((r) => [r[0], (r[0].match(/^\d{1,2}\(([^)]+)\)$/) || [])[1]].filter(Boolean)) : []
 
   const texts = []
   for (const n of [ldProduct, ...ld.filter((x) => isType(x, 'Review'))]) {
@@ -222,6 +294,7 @@ export function parsePage(root, pageUrl = '', opts = {}) {
     seen.add(text)
     reviews.push({ id: reviews.length + 1, nick: '구매자', text, ...parseReviewText(text, sizeLabels) })
   }
+  const reviewTotalOnPage = readReviewTotal(root)
   if (reviews.length === 0) notes.push('이 페이지에서 리뷰를 찾지 못했어요. 리뷰가 아직 불러와지지 않았을 수 있어요.')
 
   return {
@@ -230,7 +303,18 @@ export function parsePage(root, pageUrl = '', opts = {}) {
     name: name.slice(0, 120),
     category,
     emoji: CATEGORY_EMOJI[category],
-    sizeChart: sizeChart ? { unit: sizeChart.unit, headers: sizeChart.headers, rows: sizeChart.rows, measures: sizeChart.measures } : null,
+    sizeChart: sizeChart
+      ? {
+          unit: sizeChart.unit,
+          headers: sizeChart.headers,
+          rows: sizeChart.rows,
+          measures: sizeChart.measures,
+          ...(sizeChart.display ? { display: sizeChart.display } : {}),
+        }
+      : null,
+    optionLabels,
+    reviewTotalOnPage,
+    sizeChartMeta: { ...chartMeta, selectedKind: chartMeta.selectedIndex == null ? null : kinds[chartMeta.selectedIndex] || null },
     reviews,
     notes,
   }

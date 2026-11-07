@@ -1109,6 +1109,113 @@ test('가짜 HTML: 직접 입력한 사이즈표로 분석을 다시 할 수 있
   assert.deepEqual(manualChartRows('', 'M 1'), [])
 })
 
+// ---- 구매 옵션 이름·표 라벨 판단 (전부 가짜 HTML이며 실제 무신사 페이지 검증이 아니에요) ----
+const OPTION_LIST = ['0 (S)', '1 (M)', '2 (L)', '3 (XL)', '4 (2XL)']
+  .map((l, i) => `<li><span>${l}</span><span>${i < 2 ? '11.13(금) 이내 발송 예정 예약배송' : '내일(월) 도착보장'}</span></li>`)
+  .join('')
+const optionsHtml = `<ul class="option-list">${OPTION_LIST}</ul>`
+const chartTable = (labels) =>
+  `<table><tr><th>사이즈</th><th>총장</th><th>어깨</th><th>가슴</th><th>소매</th></tr>` +
+  labels.map((l, i) => `<tr><td>${l}</td><td>${67 + i * 2}</td><td>${44 + i * 2}</td><td>${52 + i * 2}</td><td>${60 + i}</td></tr>`).join('') +
+  `</table>`
+const fakeProfile = { height: 175, weight: 70, gender: 'male', preferredFit: 'regular' }
+
+test('가짜 HTML: "0 (S)"~"4 (2XL)" 옵션과 같은 이름의 사이즈표는 인식하고 추천은 옵션 이름으로 보여준다', () => {
+  const doc = fakeDocument(wrapBody(`<h1>코튼 재킷 아우터</h1>${optionsHtml}${chartTable(OPTION_LIST_LABELS())}`))
+  const p = parsePage(doc, '')
+  assert.deepEqual(p.optionLabels, ['0 (S)', '1 (M)', '2 (L)', '3 (XL)', '4 (2XL)'])
+  assert.deepEqual(p.sizeChart.rows.map((r) => r[0]), ['0(S)', '1(M)', '2(L)', '3(XL)', '4(2XL)'])
+  assert.equal(p.sizeChart.display['1(M)'], '1 (M)')
+  const r = analyzePage(doc, '', fakeProfile)
+  assert.equal(r.status, 'ok')
+  assert.ok(OPTION_LIST_LABELS().includes(r.recommendedLabel), r.recommendedLabel)
+  assert.ok(r.headline.includes(r.recommendedLabel))
+})
+function OPTION_LIST_LABELS() {
+  return ['0 (S)', '1 (M)', '2 (L)', '3 (XL)', '4 (2XL)']
+}
+
+test('가짜 HTML: 표 라벨이 "S/M/L" 글자뿐이어도 옵션 "N (S)"와 이어져 옵션 이름으로 보여준다', () => {
+  const doc = fakeDocument(wrapBody(`<h1>코튼 재킷 아우터</h1>${optionsHtml}${chartTable(['S', 'M', 'L', 'XL', '2XL'])}`))
+  const p = parsePage(doc, '')
+  assert.equal(p.sizeChart.display.M, '1 (M)')
+  const r = analyzePage(doc, '', fakeProfile)
+  assert.ok(r.recommendedLabel == null || OPTION_LIST_LABELS().includes(r.recommendedLabel))
+})
+
+test('가짜 HTML: 사이즈 이름 줄이 없고 첫 열에 총장 값(67/69/71)이 있는 격자는 67을 사이즈로 읽지 않는다', () => {
+  const grid =
+    '<div class="g"><div><b>총장</b><b>67</b><b>69</b><b>71</b></div><div><b>어깨</b><b>45</b><b>47</b><b>49</b></div><div><b>가슴</b><b>55</b><b>57</b><b>59</b></div></div>'
+  const doc = fakeDocument(wrapBody(`<h1>코튼 재킷 아우터</h1>${grid}`))
+  const p = parsePage(doc, '')
+  assert.equal(p.sizeChart, null)
+  const r = analyzePage(doc, '', fakeProfile)
+  assert.notEqual(r.recommendedSize, '67')
+  assert.notEqual(r.recommendedLabel, '67')
+  assert.ok(!JSON.stringify(r).includes('"67"'))
+  const rep = formatReport(collectDiagnostics(doc, 'https://shop.example/p/1'))
+  assert.match(rep, /첫 열 제목이 실측 항목이라 버린 후보 [1-9]/)
+})
+
+test('가짜 HTML: 숫자뿐인 라벨은 증가 순서가 아니거나 한 줄뿐이면 사이즈표로 쓰지 않는다', () => {
+  const t = (labels) => `<table><tr><th>사이즈</th><th>어깨</th></tr>${labels.map((l) => `<tr><td>${l}</td><td>45</td></tr>`).join('')}</table>`
+  assert.equal(parsePage(fakeDocument(wrapBody(`<h1>재킷</h1>${t([71, 67, 69])}`)), '').sizeChart, null)
+  assert.equal(parsePage(fakeDocument(wrapBody(`<h1>재킷</h1>${t([95])}`)), '').sizeChart, null)
+  assert.equal(parsePage(fakeDocument(wrapBody(`<h1>재킷</h1>${t([95, 100, 105])}`)), '').sizeChart.rows.length, 3)
+})
+
+test('가짜 HTML: 구매 옵션과 이름이 하나도 겹치지 않는 사이즈표는 버리고 추천하지 않는다', () => {
+  const doc = fakeDocument(wrapBody(`<h1>코튼 재킷 아우터</h1>${optionsHtml}${chartTable(['95', '100', '105'])}`))
+  const p = parsePage(doc, '')
+  assert.equal(p.sizeChart, null)
+  assert.ok(p.notes.some((n) => n.includes('구매 옵션과 맞지 않아')))
+  const r = analyzePage(doc, '', fakeProfile)
+  assert.equal(r.status, 'no-data')
+  assert.equal(r.recommendedSize, undefined)
+  assert.match(formatReport(collectDiagnostics(doc, '')), /구매 옵션과 안 겹쳐 버린 후보 1개/)
+})
+
+test('가짜 HTML: 후기 733건 표시와 불러온 2건이면 요약에 "불러온 2건 / 전체 약 733건"을 밝힌다', () => {
+  const rv = (t) => `<div class="review-item">${t}</div>`
+  const html =
+    `<h1>코튼 재킷 아우터</h1><div class="tab"><span>후기 733</span></div>${optionsHtml}${chartTable(OPTION_LIST_LABELS())}` +
+    rv('키 175 몸무게 70 1 (M) 사이즈로 샀는데 정사이즈예요') +
+    rv('키 172 몸무게 66 M 사이즈 구매 약간 커요 만족합니다')
+  const doc = fakeDocument(wrapBody(html))
+  const p = parsePage(doc, '')
+  assert.equal(p.reviewTotalOnPage, 733)
+  assert.equal(p.reviews.length, 2)
+  const r = analyzePage(doc, '', fakeProfile)
+  assert.ok(r.summary.includes('페이지에 불러온 리뷰 2건'), r.summary)
+  assert.ok(r.summary.includes('전체 약 733건 중 일부'), r.summary)
+  assert.ok(OPTION_LIST_LABELS().includes(r.recommendedLabel))
+})
+
+test('가짜 HTML: 전체 리뷰 수 표시는 보수적으로 읽고 없으면 null이다', () => {
+  const total = (inner) => parsePage(fakeDocument(wrapBody(`<h1>재킷</h1>${inner}`)), '').reviewTotalOnPage
+  assert.equal(total('<em>리뷰 1,234개</em>'), 1234)
+  assert.equal(total('<p>리뷰 <span>(733)</span></p>'), 733)
+  assert.equal(total('<p>리뷰 작성하고 적립금 1000원 받기</p>'), null)
+  assert.equal(total('<p>포토리뷰 120</p>'), null)
+})
+
+test('가짜 HTML: 리뷰 목록의 li도 키·몸무게 단서가 있을 때만 리뷰로 센다', () => {
+  const html = `<h1>재킷</h1><ul class="review-list"><li>키 180 몸무게 75 L 사이즈 샀어요 잘 맞아요</li><li>리뷰 작성하고 적립금 받아가세요 지금 바로</li></ul>`
+  assert.equal(parsePage(fakeDocument(wrapBody(html)), '').reviews.length, 1)
+})
+
+test('가짜 HTML: 진단 리포트에 새 판단 줄이 있고 리뷰 글·체형 정보는 없다', () => {
+  const secret = '비밀후기문장키175'
+  const html =
+    `<h1>코튼 재킷 아우터</h1><span>후기 733</span>${optionsHtml}${chartTable(OPTION_LIST_LABELS())}` +
+    `<div class="review-item">${secret} 몸무게 70 1 (M) 사이즈로 샀어요 정사이즈</div>`
+  const rep = formatReport(collectDiagnostics(fakeDocument(wrapBody(html)), 'https://shop.example/p/1?uid=9'))
+  for (const want of ['사이즈표 후보', '선택한 후보', '사이즈 이름 5개', '모양 paren', '구매 옵션 이름 5개, 표와 겹침 5개', '불러온 리뷰 1건', '전체 리뷰 약 733건'])
+    assert.ok(rep.includes(want), want)
+  assert.ok(!rep.includes(secret) && !rep.includes('uid=9') && !rep.includes('코튼 재킷'))
+  assert.ok(rep.length <= REPORT_MAX)
+})
+
 test('확장 소스와 diagnose.js에 네트워크 호출이 없다 (새 코드 포함)', () => {
   for (const f of ['src/lib/diagnose.js', 'src/lib/pageParser.js', 'src/lib/extAnalyze.js', 'extension/content.js']) {
     const code = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8')
