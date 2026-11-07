@@ -19,7 +19,7 @@ const REVIEW_BOX = '[class*="review" i],[id*="review" i],[data-testid*="review" 
 
 const CSS = `
 :host{all:initial}
-*{box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo','Noto Sans KR',sans-serif}
+*{box-sizing:border-box;font-family:'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',-apple-system,BlinkMacSystemFont,sans-serif}
 .wrap{position:fixed;right:16px;bottom:16px;z-index:2147483647;display:flex;flex-direction:column;align-items:flex-end;gap:8px;color:#111}
 .fab{border:0;border-radius:999px;background:#111;color:#fff;padding:12px 18px;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.25)}
 .fab:disabled{opacity:.6;cursor:default}
@@ -33,7 +33,7 @@ const CSS = `
 .close{border:0;background:none;font-size:18px;line-height:1;cursor:pointer;color:#555}
 .badge{font-size:12px;font-weight:600}
 .size{font-size:28px;font-weight:700;margin:2px 0 0}
-.sum{margin:8px 0 0;color:#333;font-size:13px;background:#f3faf6;border-radius:8px;padding:6px 8px}
+.sum{margin:8px 0 0;color:#555;font-size:12px}
 .why{margin:6px 0 0;padding-left:16px;color:#555;font-size:12px}
 h3{margin:10px 0 2px;font-size:14px}
 p{margin:0}
