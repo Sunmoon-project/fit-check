@@ -43,7 +43,7 @@ export function toNumber(cell) {
   return m ? Number(m[0]) : null
 }
 
-const SIZE_LABEL_RE = /^(XXS|XS|S|M|L|XL|XXL|2XL|3XL|XXXL|FREE|F|프리|ONE ?SIZE|\d{1,3}(?:\.\d)?|[0-9]{2,3}\(?[A-Z]*\)?)$/i
+export const SIZE_LABEL_RE = /^(XXS|XS|S|M|L|XL|XXL|2XL|3XL|XXXL|FREE|F|프리|ONE ?SIZE|\d{1,3}(?:\.\d)?|[0-9]{2,3}\(?[A-Z]*\)?)$/i
 
 /** rowsList: 표마다 [[셀 텍스트,...],...] 배열. 가장 큰 사이즈표를 골라 핏 엔진용 구조로 바꿉니다. */
 export function buildSizeChart(rowsList, category) {
