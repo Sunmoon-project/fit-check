@@ -2090,6 +2090,35 @@ test('가짜 데이터: 가져오기 길이·개수·범위 제한과 모르는 
   assert.equal(addImportedItem([a], { ...b, size: 'L' }).length, 2)
 })
 
+test('가짜 데이터: 같은 옷을 다시 가져와도 기존 합성 이미지와 id를 이어받는다', () => {
+  const old = { ...sanitizeItem(fakeEnvelope().item), id: 'w-old', image: 'data:image/png;base64,AAAA', imageKind: 'ai' }
+  const fresh = sanitizeItem(fakeEnvelope().item)
+  const out = addImportedItem([old], fresh)
+  assert.equal(out.length, 1)
+  assert.equal(out[0].id, 'w-old')
+  assert.equal(out[0].image, old.image)
+  assert.equal(out[0].imageKind, 'ai')
+  assert.deepEqual(out[0].reviews, fresh.reviews)
+})
+
+test('가짜 데이터: 리뷰 사진은 https만, 중복은 한 번만 남기고 measures는 유효한 키부터 12개를 채운다', () => {
+  const res = parseImportText(JSON.stringify(fakeEnvelope({
+    reviews: [{ text: '본문', photos: ['http://img.example.com/a.jpg', 'https://img.example.com/b.jpg', 'https://img.example.com/b.jpg'] }],
+  })))
+  assert.deepEqual(res.item.reviews[0].photos, ['https://img.example.com/b.jpg'])
+  const junk = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`bad_${i}`, 1]))
+  const it = sanitizeItem({ ...fakeEnvelope().item, measures: { ...junk, chest: 50, length: 70 } })
+  assert.equal(it.measures.chest, 50)
+  assert.equal(it.measures.length, 70)
+})
+
+test('가짜 데이터: trimNote는 지워진 리뷰와 밀려난 옷을 문구로 알린다', async () => {
+  const { trimNote } = await import('../src/lib/storage.js')
+  assert.equal(trimNote({ trimmed: false }), '')
+  assert.match(trimNote({ trimmed: true, reviewsCleared: 2, imagesCleared: 0, droppedItems: 0 }), /리뷰를 지웠어요/)
+  assert.match(trimNote({ trimmed: true, reviewsCleared: 0, imagesCleared: 1, droppedItems: 3 }), /3개가 빠졌어요.*합성 이미지/)
+})
+
 test('가짜 데이터: saveWardrobe는 용량이 부족하면 이미지, 그다음 리뷰 순으로 오래된 항목부터 덜어낸다', async () => {
   const { saveWardrobe } = await import('../src/lib/storage.js')
   const prev = globalThis.localStorage
@@ -2104,6 +2133,8 @@ test('가짜 데이터: saveWardrobe는 용량이 부족하면 이미지, 그다
     assert.equal(res.failed, undefined)
     assert.ok(res.list.every((w) => w.image === null), '이미지가 먼저 모두 빠져요')
     assert.deepEqual(res.list.map((w) => w.reviews.length), [1, 1, 0], '그다음 가장 오래된 항목의 리뷰부터 빠져요')
+    assert.equal(res.reviewsCleared, 1)
+    assert.equal(res.imagesCleared, 3)
     globalThis.localStorage = { getItem: () => null, removeItem() {}, setItem() { throw new Error('quota') } }
     assert.equal(saveWardrobe([mk('a')]).failed, true)
   } finally {

@@ -54,7 +54,7 @@ export default function App() {
   // 확장에서 가져온 항목(이미 검사를 거친 것)을 맨 앞에 저장
   function handleImportWardrobe(item) {
     const res = saveWardrobe(addImportedItem(wardrobe, item))
-    setWardrobe(res.list)
+    if (!res.failed) setWardrobe(res.list)
     return res
   }
 

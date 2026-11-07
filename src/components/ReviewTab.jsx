@@ -30,6 +30,7 @@ export default function ReviewTab({ reviews, onClear }) {
             type="button"
             role="tab"
             aria-selected={tab === t.id}
+            aria-controls="rt-panel"
             tabIndex={tab === t.id ? 0 : -1}
             className={`rt-tab ${tab === t.id ? 'on' : ''}`}
             onClick={() => setTab(t.id)}
@@ -39,7 +40,7 @@ export default function ReviewTab({ reviews, onClear }) {
           </button>
         ))}
       </div>
-      <div className="rt-panel" role="tabpanel" aria-labelledby={`rt-tab-${tab}`}>
+      <div id="rt-panel" className="rt-panel" role="tabpanel" tabIndex={0} aria-labelledby={`rt-tab-${tab}`}>
         {tab === 'text' ? (
           <ul className="rt-list">
             {reviews.map((r, i) => (
@@ -54,7 +55,7 @@ export default function ReviewTab({ reviews, onClear }) {
                 {r.text && <p className="rt-text">{r.text}</p>}
                 {r.photos?.length > 0 && (
                   <div className="rt-thumbs">
-                    {r.photos.map((u) => <img key={u} src={u} alt="리뷰 사진" loading="lazy" referrerPolicy="no-referrer" />)}
+                    {r.photos.map((u, k) => <img key={`${k}-${u}`} src={u} alt="리뷰 사진" loading="lazy" referrerPolicy="no-referrer" />)}
                   </div>
                 )}
               </li>
@@ -66,7 +67,7 @@ export default function ReviewTab({ reviews, onClear }) {
           <div className="rt-gallery">
             {withPhotos.map((r, i) => (
               <figure key={i} className="rt-fig">
-                {r.photos.map((u) => <img key={u} src={u} alt="리뷰 사진" loading="lazy" referrerPolicy="no-referrer" />)}
+                {r.photos.map((u, k) => <img key={`${k}-${u}`} src={u} alt="리뷰 사진" loading="lazy" referrerPolicy="no-referrer" />)}
                 <figcaption className="muted small">{[r.nick || '구매자', r.size].filter(Boolean).join(' · ')}</figcaption>
               </figure>
             ))}

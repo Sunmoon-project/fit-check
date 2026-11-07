@@ -78,20 +78,33 @@ export function recordsForUpload(queue, currentConsentVersion) {
 
 // 옷장: 최근 순으로 최대 WARDROBE_MAX개. 용량이 부족하면 오래된 항목의 이미지부터, 그다음 리뷰 글·사진 주소를 뺍니다.
 export const WARDROBE_MAX = 30
+// 저장 결과를 사용자에게 알릴 한 줄로 (아무것도 안 덜어냈으면 빈 문자열)
+export function trimNote(res) {
+  if (!res?.trimmed) return ''
+  const parts = []
+  if (res.droppedItems > 0) parts.push(`30개를 넘어 오래된 옷 ${res.droppedItems}개가 빠졌어요`)
+  if (res.imagesCleared > 0) parts.push(`오래된 옷 ${res.imagesCleared}개의 합성 이미지를 뺐어요`)
+  if (res.reviewsCleared > 0) parts.push(`오래된 옷 ${res.reviewsCleared}개의 리뷰를 지웠어요`)
+  return parts.length ? `저장 공간 때문에 ${parts.join(', ')}.` : ''
+}
 export const loadWardrobe = () => read(WARDROBE_KEY, [])
 export function saveWardrobe(list) {
   let next = list.slice(0, WARDROBE_MAX)
-  if (write(WARDROBE_KEY, next)) return { list: next, trimmed: next.length < list.length }
+  // droppedItems: 30개 상한으로 밀려난 옷 수, reviewsCleared: 용량 부족으로 리뷰가 비워진 옷 수, imagesCleared: 이미지가 빠진 옷 수
+  const info = { droppedItems: list.length - next.length, reviewsCleared: 0, imagesCleared: 0 }
+  if (write(WARDROBE_KEY, next)) return { list: next, trimmed: next.length < list.length, ...info }
   for (let i = next.length - 1; i >= 0; i--) {
     if (!next[i].image) continue
     next = next.map((w, j) => (j === i ? { ...w, image: null, imageKind: null } : w))
-    if (write(WARDROBE_KEY, next)) return { list: next, trimmed: true }
+    info.imagesCleared++
+    if (write(WARDROBE_KEY, next)) return { list: next, trimmed: true, ...info }
   }
   // 이미지를 다 빼도 모자라면 오래된 항목의 리뷰 글·사진 주소를 뺍니다 (옷 정보는 남겨요).
   for (let i = next.length - 1; i >= 0; i--) {
     if (!next[i].reviews?.length) continue
     next = next.map((w, j) => (j === i ? { ...w, reviews: [] } : w))
-    if (write(WARDROBE_KEY, next)) return { list: next, trimmed: true }
+    info.reviewsCleared++
+    if (write(WARDROBE_KEY, next)) return { list: next, trimmed: true, ...info }
   }
-  return { list: next, trimmed: true, failed: true }
+  return { list: next, trimmed: true, failed: true, ...info }
 }
