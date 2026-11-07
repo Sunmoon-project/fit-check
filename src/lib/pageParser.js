@@ -155,6 +155,8 @@ export function readAllSizeRows(root) {
 const OPTION_RE = /^(\d{1,2})\s*\(\s*(XXS|XS|S|M|L|XL|XXL|[2-5]XL|FREE|F)\s*\)(?![A-Za-z0-9])/i
 const MAX_OPTIONS = 20
 const TAIL_MM_RE = /(?:^|[\s\/·,|-])(2[0-9]\d|3[01]\d)(?:\s*(?:mm|㎜))?\s*$/i
+// li/button/숨김 요소에서는 공백만 앞에 있는 숫자('리뷰 250')를 mm로 보지 않고, 구분자(/ · , | -)가 있을 때만 받아요.
+const TAIL_MM_STRICT_RE = /[\/·,|-]\s*(2[0-9]\d|3[01]\d)(?:\s*(?:mm|㎜))?\s*$/i
 const TAIL_OPTION_RE = /(?:^|[\s\/·,|-])(\d{1,2})\s*\(\s*(XXS|XS|S|M|L|XL|XXL|[2-5]XL|FREE|F)\s*\)\s*$/i
 
 export function readOptionLabels(root) {
@@ -173,10 +175,10 @@ export function readOptionLabels(root) {
     if (out.length >= MAX_OPTIONS) break
   }
   // select/option, 버튼 목록, JSON-LD Product offers(name/sku)에서는 '블랙 / 0 (S)'처럼 색상 뒤에 붙은 끝부분도 읽어요.
-  const add = (text) => {
+  const add = (text, strictMm = false) => {
     const t = clean(text)
     if (t.length > 80) return
-    const mm = t.match(TAIL_MM_RE)
+    const mm = t.match(strictMm ? TAIL_MM_STRICT_RE : TAIL_MM_RE)
     if (mm) {
       // 신발: '화이트 / 250' 처럼 mm 숫자로 끝나는 옵션
       if (!out.includes(mm[1]) && out.length < MAX_OPTIONS) out.push(mm[1])
@@ -187,13 +189,21 @@ export function readOptionLabels(root) {
     const label = `${m[1]} (${m[2].toUpperCase()})`
     if (!out.includes(label) && out.length < MAX_OPTIONS) out.push(label)
   }
-  for (const e of all(root, 'option,button,[role="option"],li,[hidden],[aria-hidden="true"]')) if (childrenOf(e).length <= 4) add(e.textContent)
+  for (const e of all(root, 'option,button,[role="option"],li,[hidden],[aria-hidden="true"]')) {
+    if (childrenOf(e).length > 4) continue
+    const loose = e.tagName && /^(option)$/i.test(e.tagName)
+    add(e.textContent, !loose)
+  }
   for (const n of collectJsonLd(root)) {
     const offers = [].concat(n.offers || [], n.offers?.offers || [])
     for (const o of offers) if (o && typeof o === 'object') for (const k of ['name', 'sku']) if (typeof o[k] === 'string') add(o[k])
   }
+  // 'N (X)' 계열과 mm 숫자가 섞이면 더 많은 쪽 한 종류만 써요(같으면 'N (X)').
+  const isMm = (x) => /^\d{3}$/.test(x)
+  const mmList = out.filter(isMm)
+  const kept = mmList.length > out.length - mmList.length ? mmList : out.filter((x) => !isMm(x))
   // 한두 개만 보이면 우연일 수 있어 옵션 목록으로 보지 않아요.
-  return out.length >= 2 ? out : []
+  return kept.length >= 2 ? kept : []
 }
 
 // ---------- 페이지에 표시된 전체 리뷰 수 ----------
