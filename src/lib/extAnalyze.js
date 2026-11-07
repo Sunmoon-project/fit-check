@@ -102,6 +102,7 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     reviewViews: {
       matched: (result.matched || []).slice(0, MAX_SHOWN.matched).map(view),
       others: (result.otherReviews || []).slice(0, MAX_SHOWN.others).map(view),
+      me: { gender: profile.gender === 'male' || profile.gender === 'female' ? profile.gender : null, height: profile.height, weight: profile.weight },
       matchedTotal: (result.matched || []).length,
       othersTotal: (result.otherReviews || []).length,
     },
