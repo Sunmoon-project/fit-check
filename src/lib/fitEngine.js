@@ -108,6 +108,31 @@ function chartSizes(sizeChart) {
   return [...new Set([...fromRows, ...fromMeasures])]
 }
 
+const normKey = (s) => String(s ?? '').replace(/\s/g, '').toUpperCase()
+const tokenOf = (k) => (k.match(/^\d{1,2}\(([^)]+)\)$/) || [])[1] || null
+
+// 후기에 적힌 'M'을 사이즈표의 '1(M)'로 잇는 등, 사이즈 이름을 표/옵션에 있는 이름으로 맞춰요. 못 맞추면 그대로.
+function canonicalSize(size, keys) {
+  if (size == null) return size
+  const k = normKey(size)
+  if (keys.includes(k)) return k
+  const hit = keys.find((c) => tokenOf(c) === k)
+  return hit || size
+}
+
+// 화면에 보여줄 이름: 사이즈표의 display → 구매 옵션 원문 → 키 그대로 ('1(M)' → '1 (M)')
+function makeDisplay(product) {
+  const map = product.sizeChart?.display || {}
+  const opts = product.optionLabels || []
+  return (size) => {
+    if (size == null) return size
+    const k = normKey(size)
+    if (map[k]) return map[k]
+    const o = opts.find((x) => normKey(x) === k || tokenOf(normKey(x)) === k)
+    return o || k
+  }
+}
+
 function measuresOf(sizeChart, size) {
   const m = sizeChart?.measures || {}
   const key = Object.keys(m).find((k) => String(k).toUpperCase() === size)
@@ -230,8 +255,13 @@ export function generateFitComment(profile, product, calibration = {}) {
   const { values, measured } = bodyValuesForProfile(profile)
   const preferredFit = profile.preferredFit || 'regular'
   const measureResult = recommendSize(values, product.sizeChart, product.category, preferredFit, calibration)
-  const { matched, others } = splitReviews(profile, product.reviews || [])
   const sizeList = chartSizes(product.sizeChart)
+  const optionKeys = (product.optionLabels || []).map(normKey)
+  // 추천은 사이즈표의 이름, 표가 없으면 구매 옵션의 이름 안에서만 해요.
+  const allowedKeys = sizeList.length ? sizeList : optionKeys
+  const reviewList = (product.reviews || []).map((r) => (r.size ? { ...r, size: canonicalSize(r.size, allowedKeys) } : r))
+  const { matched, others } = splitReviews(profile, reviewList)
+  const disp = makeDisplay(product)
   const reviewPick = pickFromReviews(matched, sizeList)
   const topSim = matched[0]?.similarity ?? 0
   const measureSize = measureResult?.bestSize ?? null
@@ -245,7 +275,7 @@ export function generateFitComment(profile, product, calibration = {}) {
 
   const reviewSentence = reviewPick
     ? `나와 비슷한 체형의 후기 ${reviewPick.votes}건 중 ${reviewPick.pct}%가 ${TENDENCY_TEXT[reviewPick.tendency]} 느꼈어요. ` +
-      (reviewPick.adjust || `비슷한 체형은 ${reviewPick.size}를 가장 많이 골랐어요.`)
+      (reviewPick.adjust || `비슷한 체형은 ${disp(reviewPick.size)}를 가장 많이 골랐어요.`)
     : ''
   const fitName = FIT_PREF_LABEL[preferredFit]
 
@@ -258,22 +288,22 @@ export function generateFitComment(profile, product, calibration = {}) {
     if (reviewPick.size === measureSize || reviewPick.baseSize === measureSize) {
       recommendedSize = measureSize
       confidence = reviewPick.votes >= 2 && reviewPick.size === measureSize ? 'high' : 'medium'
-      body.push(reviewSentence, `사이즈표 실측으로 보면 ${fitName} 핏 기준 ${measureSize}가 가장 잘 맞아요.`)
+      body.push(reviewSentence, `사이즈표 실측으로 보면 ${fitName} 핏 기준 ${disp(measureSize)}가 가장 잘 맞아요.`)
     } else if (reviewPick.votes >= 3 && topSim >= 75 && !reviewSizeTooSmall) {
       recommendedSize = reviewPick.size
       confidence = 'medium'
-      body.push(reviewSentence, `다만 사이즈표 실측만 보면 ${measureSize}가 ${fitName} 핏에 더 가까워요.`)
+      body.push(reviewSentence, `다만 사이즈표 실측만 보면 ${disp(measureSize)}가 ${fitName} 핏에 더 가까워요.`)
     } else {
       recommendedSize = measureSize
       confidence = measureResult.best.score >= 70 ? 'medium' : 'low'
-      body.push(`사이즈표 실측으로 보면 ${fitName} 핏 기준 ${measureSize}가 가장 잘 맞아요.`, reviewSentence)
+      body.push(`사이즈표 실측으로 보면 ${fitName} 핏 기준 ${disp(measureSize)}가 가장 잘 맞아요.`, reviewSentence)
     }
   } else if (measureSize) {
     recommendedSize = measureSize
     const compared = measureResult.best.verdicts.filter((v) => !v.isLength)
     const allMeasured = compared.length > 0 && compared.every((v) => measured.has(v.part))
     confidence = measureResult.best.score >= 70 ? (allMeasured ? 'high' : 'medium') : 'low'
-    body.push(`사이즈표 실측으로 보면 ${fitName} 핏 기준 ${measureSize}가 가장 잘 맞아요.`)
+    body.push(`사이즈표 실측으로 보면 ${fitName} 핏 기준 ${disp(measureSize)}가 가장 잘 맞아요.`)
     if (matched.length === 0) notes.push('비슷한 체형의 후기가 없어 실측 비교로만 판단했어요.')
   } else if (reviewPick) {
     recommendedSize = reviewPick.size
@@ -284,22 +314,32 @@ export function generateFitComment(profile, product, calibration = {}) {
   } else {
     const usual = usualSizeFor(profile, product.category)
     const usualKey = usual != null ? String(usual).toUpperCase() : null
-    if (usualKey && (sizeList.length === 0 || sizeList.includes(usualKey))) {
-      recommendedSize = usualKey
-      headline = `평소 사이즈 ${usualKey}를 기준으로 보세요`
+    const usualHit = usualKey ? canonicalSize(usualKey, allowedKeys) : null
+    if (usualKey && (allowedKeys.length === 0 || allowedKeys.includes(normKey(usualHit)))) {
+      recommendedSize = allowedKeys.length ? normKey(usualHit) : usualKey
+      headline = `평소 사이즈 ${disp(recommendedSize)}를 기준으로 보세요`
       body.push('이 페이지에서는 실측 사이즈표와 체형 정보가 있는 후기를 찾지 못해, 평소 입는 사이즈를 기준으로 안내해요.')
     } else {
       body.push('비교할 사이즈표와 비슷한 체형의 후기가 부족해요. 상품 상세의 사이즈표를 확인하고 평소 사이즈로 골라보세요.')
     }
   }
 
+  // 마지막 확인: 추천 사이즈가 사이즈표(없으면 구매 옵션)에 실제로 있는 이름이 아니면 추천하지 않아요.
+  if (recommendedSize && allowedKeys.length && !allowedKeys.includes(normKey(recommendedSize))) {
+    recommendedSize = null
+    confidence = 'low'
+    headline = '아직 추천이 어려워요'
+    body.length = 0
+    body.push('후기에서 나온 사이즈가 이 상품의 사이즈표·구매 옵션에 없어 추천하지 않아요. 상품 상세의 사이즈표를 확인해 주세요.')
+  }
+
   if (recommendedSize && headline === '아직 추천이 어려워요') {
-    headline = confidence === 'high' ? `${recommendedSize} 사이즈를 추천해요` : `${recommendedSize} 사이즈가 무난해요`
+    headline = confidence === 'high' ? `${disp(recommendedSize)} 사이즈를 추천해요` : `${disp(recommendedSize)} 사이즈가 무난해요`
   }
 
   const perSize = measureResult?.perSize || []
   const verdicts = perSize.find((p) => p.size === recommendedSize)?.verdicts || []
-  if (verdicts.length) body.push(`${recommendedSize} 기준: ${describeVerdicts(verdicts)}`)
+  if (verdicts.length) body.push(`${disp(recommendedSize)} 기준: ${describeVerdicts(verdicts)}`)
   if (verdicts.some((v) => !v.isLength && !measured.has(v.part))) {
     notes.push('직접 잰 치수가 없는 부위는 키·몸무게·체형으로 추정했어요(±3~5cm).')
   }
@@ -315,6 +355,7 @@ export function generateFitComment(profile, product, calibration = {}) {
     measuredParts: compared.filter((v) => measured.has(v.part)).length,
     estimatedParts: compared.filter((v) => !measured.has(v.part)).length,
     calibrated,
+    ...('reviewTotalOnPage' in product ? { reviewTotalOnPage: product.reviewTotalOnPage ?? null } : {}),
   }
 
   return {
@@ -324,6 +365,7 @@ export function generateFitComment(profile, product, calibration = {}) {
     confidence,
     evidence,
     recommendedSize,
+    recommendedLabel: recommendedSize == null ? null : disp(recommendedSize),
     tendency: reviewPick?.tendency ?? null,
     matched,
     otherReviews: others,
@@ -388,7 +430,12 @@ export function describeEvidence(evidence, confidence) {
   const e = evidence || {}
   const word = CONFIDENCE_LABEL[confidence]?.text ?? CONFIDENCE_LABEL.low.text
   const parts = []
-  if (e.reviewTotal > 0) parts.push(`리뷰 ${e.reviewTotal}건 중 비슷한 체형 ${e.reviewMatched}건`)
+  if ('reviewTotalOnPage' in e) {
+    // 확장: 페이지에 불러온 리뷰만 읽었다는 점을 숨기지 않아요.
+    const scope = e.reviewTotalOnPage > e.reviewTotal ? `(전체 약 ${e.reviewTotalOnPage}건 중 일부)` : ''
+    if (e.reviewTotal > 0) parts.push(`페이지에 불러온 리뷰 ${e.reviewTotal}건 기준${scope}, 비슷한 체형 ${e.reviewMatched}건`)
+    else parts.push(e.reviewTotalOnPage > 0 ? `리뷰 없음(페이지에 불러온 리뷰 0건, 전체 약 ${e.reviewTotalOnPage}건)` : '리뷰 없음')
+  } else if (e.reviewTotal > 0) parts.push(`리뷰 ${e.reviewTotal}건 중 비슷한 체형 ${e.reviewMatched}건`)
   else parts.push('리뷰 없음')
   if (e.sizeChart) {
     parts.push(e.estimatedParts > 0 ? '사이즈표 비교(일부 부위는 추정)' : e.measuredParts > 0 ? '사이즈표 실측 비교' : '사이즈표 비교')

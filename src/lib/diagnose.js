@@ -97,11 +97,34 @@ export function collectDiagnostics(root, pageUrl = '', extVersion = '') {
     chartRowCount: product?.sizeChart ? product.sizeChart.rows.length : 0,
     reviewLikeCount: all(root, REVIEW_SELECTOR).length,
     reviewsKept: product ? product.reviews.length : 0,
+    reviewTotalOnPage: product?.reviewTotalOnPage ?? null,
+    optionLabelCount: product ? product.optionLabels.length : 0,
+    chart: chartJudgment(product?.sizeChartMeta),
     jsonLdProduct: hasLdProduct(root),
     ogType: /^[a-z][a-z._-]{0,20}$/.test(ogType) ? ogType : ogType ? 'other' : '',
     imageNearHeading: imgNear,
     readyState: ready,
     structure,
+  }
+}
+
+// 사이즈표 후보를 어떻게 판단했는지: 개수·종류·모양 분류·참/거짓만 담아요. 페이지 글은 담지 않아요.
+function chartJudgment(m) {
+  const meta = m || {}
+  return {
+    considered: meta.considered || 0,
+    withHeader: meta.withHeader || 0,
+    selectedIndex: Number.isInteger(meta.selectedIndex) ? meta.selectedIndex : null,
+    selectedKind: ['table', 'grid', 'transposed', 'manual'].includes(meta.selectedKind) ? meta.selectedKind : null,
+    rowCount: meta.rowCount || 0,
+    labelCount: meta.labelCount || 0,
+    labelClass: ['paren', 'alpha', 'numeric', 'mixed', 'none'].includes(meta.labelClass) ? meta.labelClass : 'none',
+    monotonic: typeof meta.monotonic === 'boolean' ? meta.monotonic : null,
+    rejectedMeasureHeader: meta.rejectedMeasureHeader || 0,
+    rejectedNumeric: meta.rejectedNumeric || 0,
+    rejectedNoOverlap: meta.rejectedNoOverlap || 0,
+    overlap: meta.overlap || 0,
+    optionCount: meta.optionCount || 0,
   }
 }
 
@@ -118,6 +141,21 @@ export function diagnosticLines(d) {
     `사이즈 제목 근처 사이즈 글자: ${yn(d.sizeLabelNearHeading)}, 실측 항목 글자: ${yn(d.headerWordsFound)}`,
     `읽은 사이즈표 줄 ${d.chartRowCount}개, 리뷰 후보 ${d.reviewLikeCount}개, 인정한 리뷰 ${d.reviewsKept}개`,
     `사이즈 제목 근처에 이미지: ${yn(d.imageNearHeading)}`,
+    ...chartLines(d),
+  ]
+}
+
+function chartLines(d) {
+  const c = d.chart
+  if (!c) return []
+  const sel = c.selectedIndex == null ? '선택된 표 없음' : `선택한 후보 ${c.selectedIndex + 1}번(${c.selectedKind || '?'}, ${c.rowCount}줄)`
+  const total = d.reviewTotalOnPage != null ? `, 페이지 표시 전체 리뷰 약 ${d.reviewTotalOnPage}건` : ', 페이지에 표시된 전체 리뷰 수 못 찾음'
+  return [
+    `사이즈표 후보 ${c.considered}개 검토(실측 제목 있는 후보 ${c.withHeader}개), ${sel}`,
+    `첫 열 제목이 실측 항목이라 버린 후보 ${c.rejectedMeasureHeader}개, 숫자 이름 규칙 위반 ${c.rejectedNumeric}개, 구매 옵션과 안 겹쳐 버린 후보 ${c.rejectedNoOverlap}개`,
+    `사이즈 이름 ${c.labelCount}개, 모양 ${c.labelClass}, 숫자 이름 순서 증가: ${c.monotonic == null ? '해당 없음' : yn(c.monotonic)}`,
+    `구매 옵션 이름 ${d.optionLabelCount ?? c.optionCount}개, 표와 겹침 ${c.overlap}개`,
+    `불러온 리뷰 ${d.reviewsKept}건${total}`,
   ]
 }
 

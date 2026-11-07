@@ -43,29 +43,114 @@ export function toNumber(cell) {
   return m ? Number(m[0]) : null
 }
 
-export const SIZE_LABEL_RE = /^(XXS|XS|S|M|L|XL|XXL|2XL|3XL|XXXL|FREE|F|프리|ONE ?SIZE|\d{1,3}(?:\.\d)?|[0-9]{2,3}\(?[A-Z]*\)?)$/i
+const ALPHA_SIZES = 'XXS|XS|S|M|L|XL|XXL|[2-5]XL|XXXL|FREE|F|프리|ONE ?SIZE'
+// '0 (S)', '1(M)', '4 (2XL)' 같은 "번호 (글자)" 표기, 글자 사이즈, 숫자 사이즈(95/100/105 등)를 모두 받아요.
+export const SIZE_LABEL_RE = new RegExp(
+  `^(?:${ALPHA_SIZES}|\\d{1,2}\\(?(?:${ALPHA_SIZES})\\)|\\d{1,3}(?:\\.\\d)?|[0-9]{2,3}\\(?[A-Z]*\\)?)$`,
+  'i',
+)
+const MEASURE_HEADER_RE = /어깨|가슴|총장|기장|허리|허벅지|엉덩이|소매|발길이|단면|품|밑위|밑단|암홀/
+const ALPHA_ONLY_RE = new RegExp(`^(?:${ALPHA_SIZES})$`, 'i')
+const PAREN_RE = new RegExp(`^\\d{1,2}\\((?:${ALPHA_SIZES})\\)$`, 'i')
 
-/** rowsList: 표마다 [[셀 텍스트,...],...] 배열. 가장 큰 사이즈표를 골라 핏 엔진용 구조로 바꿉니다. */
-export function buildSizeChart(rowsList, category) {
+/** 공백을 없애고 대문자로 맞춘 비교용 이름. '1 (M)' → '1(M)' */
+export const normLabel = (s) => String(s || '').replace(/\s/g, '').toUpperCase()
+const displayText = (s) => String(s || '').replace(/\s+/g, ' ').trim()
+// '1(M)' 안의 글자 'M' (없으면 null)
+const innerToken = (n) => (n.match(/^\d{1,2}\(([^)]+)\)$/) || [])[1] || null
+
+/** 라벨 모양: paren('1(M)'), alpha('M'), numeric('95'), mixed */
+export function labelClassOf(labels) {
+  const classes = new Set(labels.map((l) => (PAREN_RE.test(l) ? 'paren' : ALPHA_ONLY_RE.test(l) ? 'alpha' : 'numeric')))
+  return classes.size === 1 ? [...classes][0] : classes.size === 0 ? 'none' : 'mixed'
+}
+const CLASS_RANK = { paren: 3, alpha: 3, mixed: 2, numeric: 1, none: 0 }
+const numOf = (l) => Number(String(l).replace(/[^\d.]/g, ''))
+const isIncreasing = (labels) => labels.every((l, i) => i === 0 || numOf(l) > numOf(labels[i - 1]))
+
+// 구매 옵션 이름과 표 라벨이 겹치는지: 이름이 같거나, 표 라벨이 옵션 안의 글자('S' vs '0 (S)')와 같으면 겹쳐요.
+function optionKeys(opt) {
+  const n = normLabel(opt)
+  const t = innerToken(n)
+  return t ? [n, t] : [n]
+}
+function matchOption(label, optionList) {
+  const n = normLabel(label)
+  const t = innerToken(n)
+  for (const o of optionList) {
+    const keys = optionKeys(o)
+    if (keys.includes(n) || (t && keys.includes(t))) return o
+  }
+  return null
+}
+
+/**
+ * 사이즈표 후보 중에서 쓸 표를 고르고, 판단 과정을 meta로 돌려줘요.
+ * rowsList: 표마다 [[셀 텍스트,...],...]. optionLabels: 페이지에서 읽은 구매 옵션 이름(없으면 []).
+ * @returns {{ chart: object|null, meta: object }}
+ */
+export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
+  const options = (optionLabels || []).map(displayText).filter(Boolean)
+  const meta = {
+    considered: rowsList.length,
+    withHeader: 0,
+    rejectedMeasureHeader: 0,
+    rejectedNumeric: 0,
+    rejectedNoOverlap: 0,
+    selectedIndex: null,
+    rowCount: 0,
+    labelCount: 0,
+    labelClass: 'none',
+    monotonic: null,
+    overlap: 0,
+    optionCount: options.length,
+  }
   let best = null
-  for (const rows of rowsList) {
-    if (rows.length < 2) continue
+  rowsList.forEach((rows, index) => {
+    if (rows.length < 2) return
     const headerIdx = rows.findIndex((r) => r.some((c) => /어깨|가슴|허리|총장|기장|허벅지|엉덩이|소매|발길이|단면/.test(c)))
-    if (headerIdx < 0) continue
+    if (headerIdx < 0) return
+    meta.withHeader++
     const headers = rows[headerIdx]
     const body = rows
       .slice(headerIdx + 1)
       .filter((r) => r.length === headers.length && SIZE_LABEL_RE.test(r[0].replace(/\s/g, '')))
-    if (body.length === 0) continue
-    if (!best || body.length > best.body.length) best = { headers, body }
-  }
-  if (!best) return null
+    if (body.length === 0) return
+    // 첫 열 제목이 '총장' 같은 실측 항목이면 가로세로가 뒤바뀐 후보예요. 그 열의 숫자는 사이즈 이름이 아니에요.
+    if (MEASURE_HEADER_RE.test(headers[0].replace(/\s/g, ''))) {
+      meta.rejectedMeasureHeader++
+      return
+    }
+    const labels = body.map((r) => normLabel(r[0]))
+    const labelClass = labelClassOf(labels)
+    const monotonic = isIncreasing(labels.filter((l) => labelClassOf([l]) === 'numeric'))
+    if (labelClass === 'numeric' && (body.length < 2 || !monotonic)) {
+      meta.rejectedNumeric++
+      return
+    }
+    const overlap = options.length ? labels.filter((l) => matchOption(l, options)).length : 0
+    if (options.length && overlap === 0) {
+      meta.rejectedNoOverlap++
+      return
+    }
+    const cand = { index, headers, body, labels, labelClass, monotonic, overlap, rank: CLASS_RANK[labelClass] }
+    const better =
+      !best ||
+      cand.overlap > best.overlap ||
+      (cand.overlap === best.overlap &&
+        (cand.rank > best.rank || (cand.rank === best.rank && cand.body.length > best.body.length)))
+    if (better) best = cand
+  })
+  if (!best) return { chart: null, meta }
 
   const cat = category || guessCategory('', best.headers)
   const mapping = best.headers.map((h, i) => (i === 0 ? null : mapHeader(h, cat)))
   const measures = {}
+  const display = {}
   const rows = best.body.map((r) => {
-    const label = r[0].replace(/\s/g, '').toUpperCase()
+    const label = normLabel(r[0])
+    const shown = (options.length && matchOption(label, options)) || displayText(r[0])
+    if (shown !== label) display[label] = shown
     const m = {}
     r.forEach((cell, i) => {
       const map = mapping[i]
@@ -78,13 +163,28 @@ export function buildSizeChart(rowsList, category) {
     if (Object.keys(m).length) measures[label] = m
     return [label, ...r.slice(1)]
   })
-  return {
+  Object.assign(meta, {
+    selectedIndex: best.index,
+    rowCount: best.body.length,
+    labelCount: best.labels.length,
+    labelClass: best.labelClass,
+    monotonic: best.monotonic,
+    overlap: best.overlap,
+  })
+  const chart = {
     unit: cat === 'shoes' ? 'mm' : 'cm',
     headers: ['사이즈', ...best.headers.slice(1)],
     rows,
     measures,
     category: cat,
   }
+  if (Object.keys(display).length) chart.display = display
+  return { chart, meta }
+}
+
+/** rowsList: 표마다 [[셀 텍스트,...],...] 배열. 가장 알맞은 사이즈표를 골라 핏 엔진용 구조로 바꿉니다. */
+export function buildSizeChart(rowsList, category, optionLabels = []) {
+  return analyzeSizeCharts(rowsList, category, optionLabels).chart
 }
 
 // ---------- 리뷰 문장에서 체형·사이즈·핏 읽기 ----------

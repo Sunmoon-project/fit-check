@@ -185,7 +185,7 @@ function renderResult(r) {
     const row = el('div', 'row')
     row.append(el('span', 'eyebrow', r.categoryLabel), conf)
     card.append(row)
-    if (r.recommendedSize) card.append(el('div', 'size', r.recommendedSize))
+    if (r.recommendedSize) card.append(el('div', 'size', r.recommendedLabel || r.recommendedSize))
     card.append(el('p', 'sum', r.summary))
     if (r.reasons.length) {
       const ul = el('ul', 'why')
@@ -193,6 +193,7 @@ function renderResult(r) {
       card.append(ul)
     }
     card.append(el('h3', null, r.headline), el('p', null, r.body))
+    card.append(el('p', 'note', '이 페이지에 불러와진 리뷰만 읽어요. 더 많은 리뷰를 반영하려면 리뷰 영역을 직접 스크롤해 불러온 뒤 버튼을 다시 눌러 주세요(자동으로 스크롤하지 않아요).'))
     card.append(el('p', 'note', '확신도는 후기·사이즈표 근거가 얼마나 있는지로 나눈 참고 단계예요. 정확도를 측정한 값이 아니에요.'))
   })
 }
