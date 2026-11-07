@@ -5,6 +5,7 @@
 import { classifyCategory, userChosen, categoryInfo, ldCategoryHints, CATEGORY_ORDER } from './categoryClassifier.js'
 import { guessCategory, analyzeSizeCharts, parseReviewText, CATEGORY_EMOJI, SIZE_LABEL_RE } from './productCore.js'
 import { parseShoeFeel } from './shoeFit.js'
+import { shoeChartNotice, chartForNotice } from './shoeChartNotice.js'
 
 const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim()
 const all = (root, sel) => Array.from(root.querySelectorAll(sel))
@@ -699,28 +700,33 @@ export function parsePage(root, pageUrl = '', opts = {}) {
   const tables = readTables(root)
   const grids = findGridCandidates(root)
   // 카테고리: 상품명·JSON-LD·이동경로·옵션·머리글 근거를 합산해 정해요. 사용자가 고른 값이 있으면 그걸 우선합니다.
+  const shoeOptionLabels = readShoeRangeOptions(root)
   const classifyInput = {
     name,
     ...ldCategoryHints(ld),
-    optionLabels: [...optionLabels, ...readShoeRangeOptions(root)],
+    optionLabels: [...optionLabels, ...shoeOptionLabels],
     headers: [...tables, ...grids.map((c) => c.rows)].flatMap((rows) => (rows[0] || []).slice(0, 12)),
   }
   const auto = classifyCategory(classifyInput)
   const forced = CATEGORY_ORDER.includes(opts.categoryOverride) ? opts.categoryOverride : null
   const preCategory = forced || auto.category
   const kinds = [...tables.map(() => 'table'), ...grids.map((c) => c.kind), ...extra.map(() => 'manual')]
-  const { chart: sizeChart, meta: chartMeta } = analyzeSizeCharts(
-    [...tables, ...grids.map((c) => c.rows), ...extra],
-    preCategory,
-    optionLabels,
-  )
+  const chartRowsList = [...tables, ...grids.map((c) => c.rows), ...extra]
+  const { chart: builtChart, meta: chartMeta } = analyzeSizeCharts(chartRowsList, preCategory, optionLabels)
+  // 사용자가 고른 종류가 사이즈표 종류(신발 mm표 ↔ 옷 실측표)와 어긋나면, 고른 종류는 따르되 맞지 않는 표는 비교에 쓰지 않고 안내해요.
+  let categoryNotice = null
+  if (forced) {
+    const origChart = forced === auto.category ? builtChart : analyzeSizeCharts(chartRowsList, auto.category, optionLabels).chart
+    categoryNotice = shoeChartNotice({ category: origChart?.category || auto.category, sizeChart: origChart, shoeOptionLabels }, forced)
+  }
+  const sizeChart = chartForNotice(builtChart, categoryNotice)
   const category = forced || sizeChart?.category || preCategory
   const cls = forced
     ? userChosen(forced, auto)
     : sizeChart && sizeChart.category !== auto.category
       ? classifyCategory({ ...classifyInput, chartCategory: sizeChart.category })
       : auto
-  if (!sizeChart) {
+  if (!builtChart) {
     if (chartMeta.rejectedNoOverlap > 0) notes.push('읽은 사이즈표의 사이즈 이름이 이 페이지의 구매 옵션과 맞지 않아 사용하지 않았어요.')
     else if (chartMeta.rejectedMeasureHeader > 0 && chartMeta.withHeader === chartMeta.rejectedMeasureHeader)
       notes.push('읽은 표의 가로세로가 뒤바뀐 것으로 보였지만 사이즈 이름 줄을 찾지 못해 뒤집어 읽을 수 없었어요.')
@@ -828,7 +834,8 @@ export function parsePage(root, pageUrl = '', opts = {}) {
         }
       : null,
     optionLabels,
-    shoeOptionLabels: readShoeRangeOptions(root),
+    shoeOptionLabels,
+    categoryNotice,
     reviewTotalOnPage,
     reviewMeta: { cards: cardTexts.length, dropped: reviewDropped, bodyExtract },
     sizeChartMeta: {
