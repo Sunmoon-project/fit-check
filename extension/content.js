@@ -362,7 +362,7 @@ async function run() {
   ensureUi()
   fab.disabled = true
   fab.textContent = '분석 중…'
-  let stage = 'wait' // 오류가 난 단계 (고정 문자열만 리포트에 넣습니다)
+  let stage = 'profile' // 오류가 난 단계 (고정 문자열만 리포트에 넣습니다)
   try {
     const profile = await readProfile()
     if (!isUsableProfile(profile)) {

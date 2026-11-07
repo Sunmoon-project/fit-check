@@ -1539,4 +1539,54 @@ test('가짜 HTML: 진단 리포트에 버린 후보 사유별 개수와 카드 
   assert.ok(rep.length <= REPORT_MAX)
 })
 
+test('가짜 HTML: 사이즈표 셀(150cm 등)은 리뷰 카드로 세지 않는다', () => {
+  const rows = ['S', 'M', 'L', 'XL'].map((z, i) => `<tr><td>${z}</td><td>${150 + i * 5}cm</td><td>${50 + i * 5}kg</td><td>${60 + i}</td></tr>`).join('')
+  const table = `<table><tr><th>사이즈</th><th>키</th><th>몸무게</th><th>총장</th></tr>${rows}</table>`
+  const p = parsePage(fakeDocument(wrapBody(`${table}${optionsHtml}`)), '')
+  assert.equal(p.reviewMeta.cards, 0)
+  assert.equal(p.reviews.length, 0)
+})
+
+test('parseReviewText: 구매 옵션 사이즈가 본문 속 다른 사이즈 언급보다 먼저 쓰인다', () => {
+  assert.equal(parseReviewText('M로 구매했어요 175cm 70kg 그런데 0(S) 도 있었어요').size, 'M')
+  assert.equal(parseReviewText('구매 옵션: 1 (L) 175cm 70kg 예전에 S로 샀어요').size, 'L')
+  assert.equal(parseReviewText('175cm 70kg 구매한 옵션 0(S)').size, 'S')
+})
+
+test('가짜 HTML: 일반 표의 숫자 라벨 행도 구매 옵션 이름(0(S))으로 이어진다', () => {
+  const html = `<ul class="option-list"><li>0 (S)</li><li>1 (M)</li><li>2 (L)</li></ul><table><tr><th>사이즈</th><th>어깨</th><th>가슴</th></tr><tr><td>0</td><td>44</td><td>50</td></tr><tr><td>1</td><td>46</td><td>52</td></tr><tr><td>2</td><td>48</td><td>54</td></tr></table>`
+  const p = parsePage(fakeDocument(wrapBody(html)), '')
+  assert.ok(p.sizeChart, '표를 읽어야 해요')
+  assert.deepEqual(p.sizeChart.rows.map((r) => r[0]), ['0(S)', '1(M)', '2(L)'])
+})
+
+test('가짜 HTML: div 격자 사이즈표(150cm 등)도 리뷰 카드로 세지 않는다', () => {
+  const rows = ['S', 'M', 'L', 'XL'].map((z, i) => `<div class="r"><span>${z}</span><span>${150 + i * 5}cm</span><span>${50 + i * 5}kg</span><span>${60 + i}</span></div>`).join('')
+  const p = parsePage(fakeDocument(wrapBody(`<div class="g">${rows}</div>${optionsHtml}`)), '')
+  assert.equal(p.reviewMeta.cards, 0)
+  assert.equal(p.reviews.length, 0)
+})
+
+test('가짜 HTML: 리뷰 단서가 있는 반복 카드는 계속 카드로 읽는다', () => {
+  const rows = [0, 1, 2, 3].map((i) => `<div class="r"><span>25.01.0${i + 1}</span><span>${170 + i}cm</span><span>구매 옵션 : 블랙 / M</span><span>잘 맞아요</span></div>`).join('')
+  const p = parsePage(fakeDocument(wrapBody(`<div class="g">${rows}</div>`)), '')
+  assert.equal(p.reviewMeta.cards, 4)
+})
+
+test('parseReviewText: 구매 옵션 뒤에 색상이 먼저 와도 옵션의 사이즈를 쓴다', () => {
+  assert.equal(parseReviewText('키 170cm 구매 옵션 : 블랙 / M 평소 L로 구매했는데 딱 맞아요').size, 'M')
+  assert.equal(parseReviewText('키 170cm 구매 옵션 : Black / 1 (L) 평소 S로 구매했어요').size, 'L')
+})
+
+test('가짜 HTML: 옵션 번호와 표 번호가 어긋난 숫자 라벨 표는 거부한다', () => {
+  const html = `<ul class="option-list"><li>0 (S)</li><li>1 (M)</li><li>2 (L)</li></ul><table><tr><th>사이즈</th><th>어깨</th><th>가슴</th></tr><tr><td>5</td><td>44</td><td>50</td></tr><tr><td>6</td><td>46</td><td>52</td></tr><tr><td>7</td><td>48</td><td>54</td></tr></table>`
+  const p = parsePage(fakeDocument(wrapBody(html)), '')
+  assert.equal(p.sizeChart, null)
+})
+
+test('formatReport: 오류 위치 profile 단계도 허용된다', () => {
+  const base = collectDiagnostics(fakeDocument(wrapBody(NOCHART_HTML)), '')
+  assert.ok(formatReport({ ...base, errorName: 'Error', errorWhere: 'profile' }).includes('오류 위치: profile'))
+})
+
 console.log(`\n${passed}개 통과`)

@@ -253,9 +253,17 @@ const CARD_CLIMB = 8
 const CARD_SEED_LIMIT = 6000
 const CLUE_LEAF_RE = /(?<![\d.,])\d{3}(?:\.\d)?\s*(?:cm|㎝)|(?<![\d.,])\d{2,3}(?:\.\d)?\s*(?:kg|㎏)|구매\s*옵션|몸무게\s*[:：]?\s*\d/i
 
+const REVIEW_CUE_RE = /구매\s*옵션|\d{2,4}[.\-/]\d{1,2}[.\-/]\d{1,2}|구매|착용|입어|입었|샀|배송|추천|만족|아쉬|좋아|예뻐|편해|커요|작아|커서|작은|크게|딱/
+
 function shape(el, depth = 2) {
   const kids = childrenOf(el)
   return `${el.tagName}${depth > 0 && kids.length ? `(${kids.slice(0, 8).map((k) => shape(k, depth - 1)).join(',')})` : ''}`
+}
+
+// 표 안의 셀은 사이즈표 값(150cm 등)이라 리뷰 카드 시드로 쓰지 않아요.
+function inTable(el) {
+  for (let cur = el, i = 0; cur && i < 6; cur = cur.parentElement, i++) if (/^(TD|TH|TR|TABLE)$/i.test(cur.tagName)) return true
+  return false
 }
 
 export function readReviewCardEls(root) {
@@ -265,7 +273,7 @@ export function readReviewCardEls(root) {
     if (++scanned > CARD_SEED_LIMIT) break
     if (childrenOf(e).length > 1) continue
     const t = clean(e.textContent)
-    if (t.length <= 80 && CLUE_LEAF_RE.test(t)) seeds.add(e)
+    if (t.length <= 80 && CLUE_LEAF_RE.test(t) && !inTable(e)) seeds.add(e)
   }
   const cards = new Set()
   const shapes = new Map()
@@ -287,7 +295,8 @@ export function readReviewCardEls(root) {
   }
   // 카드 안에 다른 카드가 들어 있으면 바깥 것은 뺍니다
   const list = [...cards]
-  return list.filter((c) => !list.some((o) => o !== c && c.contains?.(o)))
+  // 값만 반복되는 div 격자(사이즈표)를 걸러요: 카드 글에 리뷰 단서(구매 옵션·날짜·후기 말투) 하나는 있어야 해요.
+  return list.filter((c) => !list.some((o) => o !== c && c.contains?.(o))).filter((c) => REVIEW_CUE_RE.test(clean(c.textContent)))
 }
 
 export function readReviewCards(root) {
@@ -362,13 +371,14 @@ export function parsePage(root, pageUrl = '', opts = {}) {
   const entries = []
   const hasClue = (p) => p.height || p.weight || p.size || p.fit
   const cardTexts = readReviewCards(root)
+  const cardJoined = cardTexts.join('\n')
   for (const t of cardTexts) {
     const parsed = parseReviewText(t, sizeLabels)
     if (hasClue(parsed)) entries.push({ text: t, parsed })
     else reviewDropped.noClue += 1
   }
   for (const t of readReviewElements(root, reviewDropped)) {
-    if (cardTexts.some((c) => c.includes(t))) {
+    if (cardJoined.includes(t)) {
       reviewDropped.duplicate += 1
       continue
     }
