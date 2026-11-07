@@ -43,6 +43,7 @@ import { bodySimilarity } from '../src/lib/fitEngine.js'
 import { runHfTryOn, parseSse, spaceBaseUrl, isValidSpaceId, clearTryOnCache, garmentDescription, isTryOnSupported, DEFAULT_SPACE } from '../server/hfTryOn.js'
 
 import { toContribution, toBand, toDomain, contributionKey, ALLOWED_DOMAINS, SCHEMA_VERSION } from '../src/lib/contribution.js'
+import { MAX_STEPS, MAX_MS, STALL_LIMIT, STOP_REASONS, shouldStop, isSafeMoreButton, toReportStop } from '../src/lib/reviewLoader.js'
 import { CONSENT_SUMMARY, CONSENT_VERSION } from '../src/data/consent.js'
 import { loadConsent, purgeStaleConsent, saveConsent, enqueueContribution, loadContribQueue, recordsForUpload } from '../src/lib/storage.js'
 
@@ -1309,6 +1310,34 @@ test('DOM 파서: 리뷰 요소의 다양한 키·몸무게 표기를 읽는다'
   const p = parsePage(fakeDocument(html), '')
   assert.equal(p.reviews.length, 3)
   for (const r of p.reviews) assert.deepEqual([r.height, r.weight], [175, 70])
+})
+
+test('reviewLoader.shouldStop: 한도·중단·전체 수·정체를 정해진 이유로 알려준다', () => {
+  assert.equal(shouldStop({ steps: 1, elapsedMs: 1000, stalls: 0, count: 5, total: 50 }), null)
+  assert.equal(shouldStop({ aborted: true, count: 5, total: 5 }), 'aborted')
+  assert.equal(shouldStop({ count: 50, total: 50 }), 'reached-total')
+  assert.equal(shouldStop({ count: 5, total: null }), null)
+  assert.equal(shouldStop({ stalls: STALL_LIMIT }), 'no-more')
+  assert.equal(shouldStop({ steps: MAX_STEPS }), 'limit-steps')
+  assert.equal(shouldStop({ elapsedMs: MAX_MS }), 'limit-time')
+  for (const reason of STOP_REASONS) assert.ok(['reached-end', 'no-growth', 'limit', 'limit-time', 'aborted'].includes(toReportStop(reason)))
+  assert.equal(toReportStop('이상한 값'), 'not-run')
+})
+
+test('reviewLoader.isSafeMoreButton: 리뷰 영역의 더보기만 허용한다', () => {
+  const inReview = { inReviewContainer: true }
+  for (const t of ['더보기', '더 보기', '리뷰 더보기', '후기 더보기', ' 더보기 ']) assert.equal(isSafeMoreButton(t, inReview), true, t)
+  for (const t of ['구매하기', '장바구니 담기', '좋아요', '리뷰 작성', '바로구매', '신고', '삭제', '로그인', '찜', '', '더보기 구매하기'])
+    assert.equal(isSafeMoreButton(t, inReview), false, t)
+  assert.equal(isSafeMoreButton('더보기', { inReviewContainer: false }), false)
+  assert.equal(isSafeMoreButton('더보기', null), false)
+})
+
+test('diagnose: 리뷰 불러오기 멈춘 이유(시간 한도·중단)가 리포트에 보인다', () => {
+  for (const stop of ['limit-time', 'aborted']) {
+    const rep = formatReport(collectDiagnostics(fakeDocument(wrapBody(NOCHART_HTML)), '', '', { scroll: { before: 2, after: 9, stop } }))
+    assert.ok(rep.includes(stop), stop)
+  }
 })
 
 console.log(`\n${passed}개 통과`)
