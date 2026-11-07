@@ -5,6 +5,7 @@ import { makeWardrobeItem } from '../lib/wardrobe.js'
 import FitComment from './FitComment.jsx'
 import MeasureMatch from './MeasureMatch.jsx'
 import MatchedReviews from './MatchedReviews.jsx'
+import SimilarityCompare from './SimilarityCompare.jsx'
 import SizeChart from './SizeChart.jsx'
 import FeedbackForm from './FeedbackForm.jsx'
 import TryOnPanel from './TryOnPanel.jsx'
@@ -83,6 +84,8 @@ export default function ResultView({ product, profile, calibration, feedbackCoun
       </div>
 
       <MatchedReviews matched={result.matched} others={result.otherReviews} />
+
+      <SimilarityCompare profile={profile} reviews={[...result.matched, ...result.otherReviews]} />
 
       <SizeChart chart={product.sizeChart} recommendedSize={result.recommendedSize} selectedSize={selectedSize} />
 

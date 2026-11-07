@@ -5,6 +5,7 @@ import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
 import { buildExportEnvelope } from '../src/lib/wardrobeImport.js'
 import { collectDiagnostics, formatReport } from '../src/lib/diagnose.js'
 import { shouldStop, isSafeMoreButton, toReportStop, STOP_LABEL } from '../src/lib/reviewLoader.js'
+import { compareBody, countUpValue } from '../src/lib/similarityBreakdown.js'
 import { EXT_PROFILE_KEY, isUsableProfile } from '../src/lib/extProfile.js'
 
 const WAIT_MS = 4000 // 늦게 그려지는 표·리뷰를 기다리는 최대 시간
@@ -74,7 +75,20 @@ tr.rec .cv{color:#9fe0ba}
 .gal{display:flex;flex-direction:column;gap:10px;margin-top:6px}
 .pf{margin:0;display:flex;flex-direction:column;gap:4px}
 .ph.big{width:100%;height:auto;max-height:280px;object-fit:contain;background:#f6f6f6}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.cmp{list-style:none;margin:6px 0 0;padding:0}
+.cr{padding:8px 0;border-top:1px solid #ececec}
+.cr:first-child{border-top:0}
+.crh{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.cpct{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
+.cb{margin-top:4px}
+.cbl{display:flex;justify-content:space-between;font-size:11px;color:#555}
+.cbt{height:4px;background:#f0f0f0;border-radius:2px;overflow:hidden;margin-top:2px}
+.cbf{height:100%;background:#111;border-radius:2px;transition:width .8s ease-out}
+.cg{display:inline-block;font-size:11px;border:1px solid #d4d4d4;border-radius:999px;padding:0 8px;color:#111}
+.cg.diff{border-style:dashed;color:#8a8a8e}
 .lnk{border:0;background:none;padding:0;margin-left:4px;font-size:11px;color:#555;text-decoration:underline;cursor:pointer}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
 `
 
 let host = null
@@ -121,6 +135,7 @@ function el(tag, cls, text) {
 }
 
 function showCard(build) {
+  cancelAnim()
   panel.replaceChildren()
   const card = el('div', 'card')
   const head = el('div', 'row hd')
@@ -138,7 +153,10 @@ function showCard(build) {
   const close = el('button', 'close', '×')
   close.type = 'button'
   close.setAttribute('aria-label', '닫기')
-  close.addEventListener('click', () => panel.replaceChildren())
+  close.addEventListener('click', () => {
+    cancelAnim()
+    panel.replaceChildren()
+  })
   ctl.append(mini, close)
   head.append(ctl)
   card.append(head)
@@ -376,7 +394,7 @@ function photoGallery(list) {
   return box
 }
 
-// 추천 근거가 된 리뷰를 페이지에서 읽은 그대로, 탭 세 개(비슷한 체형 / 전체 리뷰 / 사진 모아보기)로 보여줘요.
+// 추천 근거가 된 리뷰를 페이지에서 읽은 그대로, 탭 네 개(비슷한 체형 / 전체 리뷰 / 사진 모아보기 / 체형 비교)로 보여줘요.
 // 각 탭은 처음 열 때 그리고, 세로로 스크롤돼요. 저장·전송하지 않아요.
 function reviewsBlock(rvs) {
   const box = el('div')
@@ -404,6 +422,7 @@ function reviewsBlock(rvs) {
       },
     },
     { label: '사진 모아보기', build: () => photoGallery(all) },
+    { label: '체형 비교', compare: true },
   ]
   const list = el('div', 'tabs')
   list.setAttribute('role', 'tablist')
@@ -418,8 +437,10 @@ function reviewsBlock(rvs) {
       b.tabIndex = j === i ? 0 : -1
       b.className = j === i ? 'tab on' : 'tab'
     })
-    if (!built[i]) built[i] = tabs[i].build()
-    panel.replaceChildren(built[i])
+    cancelAnim()
+    if (!built[i]) built[i] = tabs[i].compare ? compareTab(rvs, all) : { node: tabs[i].build() }
+    panel.replaceChildren(built[i].node)
+    if (built[i].play) built[i].play()
     if (focus && btns[i].focus) btns[i].focus()
   }
   tabs.forEach((t, i) => {
@@ -440,6 +461,103 @@ function reviewsBlock(rvs) {
   box.append(list, panel)
   select(0, false)
   return box
+}
+
+// 체형 비교 탭: 후기마다 성별·키·몸무게를 내 값과 나란히 보여주고, 유사도 숫자가 0에서 올라가요.
+// 애니메이션은 탭을 처음 열 때 한 번만 돌고, 움직임 줄이기 설정이면 바로 최종 값을 보여줘요.
+const COUNT_MS = 900
+const COMPARE_MAX = 20
+const GENDER_TEXT = { male: '남성', female: '여성' }
+let stopAnim = null
+
+function cancelAnim() {
+  if (stopAnim) stopAnim()
+  stopAnim = null
+}
+
+function reducedMotion() {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
+  try {
+    return !!window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  } catch {
+    return true
+  }
+}
+
+function compareTab(rvs, all) {
+  const box = el('div')
+  const me = rvs.me
+  const rows = me ? all.filter((r) => r.height != null && r.weight != null).slice(0, COMPARE_MAX) : []
+  if (!rows.length) {
+    box.append(el('p', 'note', '키·몸무게를 읽은 리뷰가 없어서 비교할 수 없어요.'))
+    return { node: box, play() {} }
+  }
+  box.append(el('p', 'tiny', `내 체형: ${me.height}cm ${me.weight}kg${me.gender ? ` · ${GENDER_TEXT[me.gender]}` : ''}`))
+  const ul = el('ul', 'cmp')
+  const fills = [] // { node, pct }
+  const counters = [] // { node, target }
+  for (const rv of rows) {
+    const c = compareBody(me, rv)
+    const li = el('li', 'cr')
+    const head = el('div', 'crh')
+    head.append(el('span', 'rvn', rv.nick || '구매자'))
+    const pct = el('span', 'cpct', `${c.similarity ?? 0}%`)
+    pct.setAttribute('aria-hidden', 'true')
+    head.append(pct, el('span', 'sr', `체형 유사도 ${c.similarity ?? 0}%`))
+    counters.push({ node: pct, target: c.similarity ?? 0 })
+    li.append(head)
+    const genderText = c.gender.state === 'same' ? '성별 같음' : c.gender.state === 'diff' ? '성별 다름' : '성별 확인 불가'
+    const chip = el('span', c.gender.state === 'diff' ? 'cg diff' : 'cg', rv.gender ? `${genderText} (${GENDER_TEXT[rv.gender]})` : genderText)
+    li.append(chip)
+    for (const [label, unit, m] of [['키', 'cm', c.height], ['몸무게', 'kg', c.weight]]) {
+      const b = el('div', 'cb')
+      const lab = el('div', 'cbl')
+      lab.append(el('span', null, `${label} 나 ${m.me}${unit}`), el('span', null, `후기 ${m.review}${unit}`))
+      const track = el('div', 'cbt')
+      track.setAttribute('role', 'img')
+      track.setAttribute('aria-label', `${label} 비교: 나 ${m.me}${unit}, 후기 ${m.review}${unit}, 차이 ${m.diff}${unit}`)
+      const fill = el('div', 'cbf')
+      const w = `${Math.round(m.fill * 100)}%`
+      fill.style.width = w
+      track.append(fill)
+      fills.push({ node: fill, w })
+      b.append(lab, track)
+      li.append(b)
+    }
+    ul.append(li)
+  }
+  box.append(ul)
+  let played = false
+  const finish = () => {
+    for (const f of fills) f.node.style.width = f.w
+    for (const c of counters) c.node.textContent = `${c.target}%`
+  }
+  const play = () => {
+    if (played) return
+    played = true
+    if (reducedMotion() || typeof requestAnimationFrame !== 'function') return // 이미 최종 값이 들어 있어요
+    for (const f of fills) f.node.style.width = '0%'
+    for (const c of counters) c.node.textContent = '0%'
+    let frame = null
+    let start = null
+    const tick = (now) => {
+      if (start == null) {
+        start = now
+        for (const f of fills) f.node.style.width = f.w
+      }
+      const elapsed = now - start
+      for (const c of counters) c.node.textContent = `${countUpValue(elapsed, COUNT_MS, c.target)}%`
+      if (elapsed < COUNT_MS) frame = requestAnimationFrame(tick)
+      else frame = null
+    }
+    frame = requestAnimationFrame(tick)
+    stopAnim = () => {
+      if (frame != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame)
+      frame = null
+      finish()
+    }
+  }
+  return { node: box, play }
 }
 
 // 내 옷장으로 보내기: 누를 때만 JSON을 클립보드에 복사하고, 같은 글을 읽기 전용 칸에도 보여줘요. 어디로도 전송하지 않아요.

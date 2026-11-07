@@ -1445,7 +1445,7 @@ test('diagnose: 리뷰 불러오기 멈춘 이유(시간 한도·중단)가 리�
 })
 
 // 확장 content.js를 임시 폴더에 IIFE로 빌드해 가짜 DOM(node:vm)에서 fab 클릭(run) 경로를 실행합니다. 실제 무신사·크롬이 아니에요.
-async function runContentInFakeDom(pageHtml = null) {
+async function runContentInFakeDom(pageHtml = null, extra = {}) {
   const root = resolvePath(import.meta.dirname, '..')
   const outDir = mkdtempSync(join(tmpdir(), 'fitcheck-content-'))
   try {
@@ -1486,6 +1486,7 @@ async function runContentInFakeDom(pageHtml = null) {
       MutationObserver: class { observe() {} disconnect() {} },
       CSSStyleSheet: class { replaceSync() {} },
       setTimeout: (f) => setTimeout(f, 0), clearTimeout,
+      ...extra,
       chrome: {
         runtime: { getManifest: () => ({ version: '0.0.0' }), onMessage: { addListener: (f) => { listeners.msg = f } } },
         storage: { local: { get: (k, cb) => cb({ fitcheckProfile: profile }), set: (...a) => storageCalls.push(['set', a]), remove: (...a) => storageCalls.push(['remove', a]), clear: (...a) => storageCalls.push(['clear', a]) } },
@@ -1500,7 +1501,7 @@ async function runContentInFakeDom(pageHtml = null) {
       const f = created.find((e) => e.className === 'fab')
       if (f && !f.disabled && f.textContent === '내 사이즈 찾기') break
     }
-    return { texts, created, storageCalls }
+    return { texts, created, storageCalls, sandbox }
   } finally {
     rmSync(outDir, { recursive: true, force: true })
   }
@@ -2131,11 +2132,11 @@ test('가짜 HTML: 닉네임·리뷰 본문은 진단 리포트와 기여 기록
   assert.ok(JSON.stringify(buildExportEnvelope(r)).includes('지루한플럼반바지'))
 })
 
-await atest('content.js(가짜 DOM, vm): 리뷰 탭 3개와 사진 모아보기, 내 옷장으로 보내기 버튼이 오류 없이 그려진다', async () => {
+await atest('content.js(가짜 DOM, vm): 리뷰 탭 4개와 사진 모아보기, 내 옷장으로 보내기 버튼이 오류 없이 그려진다', async () => {
   const { texts, created } = await runContentInFakeDom(RB_FULL)
   assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
   const tabs = created.filter((e) => e.className.split(' ').includes('tab'))
-  assert.deepEqual(tabs.map((t) => t.textContent), ['비슷한 체형', '전체 리뷰', '사진 모아보기'])
+  assert.deepEqual(tabs.map((t) => t.textContent), ['비슷한 체형', '전체 리뷰', '사진 모아보기', '체형 비교'])
   const panel = created.find((e) => e.className === 'tp')
   assert.ok(panel, '스크롤 패널')
   tabs[2]._l.click()
@@ -2225,5 +2226,100 @@ test('가짜 데이터: 체형 차이가 커질수록 유사도는 줄어들기�
   assert.equal(prev, 0)
 })
 
+
+// ---- 체형 비교 (직접 만든 가짜 데이터와 가짜 DOM이에요. 실제 무신사·크롬에서 확인한 것이 아니에요) ----
+import { compareBody, countUpValue } from '../src/lib/similarityBreakdown.js'
+
+test('가짜 데이터: compareBody는 성별 같음/다름/모름과 키 없는 후기를 구분한다', () => {
+  const me = { gender: 'male', height: 175, weight: 70 }
+  assert.equal(compareBody(me, { gender: 'male', height: 175, weight: 70 }).gender.state, 'same')
+  assert.equal(compareBody(me, { gender: 'female', height: 175, weight: 70 }).gender.state, 'diff')
+  assert.equal(compareBody(me, { gender: null, height: 175, weight: 70 }).gender.state, 'unknown')
+  assert.equal(compareBody({ ...me, gender: null }, { gender: 'male', height: 175, weight: 70 }).gender.state, 'unknown')
+  const none = compareBody(me, { gender: 'male', height: null, weight: 70 })
+  assert.equal(none.similarity, null)
+  assert.equal(none.height.fill, 0)
+  const near = compareBody(me, { gender: 'male', height: 177, weight: 72 })
+  assert.deepEqual([near.height.diff, near.weight.diff], [2, 2])
+  assert.ok(near.height.fill > near.weight.fill && near.weight.fill < 1)
+})
+
+test('가짜 데이터: compareBody의 유사도는 bodySimilarity와 같은 숫자다', () => {
+  const me = { gender: 'female', height: 165, weight: 55 }
+  for (const r of [{ height: 165, weight: 55, gender: 'female' }, { height: 170, weight: 62, gender: null }, { height: 160, weight: 50, gender: 'male' }]) {
+    assert.equal(compareBody(me, r).similarity, bodySimilarity(me, r))
+  }
+})
+
+test('countUpValue: 0에서 시작해 목표에서 끝나고 줄어들지 않으며 범위를 벗어나지 않는다', () => {
+  assert.equal(countUpValue(0, 900, 87), 0)
+  assert.equal(countUpValue(900, 900, 87), 87)
+  assert.equal(countUpValue(5000, 900, 87), 87)
+  assert.equal(countUpValue(-10, 900, 87), 0)
+  assert.equal(countUpValue(100, 0, 87), 87)
+  assert.equal(countUpValue(100, 900, -5), 0)
+  let prev = -1
+  for (let t = 0; t <= 1000; t += 10) {
+    const v = countUpValue(t, 900, 87)
+    assert.ok(Number.isInteger(v) && v >= prev && v <= 87)
+    prev = v
+  }
+})
+
+const CMP_HTML = () => VIEW_HTML(chartTable(OPTION_LIST_LABELS()))
+const findCompareTab = (created) => created.find((e) => e.tagName === 'BUTTON' && e.textContent === '체형 비교')
+const fillWidths = (created) => created.filter((e) => e.className === 'cbf').map((e) => e.style.width)
+
+function fakeRaf() {
+  const calls = { raf: 0, cancel: 0 }
+  let t = 0
+  return {
+    calls,
+    requestAnimationFrame: (f) => { calls.raf += 1; t += 450; return setTimeout(() => f(t), 0) },
+    cancelAnimationFrame: () => { calls.cancel += 1 },
+  }
+}
+
+await atest('content.js(가짜 DOM, vm): 체형 비교 탭이 그려지고 숫자가 올라가며 끝난다 (움직임 허용)', async () => {
+  const raf = fakeRaf()
+  const { created, texts } = await runContentInFakeDom(CMP_HTML(), { matchMedia: () => ({ matches: false }), requestAnimationFrame: raf.requestAnimationFrame, cancelAnimationFrame: raf.cancelAnimationFrame })
+  const tab = findCompareTab(created)
+  assert.ok(tab, '체형 비교 탭이 있어야 해요')
+  tab._l.click()
+  await new Promise((r) => setTimeout(r, 100))
+  assert.ok(raf.calls.raf > 0, 'requestAnimationFrame을 써요')
+  assert.ok(created.some((e) => e.className === 'cpct' && /^\d+%$/.test(e.textContent) && e.textContent !== '0%'), '끝나면 최종 값이어야 해요')
+  assert.ok(fillWidths(created).length >= 2 && fillWidths(created).every((w) => /%$/.test(w)))
+  assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
+})
+
+await atest('content.js(가짜 DOM, vm): 움직임 줄이기이면 requestAnimationFrame 없이 최종 값을 바로 보여준다', async () => {
+  const raf = fakeRaf()
+  const { created } = await runContentInFakeDom(CMP_HTML(), { matchMedia: () => ({ matches: true }), requestAnimationFrame: raf.requestAnimationFrame, cancelAnimationFrame: raf.cancelAnimationFrame })
+  findCompareTab(created)._l.click()
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal(raf.calls.raf, 0)
+  const pct = created.filter((e) => e.className === 'cpct')
+  assert.ok(pct.length > 0 && pct.some((e) => e.textContent !== '0%'))
+  assert.ok(fillWidths(created).some((w) => w !== '0%'))
+})
+
+await atest('content.js(가짜 DOM, vm): matchMedia가 없어도 오류 없이 최종 값을 보여준다', async () => {
+  const { created, texts } = await runContentInFakeDom(CMP_HTML())
+  findCompareTab(created)._l.click()
+  await new Promise((r) => setTimeout(r, 50))
+  assert.ok(created.some((e) => e.className === 'cpct'))
+  assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
+})
+
+test('content.js: 체형 비교는 innerHTML을 쓰지 않고 aria-live가 없으며 전역 검사를 통과한다', () => {
+  const src = readFileSync(new URL('../extension/content.js', import.meta.url), 'utf8')
+  assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML/.test(src.replace(/\/\/.*$/gm, '').replace(/set innerHTML/g, '')))
+  assert.ok(!src.includes('aria-live'))
+  assert.ok(src.includes('prefers-reduced-motion: reduce'))
+  assert.deepEqual(findUndeclared(src), [])
+  const web = readFileSync(new URL('../src/components/SimilarityCompare.jsx', import.meta.url), 'utf8')
+  assert.ok(!web.includes('aria-live') && web.includes('prefers-reduced-motion'))
+})
 
 console.log(`\n${passed}개 통과`)
