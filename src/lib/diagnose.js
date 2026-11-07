@@ -222,7 +222,7 @@ export function formatReport(d) {
   out.push(...diagnosticLines(d))
   out.push(`JSON-LD Product: ${yn(d.jsonLdProduct)}, og:type: ${d.ogType || '없음'}`)
   if (d.errorName) out.push(`오류: ${String(d.errorName).replace(/[^A-Za-z]/g, '').slice(0, 30)}`)
-  if (d.errorName && ['wait', 'analyze', 'render'].includes(d.errorWhere)) {
+  if (d.errorName && ['profile', 'wait', 'analyze', 'render'].includes(d.errorWhere)) {
     const ident = typeof d.errorIdent === 'string' && /^[A-Za-z_$][\w$]{0,40}$/.test(d.errorIdent) ? d.errorIdent : ''
     out.push(`오류 위치: ${d.errorWhere}${ident ? `, 식별자: ${ident}` : ''}`)
   }

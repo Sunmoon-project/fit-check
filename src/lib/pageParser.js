@@ -258,6 +258,12 @@ function shape(el, depth = 2) {
   return `${el.tagName}${depth > 0 && kids.length ? `(${kids.slice(0, 8).map((k) => shape(k, depth - 1)).join(',')})` : ''}`
 }
 
+// 표 안의 셀은 사이즈표 값(150cm 등)이라 리뷰 카드 시드로 쓰지 않아요.
+function inTable(el) {
+  for (let cur = el, i = 0; cur && i < 6; cur = cur.parentElement, i++) if (/^(TD|TH|TR|TABLE)$/i.test(cur.tagName)) return true
+  return false
+}
+
 export function readReviewCardEls(root) {
   const seeds = new Set(all(root, REVIEW_SELECTOR))
   let scanned = 0
@@ -265,7 +271,7 @@ export function readReviewCardEls(root) {
     if (++scanned > CARD_SEED_LIMIT) break
     if (childrenOf(e).length > 1) continue
     const t = clean(e.textContent)
-    if (t.length <= 80 && CLUE_LEAF_RE.test(t)) seeds.add(e)
+    if (t.length <= 80 && CLUE_LEAF_RE.test(t) && !inTable(e)) seeds.add(e)
   }
   const cards = new Set()
   const shapes = new Map()
@@ -362,13 +368,14 @@ export function parsePage(root, pageUrl = '', opts = {}) {
   const entries = []
   const hasClue = (p) => p.height || p.weight || p.size || p.fit
   const cardTexts = readReviewCards(root)
+  const cardJoined = cardTexts.join('\n')
   for (const t of cardTexts) {
     const parsed = parseReviewText(t, sizeLabels)
     if (hasClue(parsed)) entries.push({ text: t, parsed })
     else reviewDropped.noClue += 1
   }
   for (const t of readReviewElements(root, reviewDropped)) {
-    if (cardTexts.some((c) => c.includes(t))) {
+    if (cardJoined.includes(t)) {
       reviewDropped.duplicate += 1
       continue
     }
