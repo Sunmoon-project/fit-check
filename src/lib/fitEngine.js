@@ -5,6 +5,27 @@
 import { PART_LABEL, CATEGORY_PARTS } from '../data/measurements.js'
 import { estimateBody } from './bodyEstimate.js'
 
+// ---------- 신발 허용 구간 (휴리스틱) ----------
+// d = 신발 사이즈(mm) - 발길이(mm). 브랜드/라스트마다 달라서 정확한 값이 아니라 일반적인 착용감을 바탕으로 한 기준이에요.
+// -5 <= d < 0 애매, 0 <= d <= 5 딱 맞음, 5 < d <= 10 여유, 그 밖(d < -5 또는 d > 10)은 부적합.
+// 발 270이면 265 애매, 270/275 딱 맞음, 280 여유, 260 이하 / 285 이상 부적합.
+// 신발 판정은 이 상수와 classifyShoeEase 한 곳만 쓰고, 옷장·추천·사이즈 비교가 모두 같은 기준을 써요.
+export const SHOE_WINDOW = Object.freeze({ minEase: -5, fitMaxEase: 5, maxEase: 10 })
+export const SHOE_VERDICTS = [
+  { key: 'unfit', label: '부적합', lengthLabel: '부적합', side: 'small' },
+  { key: 'iffy', label: '애매', lengthLabel: '애매' },
+  { key: 'fit', label: '딱 맞음', lengthLabel: '딱 맞음' },
+  { key: 'roomy', label: '여유', lengthLabel: '여유' },
+  { key: 'unfit', label: '부적합', lengthLabel: '부적합', side: 'large' },
+]
+
+/** ease(mm) → 신발 판정. level: 너무 작음 부적합 0, 애매 1, 딱 맞음 2, 여유 3, 너무 큼 부적합 4 */
+export function classifyShoeEase(ease) {
+  const w = SHOE_WINDOW
+  const i = ease < w.minEase ? 0 : ease < 0 ? 1 : ease <= w.fitMaxEase ? 2 : ease <= w.maxEase ? 3 : 4
+  return { ...SHOE_VERDICTS[i], level: i }
+}
+
 // ---------- 여유분 기준 ----------
 // ease = 옷 치수 - 신체 치수. 둘레 항목은 옷 단면×2 기준 (cm).
 // shoulder~thigh는 프로토타입(AI 옷장)의 기준을 그대로 씁니다.
@@ -17,8 +38,8 @@ export const EASE_RULES = {
   thigh: { tight: 0, snug: 3, regular: 9, relaxed: 16 },
   // 휴리스틱: 소매는 손목뼈 근처(+0~2.5cm)가 보통
   arm: { tight: -3, snug: -1, regular: 2.5, relaxed: 5 },
-  // 휴리스틱(mm): 신발 안쪽 길이는 발길이보다 5~12mm 여유가 보통
-  footLength: { tight: 0, snug: 5, regular: 12, relaxed: 20 },
+  // 휴리스틱(mm): 신발은 SHOE_WINDOW 한 곳에서 파생해요 (아래 classifyShoeEase 참고).
+  footLength: { tight: SHOE_WINDOW.minEase, snug: 0, regular: SHOE_WINDOW.fitMaxEase, relaxed: SHOE_WINDOW.maxEase },
   // 휴리스틱: 기장은 키로 추정한 표준 기장과의 차이
   topLength: { tight: -6, snug: -3, regular: 3, relaxed: 7 },
   outerLength: { tight: -6, snug: -3, regular: 4, relaxed: 9 },
@@ -57,6 +78,7 @@ export function bodyValuesForProfile(profile) {
 export function classifyEase(part, ease, offset = 0) {
   const r = EASE_RULES[part]
   if (!r) return null
+  if (part === 'footLength') return classifyShoeEase(ease - offset)
   if (ease < r.tight + offset) return { ...VERDICTS[0], level: 0 }
   if (ease < r.snug + offset) return { ...VERDICTS[1], level: 1 }
   if (ease < r.regular + offset) return { ...VERDICTS[2], level: 2 }

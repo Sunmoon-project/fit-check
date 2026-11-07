@@ -13,9 +13,11 @@ export default function ShoeCompare({ view: sv, selectedSize, onSelect }) {
           ? `내 발길이 ${sv.footLength}mm${sv.footLengthEstimated ? ' (키로 추정)' : ''} · 발볼 ${sv.footWidthLabel || '입력 안 함'}`
           : '발길이를 알 수 없어요'}
       </p>
+      {sv.noFit && <p className="shoe-nofit" role="alert">{sv.noFit.message}</p>}
+      {sv.windowText && <p className="muted small shoe-window">{sv.windowText}</p>}
       <ul className="verdict-list">
         {sv.rows.map((row) => (
-          <li key={row.mm} className="verdict-row">
+          <li key={row.mm} className={`verdict-row ${row.unfit ? 'row-unfit' : ''}`}>
             <div className="verdict-top">
               <button
                 type="button"
