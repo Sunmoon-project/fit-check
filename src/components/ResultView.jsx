@@ -9,6 +9,7 @@ import MeasureMatch from './MeasureMatch.jsx'
 import MatchedReviews from './MatchedReviews.jsx'
 import SimilarityCompare from './SimilarityCompare.jsx'
 import SizeChart from './SizeChart.jsx'
+import SizeSummary from './SizeSummary.jsx'
 import FeedbackForm from './FeedbackForm.jsx'
 import TryOnPanel from './TryOnPanel.jsx'
 import { SimilarInWardrobe } from './Wardrobe.jsx'
@@ -69,6 +70,8 @@ export default function ResultView({ product, profile, calibration, feedbackCoun
       )}
 
       <FitComment result={result} />
+
+      <SizeSummary compare={compare} recommendedSize={result.recommendedSize} category={product.category} />
 
       <MeasureMatch
         perSize={result.perSize}

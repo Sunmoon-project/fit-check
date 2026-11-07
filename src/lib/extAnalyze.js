@@ -4,6 +4,7 @@ import { parsePage, splitSentences, isProductPage, SENTENCE_LIMIT } from './page
 import { collectDiagnostics, diagnosticLines } from './diagnose.js'
 import { generateFitComment, describeEvidence, bodyValuesForProfile, CONFIDENCE_LABEL, FIT_LABEL } from './fitEngine.js'
 import { compareSizes, compactCompare } from './sizeCompare.js'
+import { summarizeSizeChart } from './sizeSummary.js'
 // 사용자가 직접 적은 사이즈표: 열 이름(예: 어깨 가슴 총장)과 줄(예: M 50 57 68) → buildSizeChart 입력 모양.
 // 저장하지 않고 이번 분석에만 씁니다. 잘못된 줄은 버려요.
 export function manualChartRows(columnsText, linesText) {
@@ -127,6 +128,7 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     },
     exportData: exportData(product, pageUrl, result),
     compareView: cmpView.view,
+    sizeSummary: summarizeSizeChart({ sizes: cmpView.view?.sizes, recommended: result.recommendedSize, category: product.category }),
     chartView: product.sizeChart?.view ? { ...product.sizeChart.view, recommended: result.recommendedSize ?? null } : null,
     confidence: result.confidence,
     confidenceLabel: CONFIDENCE_LABEL[result.confidence],
