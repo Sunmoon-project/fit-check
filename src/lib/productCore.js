@@ -163,6 +163,24 @@ function flipRows(rows, headerIdx, ctx) {
   return { headers: ['사이즈', ...same.map((r) => r[0])], body, source }
 }
 
+// 정상 표(행=사이즈, 열=실측 항목)인데 맨 앞 제목 칸에 '사이즈 기장'처럼 실측 글자가 섞여 뒤집힌 표로 오판되는 경우를 다시 읽어요.
+// 머리글 나머지 칸에 실측 항목이 2개 이상이고, 아래 줄 중 숫자 줄의 첫 칸이 커지는 짧은 정수(0~9, 28~40, 44/55/66/85/90/95/100/105/110 등)이며
+// 나머지 칸이 모두 치수 숫자일 때만 인정해요. 'cm' 단위 줄, 'MY', 빈 줄 같은 숫자 아닌 줄은 건너뜁니다.
+const SHORT_INT_RE = /^\d{1,3}$/
+const SIZE_INTS = new Set([44, 55, 66, 77, 85, 88, 90, 95, 100, 105, 110, 115, 120])
+const isSizeInt = (n) => n <= 9 || (n >= 28 && n <= 40) || SIZE_INTS.has(n)
+function normalTableRetry(rows, headerIdx) {
+  const headers = rows[headerIdx]
+  if (headers.slice(1).filter(hasMeasureWord).length < 2) return null
+  const body = rows
+    .slice(headerIdx + 1)
+    .filter((r) => r.length === headers.length && SHORT_INT_RE.test(displayText(r[0])) && r.slice(1).every((c) => toNumber(c) != null && /^[\d.,\s]+(cm|mm)?$/i.test(displayText(c))))
+  if (body.length < 2) return null
+  const firsts = body.map((r) => Number(displayText(r[0])))
+  if (!firsts.every((n, i) => isSizeInt(n) && (i === 0 || n > firsts[i - 1]))) return null
+  return { headers: ['사이즈', ...headers.slice(1)], body }
+}
+
 const REASON_KEYS = ['too-few-rows', 'no-measure-header', 'no-labeled-rows', 'flipped-no-names', 'numeric-rule', 'flipped-numeric-no-options', 'no-overlap', 'not-best', 'selected']
 
 // ---------- 신발: 사이즈 이름 자체가 발길이(mm)인 표 ----------
@@ -291,6 +309,18 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
     }
     let source = null
     if (flippedCand) {
+      const retry = normalTableRetry(rows, headerIdx)
+      if (retry) {
+        headers = retry.headers
+        body = retry.body
+        flippedCand = false
+        source = 'normal-retry'
+        meta.normalRetry = (meta.normalRetry || 0) + 1
+      }
+    }
+    if (source === 'normal-retry') {
+      // 정상 표로 다시 읽었어요.
+    } else if (flippedCand) {
       const ctx = { options, otherRows: rowsList.flatMap((rs, i) => (i === index ? [] : rs)) }
       const f = flipRows(rows, headerIdx, ctx)
       if (!f) {
@@ -452,6 +482,12 @@ function pickReviewSize(t, sizeLabels) {
     // 신발: 구매옵션이 '화이트 / 255' 처럼 mm 숫자로 끝나는 경우
     const mm = [...seg.matchAll(/(?<![\d.])(2[0-9]\d|3[01]\d)(?:\s*(?:mm|㎜))?(?![\d.])/g)].map((m) => m[1])
     if (mm.length) return uniqueSize(mm, labels)
+    // 상품 사이즈 목록이 비어 있으면 '블랙 · 1'처럼 색상 뒤 마지막 칸의 숫자를 그대로 써요(표와 이어지지 않아도 읽음 처리).
+    if (labels.length === 0) {
+      const parts = seg.split(/[·\/,|]/).map((x) => x.trim()).filter(Boolean)
+      const last = parts.length >= 2 ? (parts[parts.length - 1].match(/^(\d{1,3})(?![\d.가-힣A-Za-z])/) || [])[1] : null
+      if (last) return last
+    }
   }
   const body = t.replace(USUAL_RE, ' ').replace(HABIT_RE, ' ')
   const patterns = [

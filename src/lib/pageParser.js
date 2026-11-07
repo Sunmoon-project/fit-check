@@ -154,6 +154,8 @@ export function readAllSizeRows(root) {
 // 페이지의 textContent만 읽어요. 뒤에 배송 안내 같은 글이 붙어 있어도 앞부분의 "번호 (글자)"만 씁니다.
 const OPTION_RE = /^(\d{1,2})\s*\(\s*(XXS|XS|S|M|L|XL|XXL|[2-5]XL|FREE|F)\s*\)(?![A-Za-z0-9])/i
 const MAX_OPTIONS = 20
+const TAIL_MM_RE = /(?:^|[\s\/·,|-])(2[0-9]\d|3[01]\d)(?:\s*(?:mm|㎜))?\s*$/i
+const TAIL_OPTION_RE = /(?:^|[\s\/·,|-])(\d{1,2})\s*\(\s*(XXS|XS|S|M|L|XL|XXL|[2-5]XL|FREE|F)\s*\)\s*$/i
 
 export function readOptionLabels(root) {
   const out = []
@@ -169,6 +171,26 @@ export function readOptionLabels(root) {
     const label = `${m[1]} (${m[2].toUpperCase()})`
     if (!out.includes(label)) out.push(label)
     if (out.length >= MAX_OPTIONS) break
+  }
+  // select/option, 버튼 목록, JSON-LD Product offers(name/sku)에서는 '블랙 / 0 (S)'처럼 색상 뒤에 붙은 끝부분도 읽어요.
+  const add = (text) => {
+    const t = clean(text)
+    if (t.length > 80) return
+    const mm = t.match(TAIL_MM_RE)
+    if (mm) {
+      // 신발: '화이트 / 250' 처럼 mm 숫자로 끝나는 옵션
+      if (!out.includes(mm[1]) && out.length < MAX_OPTIONS) out.push(mm[1])
+      return
+    }
+    const m = t.match(TAIL_OPTION_RE)
+    if (!m) return
+    const label = `${m[1]} (${m[2].toUpperCase()})`
+    if (!out.includes(label) && out.length < MAX_OPTIONS) out.push(label)
+  }
+  for (const e of all(root, 'option,button,[role="option"],li,[hidden],[aria-hidden="true"]')) if (childrenOf(e).length <= 4) add(e.textContent)
+  for (const n of collectJsonLd(root)) {
+    const offers = [].concat(n.offers || [], n.offers?.offers || [])
+    for (const o of offers) if (o && typeof o === 'object') for (const k of ['name', 'sku']) if (typeof o[k] === 'string') add(o[k])
   }
   // 한두 개만 보이면 우연일 수 있어 옵션 목록으로 보지 않아요.
   return out.length >= 2 ? out : []
@@ -339,7 +361,7 @@ const UI_ONLY_RE = /^(?:더보기|접기|도움\s*돼요(?:\s*\d+)?|댓글(?:\s*
 const DATE_RE = /^\d{2,4}[.\-/]\d{1,2}[.\-/]\d{1,2}\.?$/
 const RATING_RE = /^[1-5](?:\.\d)?$/
 const LABEL_KIND = { 상품명: 'product', 구매옵션: 'option', 체형정보: 'body' }
-const OPTION_SIZE_RE = /^(?:\d{1,2}\s*\(\s*(?:XXS|XS|S|M|L|XL|XXL|[2-5]XL|FREE|F)\s*\)|XXS|XS|S|M|L|XL|XXL|[2-5]XL|FREE|F|\d{2,3})$/i
+const OPTION_SIZE_RE = /^(?:\d{1,2}\s*\(\s*(?:XXS|XS|S|M|L|XL|XXL|[2-5]XL|FREE|F)\s*\)|XXS|XS|S|M|L|XL|XXL|[2-5]XL|FREE|F|\d{1,3})$/i
 const AVATAR_ALT_RE = /프로필|profile|avatar|아이콘|icon|logo|badge/i
 const MAX_PHOTOS = 5
 const MAX_SENTENCES = 40
