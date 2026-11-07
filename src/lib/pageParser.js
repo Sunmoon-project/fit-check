@@ -577,6 +577,25 @@ function hasImageNearSizeHeading(root) {
   return false
 }
 
+// 리뷰의 체형 정보 줄('남성 · 170cm · 70kg')에서 성별을 읽어요. 설계상 추정이고 실제 사이트로 확인한 것이 아니에요.
+// strict=false: 체형 정보 칸 전용이라 줄 안의 성별 단어를 읽어요.
+// strict=true: 카드 전체 글에서는 성별 단어 바로 옆에 키/몸무게 숫자가 붙은 경우만 읽어서 본문 속 단어를 오인하지 않아요.
+const GENDER_WORD = '(남성|여성|남자|여자|남|여)'
+const GENDER_BOUND_L = '(?<![가-힣A-Za-z])'
+const GENDER_BOUND_R = '(?![가-힣A-Za-z])'
+const GENDER_LOOSE_RE = new RegExp(`${GENDER_BOUND_L}${GENDER_WORD}${GENDER_BOUND_R}`)
+const GENDER_STRICT_RE = new RegExp(
+  `${GENDER_BOUND_L}${GENDER_WORD}\\s*[·/,|•ㆍ]?\\s*(?:\\d{3}(?:\\.\\d)?\\s*(?:cm|㎝)|\\d{2,3}\\s*(?:kg|㎏))|(?:\\d\\s*(?:cm|㎝|kg|㎏))\\s*[·/,|•ㆍ]?\\s*${GENDER_WORD}${GENDER_BOUND_R}`,
+  'i',
+)
+export function parseGender(text, strict = false) {
+  const t = String(text || '')
+  const m = t.match(strict ? GENDER_STRICT_RE : GENDER_LOOSE_RE)
+  if (!m) return null
+  const w = m[1] || m[2]
+  return w.startsWith('남') ? 'male' : 'female'
+}
+
 /**
  * @param root document 또는 같은 메서드를 가진 객체
  * @param pageUrl 현재 주소 (표시용)
@@ -638,6 +657,7 @@ export function parsePage(root, pageUrl = '', opts = {}) {
     // 구조를 찾았으면 상품명이 아닌 실제 본문·옵션·체형 정보로만 해석해요.
     const synthesized = v.structured ? [v.sizePart ? `구매 옵션 ${v.sizePart}.` : '', v.bodyInfo, v.body].filter(Boolean).join(' ') : t
     const parsed = parseReviewText(synthesized, sizeLabels)
+    parsed.gender = v.structured && v.bodyInfo ? parseGender(v.bodyInfo) : parseGender(t, true)
     if (!hasClue(parsed)) {
       reviewDropped.noClue += 1
       return
@@ -651,6 +671,7 @@ export function parsePage(root, pageUrl = '', opts = {}) {
       continue
     }
     const parsed = parseReviewText(t.slice(0, 500), sizeLabels)
+    parsed.gender = parseGender(t, true)
     if (hasClue(parsed)) entries.push({ text: t.slice(0, 500), parsed })
     else reviewDropped.noClue += 1
   }

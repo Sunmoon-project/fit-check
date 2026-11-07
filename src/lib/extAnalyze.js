@@ -38,6 +38,7 @@ function reviewView(r, disp = (x) => x) {
     height: r.height ?? null,
     weight: r.weight ?? null,
     size: r.size ? disp(r.size) : null,
+    gender: r.gender === 'male' || r.gender === 'female' ? r.gender : null,
     fit: r.fit ?? null,
     fitLabel: r.fit ? FIT_LABEL[r.fit] || null : null,
     similarity: Number.isFinite(r.similarity) ? r.similarity : null,

@@ -25,7 +25,7 @@ import {
 import { PRODUCTS } from '../src/data/mockData.js'
 import { parseReviewText } from '../src/lib/productCore.js'
 import { parseProductHtml } from '../server/productParser.js'
-import { parsePage, isProductPage, splitSentences, extractCardView } from '../src/lib/pageParser.js'
+import { parsePage, isProductPage, splitSentences, extractCardView, parseGender } from '../src/lib/pageParser.js'
 import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
 import { collectDiagnostics, formatReport, REPORT_MAX } from '../src/lib/diagnose.js'
 import { buildExportEnvelope, parseImportText, sanitizeItem, addImportedItem, LIMITS as IMPORT_LIMITS } from '../src/lib/wardrobeImport.js'
@@ -45,7 +45,7 @@ import {
   parseHeightCm, parseWeightKg, normalizeFit, normalizeRow, normalizeLines,
   confusionMatrix, accuracy, precisionRecall, neighborVotePredictions, trueRateByBucket, evaluate,
 } from './lib/fitMetrics.mjs'
-import { bodySimilarity } from '../src/lib/fitEngine.js'
+import { bodySimilarity, splitReviews, matchReviews, BODY_SIM } from '../src/lib/fitEngine.js'
 import { runHfTryOn, parseSse, spaceBaseUrl, isValidSpaceId, clearTryOnCache, garmentDescription, isTryOnSupported, DEFAULT_SPACE } from '../server/hfTryOn.js'
 
 import { toContribution, toBand, toDomain, contributionKey, ALLOWED_DOMAINS, SCHEMA_VERSION } from '../src/lib/contribution.js'
@@ -2157,6 +2157,72 @@ test('content.js 소스: 보내기는 클릭 핸들러 안에서만 만들고 �
   const src = readFileSync(new URL('../extension/content.js', import.meta.url), 'utf8')
   assert.ok(!/fetch\(|XMLHttpRequest|sendBeacon|WebSocket/.test(src))
   assert.ok(/addEventListener\('click', async \(\) => \{\n\s+const env = buildExportEnvelope/.test(src))
+})
+
+
+// ---- 성별 + 체형 유사도 기준 (가짜 HTML·가짜 데이터만 사용. 기준 숫자는 설계상 판단이고 실제 데이터로 검증한 값이 아니에요) ----
+test('가짜 문자열: 체형 정보 줄에서 성별을 읽는다 (남성/여성/남자/여자/남/여, 구분자 여러 가지)', () => {
+  for (const [s, g] of [['남성 · 170cm · 70kg', 'male'], ['여성 · 160cm · 50kg', 'female'], ['남자 175cm 70kg', 'male'], ['여자 / 158cm / 48kg', 'female'], ['남 180cm 75kg', 'male'], ['여 162cm 52kg', 'female']]) {
+    assert.equal(parseGender(s), g, s)
+    assert.equal(parseGender(s, true), g, `strict ${s}`)
+  }
+  assert.equal(parseGender('170cm · 70kg'), null)
+  assert.equal(parseGender(''), null)
+})
+
+test('가짜 문자열: 리뷰 본문 속 단어는 성별로 읽지 않는다 (카드 전체 글에서는 숫자 옆 표기만)', () => {
+  assert.equal(parseGender('남자친구 선물로 샀어요. 여름에 입기 좋아요. 키 170 몸무게 70', true), null)
+  assert.equal(parseGender('여자친구가 170cm 입니다', true), null)
+  assert.equal(parseGender('남성용인데 170cm 70kg 입니다', true), null)
+})
+
+test('가짜 HTML: 리뷰 카드의 체형 줄에서 review.gender를 읽고 본문 속 단어는 무시한다', () => {
+  const card = (info, body) => `<div class="review-item"><span>${info}</span> <span>구매 옵션 1 (M)</span> <p>${body}</p></div>`
+  const doc = fakeDocument(wrapBody(`${optionsHtml}${chartTable(OPTION_LIST_LABELS())}${card('남성 · 175cm · 70kg', '정사이즈예요 잘 맞아요')}${card('여성 · 160cm · 50kg', '남자친구 선물 정사이즈 잘 맞아요')}${card('175cm · 70kg', '남자친구 선물 정사이즈 잘 맞아요')}`))
+  const p = parsePage(doc, '')
+  const g = p.reviews.map((r) => r.gender)
+  assert.ok(g.includes('male') && g.includes('female'))
+  assert.ok(p.reviews.every((r) => r.gender === 'male' || r.gender === 'female' || r.gender === null))
+  assert.ok(p.reviews.filter((r) => r.height === 175 && r.gender === 'female').length === 0)
+})
+
+test('가짜 데이터: 성별이 다르면 0점이고 matched에 절대 들어가지 않는다 (기준 0이어도)', () => {
+  const me = { gender: 'male', height: 175, weight: 70 }
+  const r = { height: 175, weight: 70, gender: 'female' }
+  assert.equal(bodySimilarity(me, r), 0)
+  assert.equal(matchReviews(me, [r], 0).length, 0)
+  assert.equal(splitReviews(me, [r], 0).others.length, 1)
+})
+
+test('가짜 데이터: 후기 성별을 못 읽으면 10점 감점, 내 성별이 없으면 성별을 따지지 않는다', () => {
+  const me = { gender: 'male', height: 175, weight: 70 }
+  assert.equal(bodySimilarity(me, { height: 175, weight: 70, gender: 'male' }), 100)
+  assert.equal(bodySimilarity(me, { height: 175, weight: 70, gender: null }), 100 - BODY_SIM.unknownGenderPenalty)
+  assert.equal(bodySimilarity(me, { height: 175, weight: 70 }), 100 - BODY_SIM.unknownGenderPenalty)
+  const noG = { height: 175, weight: 70 }
+  assert.equal(bodySimilarity(noG, { height: 175, weight: 70, gender: 'female' }), 100)
+  assert.equal(bodySimilarity(noG, { height: 175, weight: 70 }), 100)
+  assert.equal(bodySimilarity(me, { height: null, weight: 70, gender: 'male' }), null)
+})
+
+test('가짜 데이터: 키가 같아도 몸무게 20kg 차이는 비슷한 체형이 아니다, 가까운 체형은 맞는다', () => {
+  const me = { gender: 'male', height: 175, weight: 70 }
+  assert.ok(bodySimilarity(me, { height: 175, weight: 90, gender: 'male' }) < BODY_SIM.threshold)
+  assert.equal(matchReviews(me, [{ height: 175, weight: 90, gender: 'male' }]).length, 0)
+  assert.ok(bodySimilarity(me, { height: 177, weight: 72, gender: 'male' }) >= BODY_SIM.threshold)
+  assert.equal(matchReviews(me, [{ height: 177, weight: 72, gender: 'male' }]).length, 1)
+  assert.equal(BODY_SIM.threshold, 65)
+})
+
+test('가짜 데이터: 체형 차이가 커질수록 유사도는 줄어들기만 한다', () => {
+  const me = { gender: 'female', height: 165, weight: 55 }
+  let prev = Infinity
+  for (let d = 0; d <= 40; d++) {
+    const sim = bodySimilarity(me, { height: 165 + d, weight: 55 + d, gender: 'female' })
+    assert.ok(sim <= prev)
+    prev = sim
+  }
+  assert.equal(prev, 0)
 })
 
 
