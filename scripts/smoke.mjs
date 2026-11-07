@@ -1589,4 +1589,45 @@ test('formatReport: 오류 위치 profile 단계도 허용된다', () => {
   assert.ok(formatReport({ ...base, errorName: 'Error', errorWhere: 'profile' }).includes('오류 위치: profile'))
 })
 
+test('parseReviewText(가짜 문자열): 구매 옵션에 사이즈가 없으면 평소 사이즈를 구매 사이즈로 읽지 않는다', () => {
+  assert.equal(parseReviewText('키 170cm 구매 옵션 : 블랙 평소 L 입는데 M 샀어요').size, 'M')
+  assert.equal(parseReviewText('키 170cm 구매 옵션 : 블랙 평소 L 입는데 정사이즈예요').size, null)
+  assert.equal(parseReviewText('키 170cm 구매 옵션 : 블랙 평소 L 입는데 M 샀어요', ['S', 'L']).size, null)
+  assert.equal(parseReviewText('평소 사이즈는 L인데 이번엔 M으로 구매했어요 키 175cm').size, 'M')
+  assert.equal(parseReviewText('보통 L 입는데 이건 잘 모르겠어요 키 175cm').size, null)
+  assert.equal(parseReviewText('키 170cm 구매 옵션 : 블랙 / L 평소 M 입는데 크게 나와요').size, 'L')
+  assert.equal(parseReviewText('구매 옵션 : 블랙 M, L 두 개 샀어요').size, null)
+})
+
+test('가짜 HTML: 리뷰의 구매 옵션에 사이즈가 없고 평소 사이즈만 있으면 옵션 이름 목록으로 교차 확인한다', () => {
+  const cards = [0, 1, 2].map((i) => `<div class="c"><span>25.01.0${i + 1}</span><span>구매 옵션 : 블랙 평소 L 입는데 ${i === 0 ? 'M 샀어요' : '잘 모르겠어요'} 키 17${i}cm</span><span>배송 빨라요</span></div>`).join('')
+  const p = parsePage(fakeDocument(wrapBody(`<ul class="option-list"><li>0 (S)</li><li>1 (M)</li><li>2 (L)</li></ul><div class="list">${cards}</div>`)), '')
+  assert.equal(p.reviews.length, 3)
+  assert.deepEqual(p.reviews.map((r) => r.size), ['M', null, null])
+})
+
+test('가짜 HTML: 사이즈표 격자 칸에 구매라는 낱말이 있어도 가짜 리뷰가 남지 않는다', () => {
+  const rows = [['S', '구매', '150cm', '50kg'], ['M', '155cm', '55kg', '61'], ['L', '160cm', '60kg', '62'], ['XL', '165cm', '65kg', '63']]
+    .map((r) => `<div class="r">${r.map((c) => `<span>${c}</span>`).join('')}</div>`)
+    .join('')
+  const p = parsePage(fakeDocument(wrapBody(`<div class="g"><div class="hd"><span>사이즈</span><span>가슴</span><span>키</span><span>몸무게</span></div>${rows}</div>${optionsHtml}`)), '')
+  assert.equal(p.reviewMeta.cards, 0)
+  assert.equal(p.reviews.length, 0)
+})
+
+test('가짜 HTML: 사이즈표 표 안의 review 클래스 요소와 서술형 없는 짧은 카드는 리뷰로 세지 않는다', () => {
+  const table = `<table class="size-review"><tr><th>사이즈</th><th>가슴</th><th>기장</th></tr><tr class="review-row"><td>S 구매 90cm 50kg</td><td>50</td><td>60</td></tr><tr><td>M</td><td>52</td><td>62</td></tr><tr><td>L</td><td>54</td><td>64</td></tr></table>`
+  const p = parsePage(fakeDocument(wrapBody(`${table}${optionsHtml}`)), '')
+  assert.equal(p.reviews.length, 0)
+  const bare = [0, 1, 2].map((i) => `<div class="r"><span>M</span><span>구매</span><span>17${i}cm</span></div>`).join('')
+  const q = parsePage(fakeDocument(wrapBody(`<div class="g">${bare}</div>`)), '')
+  assert.equal(q.reviews.length, 0)
+})
+
+test('가짜 HTML: 실측 낱말이 든 일반 리뷰 목록은 사이즈표로 오인해 버리지 않는다', () => {
+  const cards = [0, 1, 2].map((i) => `<div class="c"><span>25.01.0${i + 1}</span><span>구매 옵션 : 블랙 / M</span><span>기장</span><span>키 17${i}cm 몸무게 6${i}kg 구매했는데 만족해요</span></div>`).join('')
+  const p = parsePage(fakeDocument(wrapBody(`<div class="list">${cards}</div>`)), '')
+  assert.equal(p.reviews.length, 3)
+})
+
 console.log(`\n${passed}개 통과`)
