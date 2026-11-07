@@ -208,6 +208,10 @@ export function formatReport(d) {
   out.push(...diagnosticLines(d))
   out.push(`JSON-LD Product: ${yn(d.jsonLdProduct)}, og:type: ${d.ogType || '없음'}`)
   if (d.errorName) out.push(`오류: ${String(d.errorName).replace(/[^A-Za-z]/g, '').slice(0, 30)}`)
+  if (d.errorName && ['wait', 'analyze', 'render'].includes(d.errorWhere)) {
+    const ident = typeof d.errorIdent === 'string' && /^[A-Za-z_$][\w$]{0,40}$/.test(d.errorIdent) ? d.errorIdent : ''
+    out.push(`오류 위치: ${d.errorWhere}${ident ? `, 식별자: ${ident}` : ''}`)
+  }
   d.structure.forEach((s, i) => out.push(`\n구조 ${i + 1} (L=사이즈 글자, N=숫자, T=그 외 글, _=빈칸)\n${s}`))
   return out.join('\n').slice(0, REPORT_MAX)
 }

@@ -31,7 +31,11 @@ import { collectDiagnostics, formatReport, REPORT_MAX } from '../src/lib/diagnos
 import { buildProfile, isUsableProfile } from '../src/lib/extProfile.js'
 import { fakeDocument } from './lib/cheerioDom.mjs'
 import { checkManifest } from './checkExtension.mjs'
-import { readFileSync } from 'node:fs'
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve as resolvePath } from 'node:path'
+import vm from 'node:vm'
+import { build as viteBuild } from 'vite'
 import { findSimilar, describeDiff, categoryGroup, makeWardrobeItem } from '../src/lib/wardrobe.js'
 import { isPrivateIp, decodeHtml } from '../server/safeFetch.js'
 import { checkPostRequest } from '../server/api.js'
@@ -1354,6 +1358,78 @@ test('diagnose: 리뷰 불러오기 멈춘 이유(시간 한도·중단)가 리�
     const rep = formatReport(collectDiagnostics(fakeDocument(wrapBody(NOCHART_HTML)), '', '', { scroll: { before: 2, after: 9, stop } }))
     assert.ok(rep.includes(stop), stop)
   }
+})
+
+// 확장 content.js를 임시 폴더에 IIFE로 빌드해 가짜 DOM(node:vm)에서 fab 클릭(run) 경로를 실행합니다. 실제 무신사·크롬이 아니에요.
+async function runContentInFakeDom() {
+  const root = resolvePath(import.meta.dirname, '..')
+  const outDir = mkdtempSync(join(tmpdir(), 'fitcheck-content-'))
+  try {
+    await viteBuild({
+      configFile: false, root, logLevel: 'silent', publicDir: false,
+      build: { outDir, emptyOutDir: true, minify: false, target: 'es2020', lib: { entry: resolvePath(root, 'extension/content.js'), formats: ['iife'], name: 'fitcheck_content', fileName: () => 'content.js' } },
+    })
+    const code = readFileSync(join(outDir, 'content.js'), 'utf8')
+    const texts = []
+    const listeners = {}
+    const makeEl = (tag) => {
+      const e = {
+        tagName: String(tag).toUpperCase(), children: [], className: '', hidden: false, disabled: false, style: {},
+        _text: '', set textContent(v) { this._text = String(v); texts.push(this._text) }, get textContent() { return this._text },
+        append(...n) { this.children.push(...n) }, appendChild(n) { this.children.push(n); return n }, replaceChildren() { this.children = [] },
+        setAttribute() {}, getAttribute() { return null }, addEventListener(type, fn) { (this._l ||= {})[type] = fn },
+        attachShadow() { return makeEl('shadow') }, remove() {}, select() {}, querySelectorAll() { return [] }, querySelector() { return null }, closest() { return null },
+      }
+      return e
+    }
+    const created = []
+    const doc = {
+      readyState: 'complete', body: makeEl('body'), documentElement: makeEl('html'),
+      createElement(tag) { const e = makeEl(tag); created.push(e); return e },
+      querySelectorAll() { return [] }, querySelector() { return null }, execCommand() { return false },
+    }
+    const win = { scrollX: 0, scrollY: 0, scrollTo() {} }
+    const profile = buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular', measurements: {} }).profile
+    const sandbox = {
+      document: doc, window: win, location: { href: 'https://shop.example/products/1' }, navigator: {},
+      MutationObserver: class { observe() {} disconnect() {} },
+      CSSStyleSheet: class { replaceSync() {} },
+      setTimeout: (f) => setTimeout(f, 0), clearTimeout,
+      chrome: {
+        runtime: { getManifest: () => ({ version: '0.0.0' }), onMessage: { addListener: (f) => { listeners.msg = f } } },
+        storage: { local: { get: (k, cb) => cb({ fitcheckProfile: profile }) } },
+      },
+    }
+    sandbox.window = Object.assign(sandbox.window, sandbox)
+    vm.createContext(sandbox)
+    vm.runInContext(code, sandbox)
+    listeners.msg({ type: 'fitcheck-run' }) // 팝업에서 실행한 경우: 버튼을 만들고 run()을 호출
+    for (let i = 0; i < 200; i++) {
+      await new Promise((r) => setTimeout(r, 10))
+      const f = created.find((e) => e.className === 'fab')
+      if (f && !f.disabled && f.textContent === '내 사이즈 찾기') break
+    }
+    return texts
+  } finally {
+    rmSync(outDir, { recursive: true, force: true })
+  }
+}
+
+await atest('content.js(가짜 DOM, vm): 분석 실행 경로에서 ReferenceError 없이 끝난다', async () => {
+  const texts = await runContentInFakeDom()
+  assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')), '오류 카드가 나오면 안 돼요')
+  assert.ok(texts.some((t) => t.includes('내 사이즈 찾기')), '실행이 끝나 버튼이 돌아와야 해요')
+})
+
+test('formatReport: 오류 위치와 식별자 줄은 검증된 값만 보인다', () => {
+  const base = collectDiagnostics(fakeDocument(wrapBody(NOCHART_HTML)), '')
+  const rep = formatReport({ ...base, errorName: 'ReferenceError', errorWhere: 'wait', errorIdent: 'state' })
+  assert.ok(rep.includes('오류 위치: wait, 식별자: state'))
+  const bad = formatReport({ ...base, errorName: 'ReferenceError', errorWhere: 'wait', errorIdent: 'a b<script>' })
+  assert.ok(bad.includes('오류 위치: wait') && !bad.includes('식별자') && !bad.includes('script'))
+  const badWhere = formatReport({ ...base, errorName: 'ReferenceError', errorWhere: '리뷰 본문 키 175', errorIdent: 'state' })
+  assert.ok(!badWhere.includes('오류 위치') && !badWhere.includes('175'))
+  assert.ok(!formatReport(base).includes('오류 위치'))
 })
 
 console.log(`\n${passed}개 통과`)
