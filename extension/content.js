@@ -291,13 +291,15 @@ function reviewItem(rv) {
   const body = el('div', 'rvt')
   li.append(body)
   const full = rv.text
+  if (!full && !sentences) body.hidden = true
   const long = sentences ? sentences.length > SENT_PREVIEW : full.length > REVIEW_PREVIEW
   let open = false
   const paint = () => {
     body.replaceChildren()
     if (sentences) {
       for (const s of open ? sentences : sentences.slice(0, SENT_PREVIEW)) body.append(el('p', 'sent', s))
-    } else {
+      if (open && rv.sentencesCut) body.append(el('p', 'sent', '… 긴 리뷰라 앞부분만 보여요'))
+    } else if (full) {
       body.append(el('p', 'sent', open || full.length <= REVIEW_PREVIEW ? full : `${full.slice(0, REVIEW_PREVIEW)}…`))
     }
   }

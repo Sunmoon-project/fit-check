@@ -1,6 +1,6 @@
 // 확장에서 쓰는 분석 한 번: 페이지 DOM + 프로필 → 화면에 보여줄 값.
 // 추천은 웹 앱과 같은 generateFitComment를 그대로 씁니다.
-import { parsePage, splitSentences } from './pageParser.js'
+import { parsePage, splitSentences, SENTENCE_LIMIT } from './pageParser.js'
 import { collectDiagnostics, diagnosticLines } from './diagnose.js'
 import { generateFitComment, describeEvidence, CONFIDENCE_LABEL, FIT_LABEL } from './fitEngine.js'
 // 사용자가 직접 적은 사이즈표: 열 이름(예: 어깨 가슴 총장)과 줄(예: M 50 57 68) → buildSizeChart 입력 모양.
@@ -25,13 +25,15 @@ const MAX_SHOWN = { matched: 50, others: 100 }
 // 읽지 못한 항목은 null로 남겨서 화면에서 '못 읽음'으로 표시합니다.
 function reviewView(r, disp = (x) => x) {
   const v = r.view
+  const allSent = v ? splitSentences(v.body, Infinity) : []
   const urls = (v?.photos || []).filter((u) => /^https?:\/\//i.test(u)).slice(0, 5)
   return {
     text: String(v ? v.body : r.text || ''),
     nick: v?.nick || '',
     productName: v?.productName || '',
     body: v?.body || '',
-    sentences: v ? splitSentences(v.body) : [],
+    sentences: allSent.slice(0, SENTENCE_LIMIT),
+    sentencesCut: allSent.length > SENTENCE_LIMIT,
     photos: urls,
     height: r.height ?? null,
     weight: r.weight ?? null,
