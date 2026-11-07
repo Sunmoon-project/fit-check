@@ -92,6 +92,16 @@ tr.rec .cv{color:#9fe0ba}
 .tp{max-height:320px;overflow-y:auto;overscroll-behavior:contain;padding-top:2px}
 .gal{display:flex;flex-direction:column;gap:10px;margin-top:6px}
 .pf{margin:0;display:flex;flex-direction:column;gap:4px}
+.ph[role=button]{cursor:zoom-in}
+.ph:focus-visible{outline:2px solid #111;outline-offset:1px}
+.zoom{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.82)}
+.zimg{max-width:calc(100vw - 120px);max-height:calc(100vh - 96px);object-fit:contain;border-radius:6px;background:#111}
+.zbtn{position:absolute;border:0;border-radius:999px;background:#fff;color:#111;min-width:44px;height:44px;font-size:20px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+.zbtn:focus-visible{outline:3px solid #8ab4ff;outline-offset:2px}
+.zx{top:16px;right:16px}
+.zp{left:16px;top:50%;transform:translateY(-50%)}
+.zn{right:16px;top:50%;transform:translateY(-50%)}
+.zc{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);color:#fff;font-size:13px}
 .ph.big{width:100%;height:auto;max-height:280px;object-fit:contain;background:#f6f6f6}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .mecard{display:flex;align-items:baseline;gap:10px;background:#f4f4f5;border-radius:10px;padding:10px 12px;margin-top:2px}
@@ -139,6 +149,7 @@ let host = null
 let shadow = null
 let panel = null
 let fab = null
+let wrapEl = null
 let busy = false
 let loader = null // 리뷰 더 불러오기 진행 상태 { aborted }
 
@@ -166,6 +177,7 @@ function ensureUi() {
   fab.textContent = '내 사이즈 찾기'
   fab.addEventListener('click', run)
   wrap.append(panel, fab)
+  wrapEl = wrap
   shadow.appendChild(wrap)
   document.documentElement.appendChild(host)
 }
@@ -451,7 +463,7 @@ function reviewItem(rv) {
   const urls = (rv.photos || []).filter((u) => /^https?:\/\//i.test(u))
   if (urls.length) {
     const row = el('div', 'phs')
-    for (const url of urls) {
+    urls.forEach((url, k) => {
       const img = document.createElement('img')
       img.className = 'ph'
       img.src = url
@@ -459,11 +471,77 @@ function reviewItem(rv) {
       img.loading = 'lazy'
       img.referrerPolicy = 'no-referrer'
       img.decoding = 'async'
+      makeZoomable(img, urls, k)
       row.append(img)
-    }
+    })
     li.append(row)
   }
   return li
+}
+
+// 리뷰 사진 확대: https 주소만 열고, 닫기(버튼·바깥·Esc)와 이전/다음(버튼·좌우 화살표)을 지원해요. 닫으면 눌렀던 사진으로 포커스가 돌아가요.
+function openZoom(urls, start, opener) {
+  const list = (urls || []).filter((u) => typeof u === 'string' && /^https:\/\//i.test(u))
+  if (!list.length || !wrapEl) return null
+  let i = Math.min(Math.max(start, 0), list.length - 1)
+  const ov = el('div', 'zoom')
+  ov.setAttribute('role', 'dialog')
+  ov.setAttribute('aria-modal', 'true')
+  ov.setAttribute('aria-label', '사진 확대')
+  const img = document.createElement('img')
+  img.className = 'zimg'
+  img.alt = '확대한 리뷰 사진'
+  img.referrerPolicy = 'no-referrer'
+  const count = el('div', 'zc')
+  const mk = (cls, label, text, fn) => {
+    const b = el('button', `zbtn ${cls}`, text)
+    b.type = 'button'
+    b.setAttribute('aria-label', label)
+    b.addEventListener('click', (e) => {
+      if (e && e.stopPropagation) e.stopPropagation()
+      fn()
+    })
+    return b
+  }
+  const close = () => {
+    ov.remove()
+    if (opener && opener.focus) opener.focus()
+  }
+  const show = (n) => {
+    i = (n + list.length) % list.length
+    img.src = list[i]
+    count.textContent = `${i + 1} / ${list.length}`
+  }
+  const closeBtn = mk('zx', '닫기', '✕', close)
+  ov.append(img, closeBtn)
+  if (list.length > 1) ov.append(mk('zp', '이전 사진', '‹', () => show(i - 1)), mk('zn', '다음 사진', '›', () => show(i + 1)), count)
+  show(i)
+  ov.addEventListener('click', (e) => {
+    if (!e || e.target === ov) close()
+  })
+  ov.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { if (e.preventDefault) e.preventDefault(); close() }
+    else if (e.key === 'ArrowLeft' && list.length > 1) { if (e.preventDefault) e.preventDefault(); show(i - 1) }
+    else if (e.key === 'ArrowRight' && list.length > 1) { if (e.preventDefault) e.preventDefault(); show(i + 1) }
+  })
+  wrapEl.append(ov)
+  if (closeBtn.focus) closeBtn.focus()
+  return ov
+}
+
+// 작은 사진을 키보드로도 누를 수 있게 만들고, 누르면 같은 리뷰의 사진들을 확대해요 (https만).
+function makeZoomable(img, urls, index) {
+  if (!/^https:\/\//i.test(urls[index] || '')) return
+  img.tabIndex = 0
+  img.setAttribute('role', 'button')
+  img.setAttribute('aria-label', '리뷰 사진 확대')
+  img.addEventListener('click', () => openZoom(urls, index, img))
+  img.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      if (e.preventDefault) e.preventDefault()
+      openZoom(urls, index, img)
+    }
+  })
 }
 
 function reviewList(list) {
@@ -480,7 +558,7 @@ function photoGallery(list) {
     const urls = (rv.photos || []).filter((u) => /^https:\/\//i.test(u)).slice(0, 5)
     if (!urls.length) continue
     const fig = el('figure', 'pf')
-    for (const url of urls) {
+    urls.forEach((url, k) => {
       const img = document.createElement('img')
       img.className = 'ph big'
       img.src = url
@@ -488,9 +566,10 @@ function photoGallery(list) {
       img.loading = 'lazy'
       img.referrerPolicy = 'no-referrer'
       img.decoding = 'async'
+      makeZoomable(img, urls, k)
       fig.append(img)
       count += 1
-    }
+    })
     const cap = [rv.nick || '구매자', rv.height != null && rv.weight != null ? `${rv.height}cm ${rv.weight}kg` : null, rv.size].filter(Boolean).join(' · ')
     fig.append(el('figcaption', 'tiny', cap))
     box.append(fig)
