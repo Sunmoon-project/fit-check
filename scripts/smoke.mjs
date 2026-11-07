@@ -3984,4 +3984,129 @@ await atest('content.js(가짜 DOM, vm): 신발 페이지를 상의로 바꾸면
   assert.ok(texts.slice(mark).some((t) => t.includes('발길이')), '신발 비교로 돌아왔다')
 })
 
+// ---- 웹 화면 서버 렌더 테스트: 컴포넌트를 실제로 그려 보고 핵심 글자·구조를 확인한다 (실제 브라우저·쇼핑몰 확인은 아님) ----
+import { loadComponents, render, textOf } from './lib/renderJsx.mjs'
+
+const WEB = await loadComponents()
+const webProfile = shoeProfile({ footWidth: 'wide', measurements: { footLength: '233' } })
+const WIDTH_TABLE = `<table><tr><th>사이즈</th><th>발길이</th><th>발볼</th></tr><tr><td>240</td><td>240</td><td>92</td></tr><tr><td>250</td><td>250</td><td>98</td></tr><tr><td>260</td><td>260</td><td>102</td></tr></table>`
+const webShoeProduct = () => ({
+  ...parsePage(fakeDocument(`<html><head><title>러닝 스니커즈</title></head><body><h1>러닝 스니커즈</h1>${WIDTH_TABLE}</body></html>`), ''),
+  mall: 'shop', url: 'https://shop.example/shoe',
+})
+const noop = () => {}
+
+test('웹 렌더: ShoeCompare - 발볼 근거 한 줄, 추천 배지, 행 구성', () => {
+  const product = webShoeProduct()
+  assert.equal(product.category, 'shoes')
+  const view = shoeViewFor(product, webProfile)
+  assert.ok(view.widthLine)
+  const html = render(WEB.ShoeCompare, { view, selectedSize: null, onSelect: noop })
+  const txt = textOf(html)
+  assert.ok(html.includes('class="card tone-measure shoe-compare"'))
+  assert.ok(txt.includes('신발 사이즈 비교') && txt.includes('내 발길이 233mm') && txt.includes('발볼 넓은 편'))
+  assert.ok(html.includes('shoe-width-line') && txt.includes('사이즈표 발볼 기준, 휴리스틱'), '발볼 근거 한 줄')
+  assert.ok(txt.includes(view.widthLine))
+  assert.equal((html.match(/class="size-tab/g) || []).length, 3)
+  assert.ok(html.includes('tab-badge') && txt.includes('추천'))
+  assert.ok(txt.includes('휴리스틱'))
+  assert.equal(render(WEB.ShoeCompare, { view: null }), '')
+})
+
+test('웹 렌더: ShoeCompare - 발길이를 모르면 안내, 발볼 근거 줄은 없다', () => {
+  const view = { footLength: null, footWidthLabel: '', rows: [], reasons: [], notes: ['발길이를 입력하면 추천해요'], widthLine: '', heuristicNote: '휴리스틱 기준이에요' }
+  const html = render(WEB.ShoeCompare, { view, selectedSize: null })
+  assert.ok(textOf(html).includes('발길이를 알 수 없어요') && textOf(html).includes('발길이를 입력하면 추천해요'))
+  assert.ok(!html.includes('shoe-width-line') && !html.includes('size-tab'))
+})
+
+test('웹 렌더: CategoryPicker - 안내 한 줄과 신발로 되돌리는 버튼', () => {
+  const base = webShoeProduct()
+  const top = recategorizeProduct(base, 'top')
+  assert.ok(top.categoryNotice)
+  const html = render(WEB.CategoryPicker, { product: top, onPick: noop })
+  const txt = textOf(html)
+  assert.ok(html.includes('category-notice') && txt.includes('신발 사이즈표라 이 종류로는 실측 비교를 하지 않아요'))
+  assert.ok(/<button[^>]*class="chip small"[^>]*>신발로 다시 보기<\/button>/.test(html), '되돌리기 버튼')
+  assert.ok(txt.includes('직접 고른 종류예요'))
+  assert.ok(html.includes('aria-pressed="true"'))
+  // 안내가 없으면(신발로 되돌린 뒤) 줄도 버튼도 없다
+  const back = recategorizeProduct(base, 'shoes')
+  const html2 = render(WEB.CategoryPicker, { product: back, onPick: noop })
+  assert.ok(!html2.includes('category-notice') && !textOf(html2).includes('신발로 다시 보기'))
+  // 신뢰도 높고 직접 고르지 않았으면 아무것도 그리지 않는다
+  assert.equal(render(WEB.CategoryPicker, { product: { category: 'top', categoryConfidence: 'high' }, onPick: noop }), '')
+})
+
+test('웹 렌더: SizeSummary - 사이즈 칩, 추천 표시, 실측, 표가 없을 때 안내', () => {
+  const clothing = { ...PRODUCTS['https://shop-a.example.com/goods/12345'] }
+  const result = generateFitComment(profile, clothing, {})
+  const compare = compareSizes({ chart: clothing.sizeChart, bodyValues: bodyValuesForProfile(profile).values, measured: result.measured, category: 'top', calibration: {} })
+  const html = render(WEB.SizeSummary, { compare, recommendedSize: result.recommendedSize, category: 'top' })
+  const txt = textOf(html)
+  assert.ok(txt.includes('사이즈표 요약'))
+  assert.equal((html.match(/class="ss-chip( on)?"/g) || []).length, 3)
+  assert.ok(html.includes('ss-chip on') && txt.includes(`${result.recommendedSize} 추천`))
+  assert.ok(txt.includes(`${result.recommendedSize} 실측`) && txt.includes('cm'))
+  const none = textOf(render(WEB.SizeSummary, { compare: { sizes: [] }, recommendedSize: null, category: 'top' }))
+  assert.ok(none.includes(NO_CHART_MESSAGE) && none.includes('아래 사이즈표를 확인해 주세요'))
+})
+
+test('웹 렌더: SimilarityCompare - 후기 체형이 있을 때만 카드를 그리고 접힌 상태 구조', () => {
+  const reviews = [
+    { id: 1, nick: '구매자A', height: 176, weight: 72, gender: 'male', size: 'L' },
+    { id: 2, nick: '구매자B', height: null, weight: null, size: 'M' },
+  ]
+  const html = render(WEB.SimilarityCompare, { profile, reviews })
+  const txt = textOf(html)
+  assert.ok(html.includes('card tone-compare') && txt.includes('체형 비교') && txt.includes('내 체형과 비교하기'))
+  assert.ok(html.includes('aria-expanded="false"') && html.includes('aria-controls="sim-compare-panel"'))
+  assert.ok(!html.includes('sim-compare-panel"') || !html.includes('id="sim-compare-panel"'), '접힌 상태에서는 본문이 없다')
+  assert.equal(render(WEB.SimilarityCompare, { profile, reviews: [reviews[1]] }), '', '체형 후기가 없으면 그리지 않는다')
+})
+
+test('웹 렌더: Wardrobe - 지원하지 않는 신발 사이즈는 이유를 보여주고, mm 신발과 옷은 판정을 보여준다', () => {
+  const mk = (size, extra = {}) => makeWardrobeItem({
+    product: { name: '러닝화', mall: 'shop', category: 'shoes', url: `https://shop.example/s-${size}`, sizeChart: { measures: { [size]: { length: 1 } } } },
+    size, profile: { gender: 'male', height: 175, weight: 70, footLength: 265 }, now: 1, ...extra,
+  })
+  const un = mk('M')
+  assert.equal(un.verdictStatus, 'unsupported')
+  const html = render(WEB.Wardrobe, { items: [{ ...un, id: 'a' }], onDelete: noop, onBack: noop })
+  const txt = textOf(html)
+  assert.ok(html.includes('wd-unsupported'))
+  assert.ok(txt.includes(SHOE_UNSUPPORTED_NOTE), '이유 문구')
+  assert.ok(txt.includes('사이즈 이름이 mm가 아니라서 내 발길이와 비교하지 못했어요'))
+  assert.ok(!txt.includes('부위별 판정 없음'))
+  // 비슷한 옷 카드(결과 화면용)에서도 같은 이유가 보인다
+  const peer = { ...un, id: 'p', measures: { footLength: 265 }, product: { ...un.product, url: 'https://shop.example/other' } }
+  const target = { ...mk('L'), id: 'current', measures: { footLength: 270 }, product: { ...un.product, url: 'https://shop.example/cur' } }
+  const sim = textOf(render(WEB.SimilarInWardrobe, { target, wardrobe: [peer] }))
+  assert.ok(sim.includes('내 옷장 속 비슷한 옷') && sim.includes(SHOE_UNSUPPORTED_NOTE), '비슷한 옷 카드에도 이유가 보인다')
+  // 빈 옷장
+  assert.ok(textOf(render(WEB.Wardrobe, { items: [], onDelete: noop, onBack: noop })).includes('아직 담은 옷이 없어요'))
+})
+
+test('웹 렌더: ResultView(옷) - 요약·체형 비교·사이즈표가 나오고 신발 비교는 없다', () => {
+  const clothing = { ...PRODUCTS['https://shop-a.example.com/goods/12345'], source: 'demo' }
+  const html = render(WEB.ResultView, { product: clothing, profile, calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop })
+  const txt = textOf(html)
+  assert.ok(txt.includes(clothing.name) && txt.includes('A몰') && txt.includes('데모'))
+  assert.ok(txt.includes('사이즈표 요약'))
+  assert.ok(txt.includes('체형 비교'), '옷은 체형 비교가 있다')
+  assert.ok(!html.includes('shoe-compare') && !txt.includes('신발 사이즈 비교'))
+  assert.ok(/옷장에 담기 \((S|M|L)\)/.test(txt) && txt.includes('다른 옷 찾기'))
+})
+
+test('웹 렌더: ResultView(신발) - 신발 비교와 발볼 근거, 옷 전용 카드는 없다', () => {
+  const product = webShoeProduct()
+  const html = render(WEB.ResultView, { product, profile: webProfile, calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop })
+  const txt = textOf(html)
+  assert.ok(html.includes('shoe-compare') && txt.includes('신발 사이즈 비교') && txt.includes('내 발길이 233mm'))
+  assert.ok(html.includes('shoe-width-line'), '발볼 근거 한 줄')
+  assert.ok(!txt.includes('사이즈표 요약') && !txt.includes('체형 비교'), '신발에는 옷 전용 카드가 없다')
+  assert.ok(/옷장에 담기 \(\d{3}\)/.test(txt), '추천 mm가 담기 버튼에 들어간다')
+  assert.ok(txt.includes('다른 옷 찾기'))
+})
+
 console.log(`\n${passed}개 통과`)
