@@ -27,13 +27,14 @@ import { isPrivateIp, decodeHtml } from '../server/safeFetch.js'
 import { checkPostRequest } from '../server/api.js'
 import {
   parseHeightCm, parseWeightKg, normalizeFit, normalizeRow, normalizeLines,
-  confusionMatrix, accuracy, precisionRecall, neighborVotePredictions, trueRateByBucket,
+  confusionMatrix, accuracy, precisionRecall, neighborVotePredictions, trueRateByBucket, evaluate,
 } from './lib/fitMetrics.mjs'
 import { bodySimilarity } from '../src/lib/fitEngine.js'
 import { runHfTryOn, parseSse, spaceBaseUrl, isValidSpaceId, clearTryOnCache, garmentDescription, isTryOnSupported, DEFAULT_SPACE } from '../server/hfTryOn.js'
 
-import { toContribution, toBand, toDomain, SCHEMA_VERSION } from '../src/lib/contribution.js'
-import { CONSENT_SUMMARY } from '../src/data/consent.js'
+import { toContribution, toBand, toDomain, contributionKey, SCHEMA_VERSION } from '../src/lib/contribution.js'
+import { CONSENT_SUMMARY, CONSENT_VERSION } from '../src/data/consent.js'
+import { loadConsent, saveConsent, enqueueContribution, loadContribQueue } from '../src/lib/storage.js'
 
 let passed = 0
 function test(name, fn) {
@@ -715,6 +716,82 @@ test('toContribution: 기존 feedback 형식(parts 없음 등)도 처리, 필수
 test('동의 문구에 철회와 미동의 사용 가능 안내 포함', () => {
   const all = CONSENT_SUMMARY.join(' ')
   assert.ok(all.includes('철회') && all.includes('동의하지 않아도'))
+})
+
+test('toDomain: IP, localhost, 사설·예시 호스트는 null', () => {
+  for (const u of ['http://192.168.0.1/a', 'http://localhost:3000/a', 'http://[::1]/a', 'https://shop.internal/a', 'https://intranet/a', 'https://a.example.com/p', 'https://example.com/p', 'https://x.test/p']) assert.equal(toDomain(u), null, u)
+  assert.equal(toDomain('https://m.shop.co.kr/p'), 'm.shop.co.kr')
+})
+
+test('toContribution: 공개 도메인을 알 수 없으면 null(데모 상품 제외)', () => {
+  assert.equal(toContribution({ ...FB, url: 'https://shop.example.com/p/1' }, PF, true), null)
+  assert.equal(toContribution({ ...FB, url: '' }, PF, true), null)
+})
+
+test('toContribution: shape는 어깨·배·하체만 복사', () => {
+  const c = toContribution(FB, { ...PF, shape: { shoulder: 'wide', belly: 'none', lower: 'normal', extra: 'x', nested: { a: 1 } } }, true)
+  assert.deepEqual(c.body.shape, { shoulder: 'wide', belly: 'none', lower: 'normal' })
+  assert.equal(toContribution(FB, { ...PF, shape: null }, true).body.shape, null)
+})
+
+test('동의 문구: 미구현 k-익명 공개를 현재형으로 약속하지 않음', () => {
+  const all = CONSENT_SUMMARY.join(' ')
+  assert.ok(all.includes('계획') && all.includes('아직 적용되지 않았어요'))
+  assert.ok(!all.includes('가려낼 수 있는 값은 보내지 않아요'))
+})
+
+function withLocalStorage(fn) {
+  const store = new Map()
+  globalThis.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  }
+  try { fn() } finally { delete globalThis.localStorage }
+}
+
+test('대기열: 같은 달·도메인·종류·사이즈의 다른 상품은 덮어쓰지 않고, 같은 상품은 최신으로 교체', () => {
+  withLocalStorage(() => {
+    const a = { ...FB, url: 'https://www.musinsa.com/products/111' }
+    const b = { ...FB, url: 'https://www.musinsa.com/products/222' }
+    assert.notEqual(contributionKey(a), contributionKey(b))
+    assert.equal(contributionKey(a), contributionKey({ ...a, url: 'https://www.musinsa.com/products/111?utm=1' }))
+    enqueueContribution(toContribution(a, PF, true), contributionKey(a), CONSENT_VERSION)
+    enqueueContribution(toContribution(b, PF, true), contributionKey(b), CONSENT_VERSION)
+    assert.equal(loadContribQueue().length, 2)
+    enqueueContribution(toContribution({ ...a, result: 'small' }, PF, true), contributionKey(a), CONSENT_VERSION)
+    const q = loadContribQueue()
+    assert.equal(q.length, 2)
+    assert.equal(q.find((e) => e.key === contributionKey(a)).record.result, 'small')
+    assert.ok(!JSON.stringify(q).includes('111'))
+    assert.equal(enqueueContribution(null, 'k', 1), false)
+  })
+})
+
+test('동의 버전이 바뀌면 이전 동의로 쌓인 대기열도 지워짐', () => {
+  withLocalStorage(() => {
+    saveConsent(true, CONSENT_VERSION)
+    enqueueContribution(toContribution(FB, PF, true), contributionKey(FB), CONSENT_VERSION)
+    assert.equal(loadConsent(CONSENT_VERSION), true)
+    assert.equal(loadContribQueue().length, 1)
+    assert.equal(loadConsent(CONSENT_VERSION + 1), false)
+    assert.equal(loadContribQueue().length, 0)
+    assert.equal(loadConsent(CONSENT_VERSION), false)
+  })
+})
+
+test('fitMetrics: 이웃 투표 동률은 예측 불가로 처리하고 집계', () => {
+  // 비슷한 체형 이웃 둘의 라벨이 small/large로 갈려 득표가 같음
+  const rows = [
+    { item: 'a', size: 'M', fit: 'true', height: 165, weight: 55 },
+    { item: 'a', size: 'M', fit: 'small', height: 165, weight: 55 },
+    { item: 'a', size: 'M', fit: 'large', height: 165, weight: 55 },
+  ]
+  const p = neighborVotePredictions(rows, bodySimilarity)
+  const me = p.find((x) => x.index === 0)
+  assert.equal(me.predicted, null)
+  assert.equal(me.tie, true)
+  assert.equal(evaluate(rows, bodySimilarity).ties, 3) // 세 행 모두 이웃 둘의 라벨이 갈림
 })
 
 console.log(`\n${passed}개 통과`)

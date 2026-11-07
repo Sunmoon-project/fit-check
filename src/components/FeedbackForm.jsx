@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { calibrationSummary } from '../lib/fitEngine.js'
-import { toContribution } from '../lib/contribution.js'
+import { toContribution, contributionKey } from '../lib/contribution.js'
 import { loadConsent, saveConsent, enqueueContribution } from '../lib/storage.js'
 import { CONSENT_VERSION, CONSENT_LABEL, CONSENT_SUMMARY, CONSENT_STATUS_NOTE } from '../data/consent.js'
 
@@ -38,7 +38,7 @@ export default function FeedbackForm({ product, perSize, defaultSize, existing, 
     }
     onSave(item)
     // 동의한 경우에만 익명 레코드를 이 브라우저 대기열에 둡니다(서버 전송 없음).
-    if (consent) enqueueContribution(toContribution(item, profile, true))
+    if (consent) enqueueContribution(toContribution(item, profile, true), contributionKey(item), CONSENT_VERSION)
     setSaved(true)
   }
 
