@@ -1,6 +1,7 @@
 // manifest.json 검사. 빌드 결과(dist-extension)가 있으면 참조 파일이 있는지도 확인합니다.
 import { readFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { findUndeclared } from './checkGlobals.mjs'
 
 export function checkManifest(m, dir = null) {
   const errors = []
@@ -40,6 +41,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (/<script(?![^>]*\ssrc=)[^>]*>/i.test(html)) errors.push('popup.html에 인라인 스크립트가 있어요')
   for (const f of ['content.js', 'popup.js']) {
     const code = readFileSync(resolve(dir, f), 'utf8')
+    try {
+      const bad = findUndeclared(code)
+      if (bad.length) errors.push(`${f}에 선언되지 않은 식별자가 있어요: ${bad.join(', ')}`)
+    } catch (e) {
+      errors.push(`${f} 문법 분석 실패: ${e.message}`)
+    }
     if (/\b(fetch|XMLHttpRequest|sendBeacon|WebSocket)\b\s*\(/.test(code) || /new (WebSocket|XMLHttpRequest)/.test(code)) errors.push(`${f}에 네트워크 호출이 있어요`)
   }
   if (errors.length) {

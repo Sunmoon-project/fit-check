@@ -31,6 +31,7 @@ import { collectDiagnostics, formatReport, REPORT_MAX } from '../src/lib/diagnos
 import { buildProfile, isUsableProfile } from '../src/lib/extProfile.js'
 import { fakeDocument } from './lib/cheerioDom.mjs'
 import { checkManifest } from './checkExtension.mjs'
+import { findUndeclared } from './checkGlobals.mjs'
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
@@ -1628,6 +1629,39 @@ test('가짜 HTML: 실측 낱말이 든 일반 리뷰 목록은 사이즈표로 
   const cards = [0, 1, 2].map((i) => `<div class="c"><span>25.01.0${i + 1}</span><span>구매 옵션 : 블랙 / M</span><span>기장</span><span>키 17${i}cm 몸무게 6${i}kg 구매했는데 만족해요</span></div>`).join('')
   const p = parsePage(fakeDocument(wrapBody(`<div class="list">${cards}</div>`)), '')
   assert.equal(p.reviews.length, 3)
+})
+
+test('checkGlobals(가짜 코드 조각): 다른 함수의 지역 변수를 참조하는 직전 state 버그 모양을 잡는다', () => {
+  const buggy = `(function(){
+    async function run() { let state = 'start'; await waitForRender(); state = 'done' }
+    function waitForRender() { return new Promise((resolve) => { setTimeout(resolve, 10); console.log(state) }) }
+    run(); chrome.runtime.sendMessage({})
+  })()`
+  assert.deepEqual(findUndeclared(buggy), ['state'])
+  assert.deepEqual(findUndeclared('(function(){ const a = 1; function f(){ return a + typoName } f(); document.title })()'), ['typoName'])
+})
+
+test('checkGlobals(가짜 코드 조각): 선언된 이름·브라우저 전역·화살표/클래스/구조분해는 오탐하지 않는다', () => {
+  const ok = `(function(){ const {a, b: [c]} = {a: 1, b: [2]}; class K { m(x = a) { return x + c } } const f = (...r) => r.length
+    try { new K().m() } catch (e) { console.log(e) } for (const k of [1]) { f(k) } label: for (;;) { break label }
+    document.body; window.x = location.href; chrome.storage.local; setTimeout(f, 1); new MutationObserver(f) })()`
+  assert.deepEqual(findUndeclared(ok), [])
+})
+
+await atest('checkGlobals: 임시 폴더에 빌드한 content.js·popup.js에 선언되지 않은 식별자가 없다', async () => {
+  const root = resolvePath(import.meta.dirname, '..')
+  const outDir = mkdtempSync(join(tmpdir(), 'fitcheck-globals-'))
+  try {
+    for (const name of ['content', 'popup']) {
+      await viteBuild({
+        configFile: false, root, logLevel: 'silent', publicDir: false,
+        build: { outDir, emptyOutDir: false, minify: false, target: 'es2020', lib: { entry: resolvePath(root, `extension/${name}.js`), formats: ['iife'], name: `fitcheck_${name}`, fileName: () => `${name}.js` } },
+      })
+      assert.deepEqual(findUndeclared(readFileSync(join(outDir, `${name}.js`), 'utf8')), [], name)
+    }
+  } finally {
+    rmSync(outDir, { recursive: true, force: true })
+  }
 })
 
 console.log(`\n${passed}개 통과`)
