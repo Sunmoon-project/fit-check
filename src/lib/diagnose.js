@@ -149,6 +149,7 @@ function chartJudgment(m) {
     labelCount: meta.labelCount || 0,
     labelClass: ['paren', 'alpha', 'numeric', 'mixed', 'none'].includes(meta.labelClass) ? meta.labelClass : 'none',
     monotonic: typeof meta.monotonic === 'boolean' ? meta.monotonic : null,
+    flipped: meta.flipped || 0,
     rejectedMeasureHeader: meta.rejectedMeasureHeader || 0,
     rejectedNumeric: meta.rejectedNumeric || 0,
     rejectedNoOverlap: meta.rejectedNoOverlap || 0,
@@ -193,7 +194,7 @@ function chartLines(d) {
   const total = d.reviewTotalOnPage != null ? `, 페이지 표시 전체 리뷰 약 ${d.reviewTotalOnPage}건` : ', 페이지에 표시된 전체 리뷰 수 못 찾음'
   return [
     `사이즈표 후보 ${c.considered}개 검토(실측 제목 있는 후보 ${c.withHeader}개), ${sel}`,
-    `첫 열 제목이 실측 항목이라 버린 후보 ${c.rejectedMeasureHeader}개, 숫자 이름 규칙 위반 ${c.rejectedNumeric}개, 구매 옵션과 안 겹쳐 버린 후보 ${c.rejectedNoOverlap}개`,
+    `뒤집어 읽은 후보 ${c.flipped}개, 뒤집어도 못 쓴 후보 ${c.rejectedMeasureHeader}개, 숫자 이름 규칙 위반 ${c.rejectedNumeric}개, 구매 옵션과 안 겹쳐 버린 후보 ${c.rejectedNoOverlap}개`,
     `사이즈 이름 ${c.labelCount}개, 모양 ${c.labelClass}, 숫자 이름 순서 증가: ${c.monotonic == null ? '해당 없음' : yn(c.monotonic)}`,
     `구매 옵션 이름 ${d.optionLabelCount ?? c.optionCount}개, 표와 겹침 ${c.overlap}개`,
     `불러온 리뷰 ${d.reviewsKept}건${total}`,

@@ -240,6 +240,18 @@ export function isProductPage(root) {
   return analyzeSizeCharts(readAllSizeRows(root), guessCategory(clean(all(root, 'h1')[0]?.textContent)), readOptionLabels(root)).chart != null
 }
 
+// '사이즈'·'실측' 제목 근처(위로 3단계)에 이미지가 있는지. 사이즈표가 이미지로만 올라온 경우를 안내하는 데 써요.
+function hasImageNearSizeHeading(root) {
+  const anchors = all(root, '*')
+    .filter((e) => childrenOf(e).length === 0 && HEADING_RE.test(clean(e.textContent)) && clean(e.textContent).length <= 30)
+    .slice(0, 150)
+  for (const a of anchors) {
+    let cur = a
+    for (let i = 0; i < 3 && cur; i++, cur = cur.parentElement) if (all(cur, 'img').length > 0) return true
+  }
+  return false
+}
+
 /**
  * @param root document 또는 같은 메서드를 가진 객체
  * @param pageUrl 현재 주소 (표시용)
@@ -268,8 +280,9 @@ export function parsePage(root, pageUrl = '', opts = {}) {
   if (!sizeChart) {
     if (chartMeta.rejectedNoOverlap > 0) notes.push('읽은 사이즈표의 사이즈 이름이 이 페이지의 구매 옵션과 맞지 않아 사용하지 않았어요.')
     else if (chartMeta.rejectedMeasureHeader > 0 && chartMeta.withHeader === chartMeta.rejectedMeasureHeader)
-      notes.push('읽은 표의 가로세로가 뒤바뀐 것으로 보여(첫 열이 실측 항목) 사이즈표로 쓰지 않았어요.')
+      notes.push('읽은 표의 가로세로가 뒤바뀐 것으로 보였지만 사이즈 이름 줄을 찾지 못해 뒤집어 읽을 수 없었어요.')
     notes.push('이 페이지에서 사이즈표를 찾지 못했어요. 사이즈표가 이미지로 올라간 경우가 많아요.')
+    if (hasImageNearSizeHeading(root)) notes.push('사이즈표가 이미지로 제공된 것 같아요. 사이즈표 직접 입력을 이용해 주세요.')
   }
   // 리뷰의 'M' 같은 글자가 '1(M)' 표기의 사이즈와 이어지도록 괄호 안 글자도 후보에 넣어요.
   const sizeLabels = sizeChart ? sizeChart.rows.flatMap((r) => [r[0], (r[0].match(/^\d{1,2}\(([^)]+)\)$/) || [])[1]].filter(Boolean)) : []

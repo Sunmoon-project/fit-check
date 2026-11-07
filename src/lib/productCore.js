@@ -69,6 +69,8 @@ const numOf = (l) => Number(String(l).replace(/[^\d.]/g, ''))
 const isIncreasing = (labels) => labels.every((l, i) => i === 0 || numOf(l) > numOf(labels[i - 1]))
 
 // 구매 옵션 이름과 표 라벨이 겹치는지: 이름이 같거나, 표 라벨이 옵션 안의 글자('S' vs '0 (S)')와 같으면 겹쳐요.
+// 숫자만 있는 표 라벨('0')은 옵션 '0 (S)'의 번호 부분과 비교해요. 옵션이 있을 때만 호출되므로 옵션 없이 숫자를 사이즈로 읽지 않아요.
+const outerNumber = (n) => (n.match(/^(\d{1,2})\(/) || [])[1] || null
 function optionKeys(opt) {
   const n = normLabel(opt)
   const t = innerToken(n)
@@ -77,11 +79,29 @@ function optionKeys(opt) {
 function matchOption(label, optionList) {
   const n = normLabel(label)
   const t = innerToken(n)
+  const numeric = /^\d{1,2}$/.test(n)
   for (const o of optionList) {
     const keys = optionKeys(o)
     if (keys.includes(n) || (t && keys.includes(t))) return o
+    if (numeric && outerNumber(normLabel(o)) === n) return o
   }
   return null
+}
+
+// 가로세로가 뒤바뀐 표(첫 열이 실측 항목, 첫 행이 사이즈)를 [사이즈, 항목...] 모양으로 뒤집어요.
+// 사이즈 이름은 실측 항목 줄 바로 위 줄에서 가져와요. 그런 줄이 없으면 null.
+function flipRows(rows, headerIdx) {
+  const isMeasureRow = (r) => r.length >= 2 && MEASURE_HEADER_RE.test(r[0].replace(/\s/g, ''))
+  const nameRow = headerIdx > 0 ? rows[headerIdx - 1] : null
+  const measureRows = rows.slice(headerIdx).filter(isMeasureRow)
+  if (!nameRow || measureRows.length === 0) return null
+  const width = measureRows[0].length
+  const same = measureRows.filter((r) => r.length === width)
+  // 맨 앞 칸이 '사이즈' 같은 제목이면 떼고, 칸 수가 항목 줄보다 하나 적으면 그대로 써요.
+  const names = nameRow.length === width ? nameRow.slice(1) : nameRow.length === width - 1 ? nameRow : null
+  if (!names || names.length < 1 || names.some((c) => !SIZE_LABEL_RE.test(c.replace(/\s/g, '')))) return null
+  const body = names.map((name, j) => [name, ...same.map((r) => r[j + 1])])
+  return { headers: ['사이즈', ...same.map((r) => r[0])], body }
 }
 
 /**
@@ -94,6 +114,7 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
   const meta = {
     considered: rowsList.length,
     withHeader: 0,
+    flipped: 0,
     rejectedMeasureHeader: 0,
     rejectedNumeric: 0,
     rejectedNoOverlap: 0,
@@ -111,15 +132,24 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
     const headerIdx = rows.findIndex((r) => r.some((c) => /어깨|가슴|허리|총장|기장|허벅지|엉덩이|소매|발길이|단면/.test(c)))
     if (headerIdx < 0) return
     meta.withHeader++
-    const headers = rows[headerIdx]
-    const body = rows
-      .slice(headerIdx + 1)
-      .filter((r) => r.length === headers.length && SIZE_LABEL_RE.test(r[0].replace(/\s/g, '')))
-    if (body.length === 0) return
-    // 첫 열 제목이 '총장' 같은 실측 항목이면 가로세로가 뒤바뀐 후보예요. 그 열의 숫자는 사이즈 이름이 아니에요.
-    if (MEASURE_HEADER_RE.test(headers[0].replace(/\s/g, ''))) {
-      meta.rejectedMeasureHeader++
-      return
+    let headers = rows[headerIdx]
+    let body
+    // 첫 열 제목이 '총장' 같은 실측 항목이면 가로세로가 뒤바뀐 후보예요. 그 열의 숫자(67 등)는 사이즈 이름이 아니라서,
+    // 실측 줄 위쪽의 사이즈 이름 줄을 가져와 뒤집어 읽어요. 그 줄이 없으면 쓰지 않습니다.
+    const flippedCand = MEASURE_HEADER_RE.test(headers[0].replace(/\s/g, ''))
+    if (flippedCand) {
+      const f = flipRows(rows, headerIdx)
+      if (!f) {
+        meta.rejectedMeasureHeader++
+        return
+      }
+      headers = f.headers
+      body = f.body
+    } else {
+      body = rows
+        .slice(headerIdx + 1)
+        .filter((r) => r.length === headers.length && SIZE_LABEL_RE.test(r[0].replace(/\s/g, '')))
+      if (body.length === 0) return
     }
     const labels = body.map((r) => normLabel(r[0]))
     const labelClass = labelClassOf(labels)
@@ -128,11 +158,17 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
       meta.rejectedNumeric++
       return
     }
+    // 뒤집어 읽은 표의 숫자 이름은 구매 옵션 번호와 이어질 때만 믿어요(옵션이 없으면 실측 값일 수 있음).
+    if (flippedCand && labelClass === 'numeric' && options.length === 0) {
+      meta.rejectedMeasureHeader++
+      return
+    }
     const overlap = options.length ? labels.filter((l) => matchOption(l, options)).length : 0
     if (options.length && overlap === 0) {
       meta.rejectedNoOverlap++
       return
     }
+    if (flippedCand) meta.flipped++
     const cand = { index, headers, body, labels, labelClass, monotonic, overlap, rank: CLASS_RANK[labelClass] }
     const better =
       !best ||
@@ -148,8 +184,10 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
   const measures = {}
   const display = {}
   const rows = best.body.map((r) => {
-    const label = normLabel(r[0])
-    const shown = (options.length && matchOption(label, options)) || displayText(r[0])
+    const matched = options.length ? matchOption(normLabel(r[0]), options) : null
+    // 숫자만 있는 라벨('0')은 옵션 이름('0(S)')을 줄 이름으로 써서 리뷰의 'S' 같은 글자와도 이어지게 해요.
+    const label = matched && /^\d{1,2}$/.test(normLabel(r[0])) ? normLabel(matched) : normLabel(r[0])
+    const shown = matched || displayText(r[0])
     if (shown !== label) display[label] = shown
     const m = {}
     r.forEach((cell, i) => {
