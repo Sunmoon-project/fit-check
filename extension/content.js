@@ -248,7 +248,10 @@ function manualForm(r) {
   const box = el('div')
   const open = el('button', 'btn', '사이즈표 직접 입력')
   open.type = 'button'
+  let opened = false
   open.addEventListener('click', () => {
+    if (opened) return
+    opened = true
     open.remove()
     const cols = el('input', 'inp')
     cols.placeholder = '열 순서 예: 어깨 가슴 총장'
