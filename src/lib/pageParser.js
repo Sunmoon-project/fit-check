@@ -446,12 +446,17 @@ export function parsePage(root, pageUrl = '', opts = {}) {
           rows: sizeChart.rows,
           measures: sizeChart.measures,
           ...(sizeChart.display ? { display: sizeChart.display } : {}),
+          ...(sizeChart.view ? { view: { ...sizeChart.view, manual: chartMeta.selectedIndex != null && kinds[chartMeta.selectedIndex] === 'manual' } } : {}),
         }
       : null,
     optionLabels,
     reviewTotalOnPage,
     reviewMeta: { cards: cardTexts.length, dropped: reviewDropped },
-    sizeChartMeta: { ...chartMeta, selectedKind: chartMeta.selectedIndex == null ? null : kinds[chartMeta.selectedIndex] || null },
+    sizeChartMeta: {
+      ...chartMeta,
+      selectedKind: chartMeta.selectedIndex == null ? null : kinds[chartMeta.selectedIndex] || null,
+      candidates: (chartMeta.candidates || []).map((c) => ({ ...c, kind: kinds[c.index] || null })),
+    },
     reviews,
     notes,
   }
