@@ -35,6 +35,7 @@ import {
 } from '../src/lib/wardrobeSync.js'
 import { connectExtensionSync } from '../src/lib/syncClient.js'
 import { compareSizes, MEASURE_ONLY_LABEL } from '../src/lib/sizeCompare.js'
+import { summarizeSizeChart, NO_CHART_MESSAGE } from '../src/lib/sizeSummary.js'
 import { buildProfile, isUsableProfile } from '../src/lib/extProfile.js'
 import { fakeDocument } from './lib/cheerioDom.mjs'
 import { checkManifest } from './checkExtension.mjs'
@@ -1505,7 +1506,7 @@ async function runContentInFakeDom(pageHtml = null, extra = {}) {
         set innerHTML(v) { throw new Error('innerHTML 사용 금지') }, set outerHTML(v) { throw new Error('outerHTML 사용 금지') }, insertAdjacentHTML() { throw new Error('insertAdjacentHTML 사용 금지') },
         _text: '', set textContent(v) { this._text = String(v); texts.push(this._text) }, get textContent() { return this._text },
         append(...n) { this.children.push(...n) }, appendChild(n) { this.children.push(n); return n }, replaceChildren(...n) { this.children = [...n] },
-        setAttribute() {}, getAttribute() { return null }, addEventListener(type, fn) { (this._l ||= {})[type] = fn },
+        setAttribute() {}, getAttribute() { return null }, addEventListener(type, fn) { (this._l ||= {})[type] = fn }, click() { this._l?.click?.() },
         classList: {
           contains: (c) => e.className.split(' ').includes(c),
           toggle: (c, on) => { const set = new Set(e.className.split(' ').filter(Boolean)); (on ?? !set.has(c)) ? set.add(c) : set.delete(c); e.className = [...set].join(' ') },
@@ -3177,6 +3178,121 @@ await atest('가짜 HTML + vm: 확장 카드에 사이즈 탭과 내 치수/옷 
   assert.deepEqual(last.map((p) => p.hidden), [false, true, true, true])
   tabs[2]._l.click()
   assert.deepEqual(last.map((p) => p.hidden), [true, true, false, true])
+})
+
+// ---- 사이즈표 요약 (가짜 데이터) ----
+const ssRow = (label, garment, extra = {}) => ({ label, unit: 'cm', garment, body: null, verdict: null, ...extra })
+const ssSizes = (labels, rowsOf) => labels.map((l, i) => ({ size: l, label: l, rows: rowsOf(i) }))
+const topRows = (i) => [ssRow('어깨', 44 + i * 2, { body: 45, verdict: '넉넉' }), ssRow('가슴', 52 + i * 4, { body: 53, verdict: '적당' }), ssRow('팔길이', 60), ssRow('총장', 67 + i * 2, { body: 68, verdict: '짧은 편' })]
+
+test('sizeSummary: 상의는 어깨·가슴·소매·총장과 위·아래 사이즈 차이, 한 줄 판정을 준다', () => {
+  const sm = summarizeSizeChart({ sizes: ssSizes(['S', 'M', 'L'], topRows), recommended: 'M', category: 'top' })
+  assert.equal(sm.status, 'ok')
+  assert.deepEqual(sm.sizes, ['S', 'M', 'L'])
+  assert.equal(sm.recommended, 'M')
+  assert.deepEqual(sm.keyParts.map((k) => k.label), ['어깨', '가슴', '팔길이', '총장'])
+  assert.equal(sm.neighbors.lowerDiff, 'S보다 어깨 +2cm, 가슴 +4cm, 총장 +2cm')
+  assert.equal(sm.neighbors.upperDiff, 'L보다 어깨 -2cm, 가슴 -4cm, 총장 -2cm')
+  assert.equal(sm.verdictLine, '어깨 넉넉 · 가슴 적당 · 총장 짧은 편')
+})
+
+test('sizeSummary: 하의·신발은 각자 핵심 부위를 고르고 최대 4개다', () => {
+  const bottom = summarizeSizeChart({ sizes: ssSizes(['28', '30'], (i) => [ssRow('총장', 100), ssRow('허리', 37 + i * 2), ssRow('엉덩이', 50), ssRow('허벅지', 30), ssRow('밑위', 28), ssRow('밑단', 18)]), recommended: '28', category: 'bottom' })
+  assert.deepEqual(bottom.keyParts.map((k) => k.label), ['허리', '허벅지', '밑위', '총장'])
+  assert.equal(bottom.neighbors.lowerDiff, null)
+  assert.equal(bottom.neighbors.upperDiff, '30보다 허리 -2cm')
+  const shoes = summarizeSizeChart({ sizes: ssSizes(['250', '260'], (i) => [{ ...ssRow('발길이', 250 + i * 10), unit: 'mm' }, { ...ssRow('발볼', 100), unit: 'mm' }]), recommended: '250', category: 'shoes' })
+  assert.deepEqual(shoes.keyParts.map((k) => `${k.label}${k.value}${k.unit}`), ['발길이250mm', '발볼100mm'])
+  assert.equal(shoes.neighbors.upperDiff, '260보다 발길이 -10mm')
+})
+
+test('sizeSummary: 맨 위 사이즈는 아래쪽만, 맨 아래 사이즈는 위쪽만 차이를 준다', () => {
+  const sizes = ssSizes(['S', 'M', 'L'], topRows)
+  const top = summarizeSizeChart({ sizes, recommended: 'L', category: 'top' })
+  assert.ok(top.neighbors.lowerDiff && top.neighbors.upperDiff === null)
+  const low = summarizeSizeChart({ sizes, recommended: 's', category: 'top' })
+  assert.ok(low.neighbors.lowerDiff === null && low.neighbors.upperDiff)
+})
+
+test('sizeSummary: 같은 값은 차이에서 빼고, 모두 같으면 차이를 생략한다', () => {
+  const same = summarizeSizeChart({ sizes: ssSizes(['M', 'L'], () => [ssRow('어깨', 50), ssRow('가슴', 57)]), recommended: 'M', category: 'top' })
+  assert.deepEqual(same.neighbors, { lowerDiff: null, upperDiff: null })
+  const part = summarizeSizeChart({ sizes: ssSizes(['M', 'L'], (i) => [ssRow('어깨', 50), ssRow('가슴', 57 + i * 3)]), recommended: 'M', category: 'top' })
+  assert.equal(part.neighbors.upperDiff, 'L보다 가슴 -3cm')
+})
+
+test('sizeSummary: 내 치수가 없으면 판정 줄이 없고, 추천이 없으면 실측·차이도 없다', () => {
+  const sizes = ssSizes(['M', 'L'], () => [ssRow('어깨', 50), ssRow('가슴', 57)])
+  assert.equal(summarizeSizeChart({ sizes, recommended: 'M', category: 'top' }).verdictLine, null)
+  const none = summarizeSizeChart({ sizes, recommended: null, category: 'top' })
+  assert.equal(none.status, 'ok')
+  assert.deepEqual([none.recommended, none.keyParts, none.verdictLine], [null, [], null])
+})
+
+test('sizeSummary: 표를 못 읽으면 none과 안내를 준다', () => {
+  for (const input of [undefined, {}, { sizes: [] }, { sizes: [{ size: 'M', label: 'M', rows: [] }] }]) {
+    const sm = summarizeSizeChart(input)
+    assert.equal(sm.status, 'none')
+    assert.equal(sm.message, NO_CHART_MESSAGE)
+    assert.deepEqual(sm.sizes, [])
+  }
+})
+
+test('sizeSummary: 사이즈 이름은 원문 라벨 그대로고, 직렬화해도 같다', () => {
+  const sizes = [{ size: '1', label: '1 (M)', rows: [ssRow('어깨', 50)] }, { size: '2', label: '2 (L)', rows: [ssRow('어깨', 52)] }]
+  const sm = summarizeSizeChart({ sizes, recommended: '1', category: 'top' })
+  assert.deepEqual(sm.sizes, ['1 (M)', '2 (L)'])
+  assert.equal(sm.recommended, '1 (M)')
+  assert.equal(sm.neighbors.upperDiff, '2 (L)보다 어깨 -2cm')
+  assert.deepEqual(JSON.parse(JSON.stringify(sm)), sm)
+})
+
+test('확장 분석: 사이즈표가 있으면 sizeSummary가 ok, 없으면 none이다', () => {
+  const profile = buildProfile({ gender: 'male', height: '175', weight: '70' }).profile
+  const r = analyzePage(fakeDocument(VIEW_HTML(chartTable(OPTION_LIST_LABELS()))), '', profile)
+  assert.equal(r.sizeSummary.status, 'ok')
+  assert.ok(r.sizeSummary.sizes.length >= 2 && r.sizeSummary.keyParts.length >= 1)
+  assert.equal(r.sizeSummary.recommended !== null, r.recommendedSize != null)
+  const nochart = analyzePage(fakeDocument(wrapBody(NOCHART_HTML)), '', profile)
+  assert.equal(nochart.status, 'ok')
+  assert.equal(nochart.sizeSummary.status, 'none')
+})
+
+await atest('content.js(가짜 DOM, vm): 사이즈표 요약 블록과 자세히 보기가 나오고 누르면 비교 구역이 열린다', async () => {
+  const { texts, created } = await runContentInFakeDom(VIEW_HTML(chartTable(OPTION_LIST_LABELS())))
+  assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
+  assert.ok(texts.includes('사이즈표 요약'))
+  assert.ok(texts.some((t) => /실측 .*\d+cm/.test(t) && t.length < 80), '추천 사이즈 실측 한 줄')
+  const more = created.find((e) => e.className === 'lnk' && e.textContent === '자세히 보기')
+  assert.ok(more, '자세히 보기 링크')
+  const cp = created.find((e) => e.tagName === 'DETAILS' && e.children[0]?.textContent?.startsWith('사이즈표 비교'))
+  cp.open = false
+  more._l.click()
+  assert.equal(cp.open, true)
+})
+
+await atest('content.js(가짜 DOM, vm): 표를 못 읽으면 안내와 사이즈표 직접 입력 링크가 나온다', async () => {
+  const { texts, created } = await runContentInFakeDom(wrapBody(NOCHART_HTML))
+  assert.ok(texts.includes('사이즈표 요약') && texts.includes(NO_CHART_MESSAGE))
+  const link = created.find((e) => e.className === 'lnk' && e.textContent === '사이즈표 직접 입력')
+  assert.ok(link, '직접 입력 링크')
+  link._l.click()
+  assert.ok(created.some((e) => e.tagName === 'TEXTAREA'), '직접 입력 양식이 열려요')
+})
+
+test('content.js CSS(소스 분석): 사이즈표 요약 글자·칩 대비가 4.5:1 이상이다', () => {
+  const src = readFileSync(new URL('../extension/content.js', import.meta.url), 'utf8')
+  const hex = (c) => { const h = c.replace('#', ''); const f = h.length === 3 ? [...h].map((x) => x + x).join('') : h; return [0, 2, 4].map((i) => parseInt(f.slice(i, i + 2), 16) / 255) }
+  const lum = (c) => { const [r, g, b] = hex(c).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * r + 0.7152 * g + 0.0722 * b }
+  const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05) }
+  const rule = (sel) => src.match(new RegExp(`^${sel.replace(/[.]/g, '\\.')}\\{([^}]*)\\}$`, 'm'))?.[1] || ''
+  const col = (decl, name) => decl.match(new RegExp(`(?:^|;)${name}:(#[0-9a-fA-F]{3,6})`))?.[1]
+  const on = rule('.ssc span.on')
+  assert.ok(ratio(col(on, 'color'), col(on, 'background')) >= 4.5, '선택 칩')
+  assert.ok(ratio(col(rule('.ssc span'), 'color'), '#ffffff') >= 4.5, '일반 칩')
+  assert.ok(ratio(col(rule('.ss .sst'), 'color'), '#ffffff') >= 4.5, '제목')
+  assert.ok(ratio(col(rule('.ss p'), 'color'), '#ffffff') >= 4.5, '본문')
+  assert.ok(ratio(col(rule('.ss p.tiny'), 'color'), '#ffffff') >= 4.5, '보조 글')
 })
 
 console.log(`\n${passed}개 통과`)

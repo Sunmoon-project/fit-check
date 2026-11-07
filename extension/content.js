@@ -124,6 +124,13 @@ tr.rec .cv{color:#9fe0ba}
 .cbf{height:100%;background:#111;border-radius:2px;transition:width .8s ease-out}
 .cg{display:inline-block;font-size:11px;border:1px solid #d4d4d4;border-radius:999px;padding:0 8px;color:#111}
 .cg.diff{border-style:dashed;color:#6b6b70}
+.ss{margin-top:8px;border-left:4px solid #4a5a6a;padding:2px 0 2px 8px}
+.ss .sst{font-size:13px;font-weight:700;color:#4a5a6a}
+.ssc{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.ssc span{font-size:11px;border:1px solid #d4d4d4;border-radius:999px;padding:0 8px;color:#111}
+.ssc span.on{background:#4a5a6a;border-color:#4a5a6a;color:#fff;font-weight:700}
+.ss p{margin-top:3px;font-size:12px;color:#333}
+.ss p.tiny{font-size:11px;color:#6b6b70}
 .lnk{border:0;background:none;padding:0;margin-left:4px;font-size:11px;color:#555;text-decoration:underline;cursor:pointer}
 @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
 `
@@ -816,6 +823,43 @@ async function loadMoreReviews(onProgress) {
   return reason
 }
 
+// 사이즈표 요약: 사이즈 목록, 추천 사이즈 핵심 실측, 위·아래 사이즈 차이, 한 줄 판정. targets는 이동할 구역(details)과 직접 입력 양식이에요.
+function sizeSummaryBlock(r, targets) {
+  const sm = r.sizeSummary
+  if (!sm) return null
+  const box = el('div', 'ss')
+  box.append(el('div', 'sst', '사이즈표 요약'))
+  const go = (label, det, after) => {
+    const b = el('button', 'lnk', label)
+    b.type = 'button'
+    b.addEventListener('click', () => {
+      if (det) {
+        det.open = true
+        if (det.scrollIntoView) det.scrollIntoView({ block: 'nearest' })
+      }
+      if (after) after()
+    })
+    return b
+  }
+  if (sm.status !== 'ok') {
+    const p = el('p', null, sm.message)
+    p.append(go('사이즈표 직접 입력', targets.ch, () => targets.manual.openForm()))
+    box.append(p)
+    return box
+  }
+  const chips = el('div', 'ssc')
+  for (const t of sm.sizes) chips.append(el('span', t === sm.recommended ? 'on' : null, t === sm.recommended ? `${t} 추천` : t))
+  box.append(chips)
+  if (sm.keyParts.length) box.append(el('p', null, `${sm.recommended} 실측 ${sm.keyParts.map((k) => `${k.label} ${k.value}${k.unit}`).join(' · ')}`))
+  const near = [sm.neighbors.lowerDiff, sm.neighbors.upperDiff].filter(Boolean)
+  if (near.length) box.append(el('p', 'tiny', near.join(' / ')))
+  if (sm.verdictLine) box.append(el('p', null, sm.verdictLine))
+  const more = el('p', 'tiny')
+  more.append(go('자세히 보기', targets.cp || targets.ch))
+  box.append(more)
+  return box
+}
+
 function loadMoreBlock(r) {
   const box = el('div')
   const btn = el('button', 'btn', '리뷰 더 불러오기')
@@ -899,6 +943,8 @@ function renderResult(r) {
     const fold = el('div', 'fold')
     fold.append(loadMoreBlock(r))
     if (r.loadInfo) fold.append(el('p', 'tiny', r.loadInfo))
+    const summarySlot = el('div')
+    fold.append(summarySlot)
 
     const why = section('추천 이유')
     if (r.reasons.length) {
@@ -916,8 +962,10 @@ function renderResult(r) {
     }
     if (r.exportData) fold.append(exportBlock(r))
     const manual = manualForm(r)
+    let cpSec = null
     if (r.compareView) {
       const cp = section('사이즈표 비교 (내 치수 vs 옷 실측)', true)
+      cpSec = cp
       cp.body.append(compareBlock(r.compareView))
       fold.append(cp.det)
     }
@@ -925,6 +973,8 @@ function renderResult(r) {
     if (r.chartView) ch.body.append(chartTable(r.chartView), el('p', 'tiny', '읽은 표가 다르면 직접 입력으로 고칠 수 있어요.'))
     ch.body.append(manual)
     fold.append(ch.det)
+    const summary = sizeSummaryBlock(r, { cp: cpSec?.det || null, ch: ch.det, manual })
+    if (summary) summarySlot.append(summary)
 
     if (r.diagnostics) {
       const rep = section('문제가 있나요? 진단 리포트')
