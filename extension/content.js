@@ -290,6 +290,7 @@ function reviewItem(rv) {
   const meta = el('div', 'rvm')
   const tag = (label, value, text) => meta.append(el('span', value == null ? 'tag miss' : 'tag', value == null ? `${label} 못 읽음` : `${label} ${text}`))
   if (rv.similarity != null) meta.append(el('span', 'tag sim', `체형 유사도 ${rv.similarity}`))
+  meta.append(el('span', rv.gender ? 'tag' : 'tag miss', rv.gender === 'male' ? '남성' : rv.gender === 'female' ? '여성' : '성별 못 읽음'))
   tag('키', rv.height, `${rv.height}cm`)
   tag('몸무게', rv.weight, `${rv.weight}kg`)
   tag('구매 사이즈', rv.size, rv.size)

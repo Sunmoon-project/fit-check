@@ -154,7 +154,7 @@ export function trueRateByBucket(rows, key, edges) {
 // 이웃 투표: 같은 상품·같은 사이즈의 다른 사람 중 bodySimilarity >= threshold 인 사람들의 가중 다수결.
 // 자기 자신(같은 인덱스)은 제외(leave-one-out). 이웃이 없거나 최다 득표가 동률이면 predicted=null (예측 불가).
 // similarityFn(profile, review) 는 fitEngine.bodySimilarity 를 주입.
-export function neighborVotePredictions(rows, similarityFn, threshold = 55) {
+export function neighborVotePredictions(rows, similarityFn, threshold = 65) {
   const groups = new Map()
   rows.forEach((r, i) => {
     const key = `${r.item}\u0000${r.size}`
@@ -190,7 +190,7 @@ export function neighborVotePredictions(rows, similarityFn, threshold = 55) {
 }
 
 // 전체 평가 요약
-export function evaluate(rows, similarityFn, threshold = 55) {
+export function evaluate(rows, similarityFn, threshold = 65) {
   const preds = neighborVotePredictions(rows, similarityFn, threshold)
   const answered = preds.filter((p) => p.predicted)
   const matrix = confusionMatrix(answered)

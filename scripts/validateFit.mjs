@@ -1,10 +1,10 @@
 // 핏 데이터셋 검증 CLI (의존성 없음)
-// 사용: node scripts/validateFit.mjs <데이터.json> [--out 결과.json] [--threshold 55]
+// 사용: node scripts/validateFit.mjs <데이터.json> [--out 결과.json] [--threshold 65]
 //       FIT_DATASET_PATH=<경로> node scripts/validateFit.mjs
 //       node scripts/validateFit.mjs --demo   (합성 샘플로 파이프라인만 확인)
 import fs from 'node:fs'
 import path from 'node:path'
-import { bodySimilarity } from '../src/lib/fitEngine.js'
+import { bodySimilarity, BODY_SIM } from '../src/lib/fitEngine.js'
 import { normalizeLines, evaluate, LABELS } from './lib/fitMetrics.mjs'
 
 const args = process.argv.slice(2)
@@ -17,12 +17,12 @@ const valueArgs = new Set([opt('--out'), opt('--threshold')].filter(Boolean))
 const positional = args.filter((a) => !a.startsWith('--') && !valueArgs.has(a))
 
 const DEMO = flag('--demo')
-const threshold = Number(opt('--threshold') ?? 55)
+const threshold = Number(opt('--threshold') ?? BODY_SIM.threshold)
 
 const USAGE = `핏 데이터셋 검증 스크립트
 
 사용법
-  node scripts/validateFit.mjs <데이터 파일> [--out 결과.json] [--threshold 55]
+  node scripts/validateFit.mjs <데이터 파일> [--out 결과.json] [--threshold 65]
   FIT_DATASET_PATH=<데이터 파일> npm run validate:fit
   npm run validate:fit -- --demo     합성 샘플로 동작만 확인(실제 정확도 아님)
 

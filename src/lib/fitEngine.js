@@ -167,30 +167,45 @@ export function recommendSize(bodyValues, sizeChart, category, preferredFit = 'r
 }
 
 // ---------- 후기 매칭 ----------
+// 체형 유사도 기준. 아래 숫자는 설계상의 판단이고, 실제 후기 데이터로 정확도를 재서 정한 값이 아니에요.
+// 웹 앱, 확장, 테스트가 모두 이 한 곳의 값을 씁니다.
+export const BODY_SIM = Object.freeze({
+  heightWeight: 0.8, // 키 1cm 차이당 거리
+  weightWeight: 1.6, // 몸무게 1kg 차이당 거리 (체형 핏에는 몸무게 영향이 더 커요)
+  slope: 2.5, // 거리 1당 깎는 점수
+  threshold: 65, // 이 점수 이상이면 비슷한 체형 후기
+  unknownGenderPenalty: 10, // 후기 성별을 못 읽었을 때 깎는 점수
+})
+
 // 두 체형(키/몸무게) 사이의 유사도(0~100). 키·몸무게가 없는 후기는 null.
+// 내 성별과 후기 성별이 둘 다 알려져 있고 다르면 0, 후기 성별을 못 읽었으면 감점해요.
+// 내 프로필에 성별이 없으면 성별은 따지지 않아요.
 export function bodySimilarity(profile, review) {
   if (!isNum(review.height) || !isNum(review.weight)) return null
+  const mine = profile.gender === 'male' || profile.gender === 'female' ? profile.gender : null
+  const theirs = review.gender === 'male' || review.gender === 'female' ? review.gender : null
+  if (mine && theirs && mine !== theirs) return 0
   const dh = Math.abs(profile.height - review.height)
   const dw = Math.abs(profile.weight - review.weight)
-  // 체형 핏에는 몸무게 영향이 더 커서 가중치를 더 줍니다.
-  const distance = dh * 0.6 + dw * 1.0
-  return Math.max(0, Math.round(100 - distance * 2.2))
+  const distance = dh * BODY_SIM.heightWeight + dw * BODY_SIM.weightWeight
+  const penalty = mine && !theirs ? BODY_SIM.unknownGenderPenalty : 0
+  return Math.max(0, Math.round(100 - distance * BODY_SIM.slope - penalty))
 }
 
 // 비슷한 체형 후기(matched)와 나머지 후기(others)로 나눕니다.
-export function splitReviews(profile, reviews = [], threshold = 55) {
+export function splitReviews(profile, reviews = [], threshold = BODY_SIM.threshold) {
   const matched = []
   const others = []
   for (const r of reviews) {
     const similarity = bodySimilarity(profile, r)
-    if (similarity != null && similarity >= threshold) matched.push({ ...r, similarity })
+    if (similarity != null && similarity > 0 && similarity >= threshold) matched.push({ ...r, similarity })
     else others.push({ ...r, similarity })
   }
   matched.sort((a, b) => b.similarity - a.similarity)
   return { matched, others }
 }
 
-export function matchReviews(profile, reviews, threshold = 55) {
+export function matchReviews(profile, reviews, threshold = BODY_SIM.threshold) {
   return splitReviews(profile, reviews, threshold).matched
 }
 
