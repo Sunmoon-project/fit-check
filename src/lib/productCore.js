@@ -232,6 +232,46 @@ const FIT_WORDS = {
   true: /정사이즈|딱 ?맞|잘 ?맞|적당|정핏|무난하게 맞/g,
 }
 
+// 리뷰 글에서 '산 사이즈'를 고릅니다. 확신이 없으면 null.
+// 1) '구매 옵션' 뒤 값(평소·입는·마침표 등에서 끊은 짧은 구간) 안에서만 찾고,
+// 2) 없으면 '평소/보통 L 입는데' 같은 평소 사이즈 표현을 뺀 본문에서 'M 샀어요/구매/주문' 표현만 봅니다.
+// 서로 다른 사이즈가 둘 이상 나오면 어느 쪽인지 알 수 없어 비워 둬요.
+const SIZE_TOK = 'XXS|XS|S|M|L|XL|XXL|2XL|3XL|FREE|프리'
+const USUAL_RE = new RegExp(`(?:평소|보통|원래|항상|주로|평상시|늘)\\s*(?:에는|엔|는|은)?\\s*(?:사이즈\\s*(?:는|가)?\\s*)?(?:${SIZE_TOK}|\\d{2,3})(?![A-Za-z0-9])\\s*(?:사이즈|로|으로)?`, 'gi')
+const HABIT_RE = new RegExp(`(?<![A-Za-z0-9])(?:${SIZE_TOK}|\\d{2,3})\\s*(?:사이즈)?\\s*입는`, 'gi')
+const OPTION_CUT_RE = /평소|보통|원래|항상|주로|평상시|입는|키\s*\d|몸무게|\d{2,3}\s*(?:cm|kg)|[.!?。]/i
+const normTok = (x) => x.toUpperCase().replace('프리', 'FREE')
+
+function uniqueSize(found, labels) {
+  const set = [...new Set(found.map(normTok))]
+  if (set.length !== 1) return null
+  return labels.length === 0 || labels.includes(set[0]) ? set[0] : null
+}
+
+function pickReviewSize(t, sizeLabels) {
+  const labels = sizeLabels.map((s) => String(s).toUpperCase())
+  const opt = t.match(/구매\s*옵션/)
+  if (opt) {
+    let seg = t.slice(opt.index + opt[0].length, opt.index + opt[0].length + 40)
+    const cut = seg.search(OPTION_CUT_RE)
+    if (cut >= 0) seg = seg.slice(0, cut)
+    const re = new RegExp(`(?<![A-Za-z0-9가-힣])(?:\\d{1,2}\\s*\\(\\s*)?(${SIZE_TOK})(?![A-Za-z0-9가-힣])`, 'gi')
+    const found = [...seg.matchAll(re)].map((m) => m[1])
+    if (found.length) return uniqueSize(found, labels)
+  }
+  const body = t.replace(USUAL_RE, ' ').replace(HABIT_RE, ' ')
+  const patterns = [
+    new RegExp(`(?:^|[^A-Za-z0-9])(${SIZE_TOK})\\s*(?:사이즈|로|으로|구매|샀|입|주문|사)`, 'gi'),
+    new RegExp(`(?<![A-Za-z0-9])\\d{1,2}\\s*\\(\\s*(${SIZE_TOK})\\s*\\)`, 'gi'),
+    /(\d{2,3})\s*(?:사이즈|인치|로 구매|으로 구매|샀|구매)/g,
+  ]
+  for (const re of patterns) {
+    const found = [...body.matchAll(re)].map((m) => m[1])
+    if (found.length) return uniqueSize(found, labels)
+  }
+  return null
+}
+
 export function parseReviewText(text, sizeLabels = []) {
   const t = text || ''
   const H = '(1[4-9]\\d|20\\d|210)(?:\\.\\d)?'
@@ -251,17 +291,7 @@ export function parseReviewText(text, sizeLabels = []) {
     toNumber((t.match(/(?<![\d.,])(\d{2,3}(?:\.\d)?)\s*(?:kg|키로|킬로|㎏)/i) || [])[1] ?? '') ??
     toNumber(pair ? pair[2] : '')
 
-  let size = null
-  const labels = sizeLabels.map((s) => String(s).toUpperCase())
-  const sizeMatch =
-    t.match(/구매\s*옵션[\s\S]{0,40}?(?<![A-Za-z0-9])(?:\d{1,2}\s*\(\s*)?(XXS|XS|S|M|L|XL|XXL|2XL|3XL|FREE|프리)(?![A-Za-z0-9])/i) ||
-    t.match(/(?:^|[^A-Za-z0-9])(XXS|XS|S|M|L|XL|XXL|2XL|3XL|FREE|프리)\s*(?:사이즈|로|으로|구매|샀|입|주문|사)/i) ||
-    t.match(/(?<![A-Za-z0-9])\d{1,2}\s*\(\s*(XXS|XS|S|M|L|XL|XXL|2XL|3XL|FREE)\s*\)/i) ||
-    t.match(/(\d{2,3})\s*(?:사이즈|인치|로 구매|으로 구매|샀|구매)/)
-  if (sizeMatch) {
-    const s = sizeMatch[1].toUpperCase().replace('프리', 'FREE')
-    if (labels.length === 0 || labels.includes(s)) size = s
-  }
+  const size = pickReviewSize(t, sizeLabels)
 
   const counts = {}
   for (const [k, re] of Object.entries(FIT_WORDS)) counts[k] = (t.match(re) || []).length

@@ -215,12 +215,39 @@ export const REVIEW_SELECTOR = [
 const REVIEW_MIN = 15
 const REVIEW_MAX = 600
 
+// ---------- 사이즈표 영역: 리뷰 후보에서 통째로 제외 ----------
+// 첫 칸이 사이즈 이름인 줄(또는 열)이 2개 이상인 후보만 사이즈표 영역으로 봐요.
+// (실측 낱말이 든 리뷰 목록이 통째로 제외되지 않게 하려는 조건입니다.)
+const looksLikeChart = (rows) => rows.filter((r) => r.length >= 2 && isLabel(r[0])).length >= 2
+
+/** 사이즈표로 보이는 영역의 요소 목록 (표, role=table, div 격자) */
+export function sizeChartRegions(root, grids = findGridCandidates(root)) {
+  const regions = []
+  for (const t of all(root, 'table')) if (looksLikeChart(readTables(t)[0] || [])) regions.push(t)
+  for (const g of grids) if (looksLikeChart(g.rows) || looksLikeChart(transpose(g.rows) || [])) regions.push(g.el)
+  return regions
+}
+
+const insideAny = (el, regions) => regions.some((r) => r === el || r.contains?.(el))
+
+// 카드 글에서 숫자·단위·사이즈 글자·기호를 빼고도 이만큼 글자가 남아야 서술형 글로 봐요.
+const CARD_MIN_PROSE = 6
+const SIZE_TOKEN_G = /(?<![A-Za-z0-9])(?:XXS|XS|S|M|L|XL|XXL|[2-5]XL|FREE|F)(?![A-Za-z0-9])/gi
+function hasProse(text) {
+  const rest = String(text).replace(/\d+(?:\.\d+)?\s*(?:cm|mm|kg|㎝|㎏)?/gi, ' ').replace(SIZE_TOKEN_G, ' ').replace(/[^A-Za-z가-힣]/g, '')
+  return rest.length >= CARD_MIN_PROSE
+}
+
 /** 안쪽에 같은 조건의 요소가 있으면 안쪽을 쓰도록 건너뜁니다. dropped에 버린 사유별 개수를 더해요. */
-export function readReviewElements(root, dropped = {}) {
+export function readReviewElements(root, dropped = {}, regions = sizeChartRegions(root)) {
   const bump = (k) => (dropped[k] = (dropped[k] || 0) + 1)
   const els = [...new Set(all(root, REVIEW_SELECTOR))]
   const texts = []
   for (const el of els) {
+    if (insideAny(el, regions)) {
+      bump('inSizeChart')
+      continue
+    }
     const text = clean(el.textContent)
     if (text.length < REVIEW_MIN) {
       bump('tooShort')
@@ -266,14 +293,14 @@ function inTable(el) {
   return false
 }
 
-export function readReviewCardEls(root) {
+export function readReviewCardEls(root, regions = sizeChartRegions(root)) {
   const seeds = new Set(all(root, REVIEW_SELECTOR))
   let scanned = 0
   for (const e of all(root, '*')) {
     if (++scanned > CARD_SEED_LIMIT) break
     if (childrenOf(e).length > 1) continue
     const t = clean(e.textContent)
-    if (t.length <= 80 && CLUE_LEAF_RE.test(t) && !inTable(e)) seeds.add(e)
+    if (t.length <= 80 && CLUE_LEAF_RE.test(t) && !inTable(e) && !insideAny(e, regions)) seeds.add(e)
   }
   const cards = new Set()
   const shapes = new Map()
@@ -291,16 +318,16 @@ export function readReviewCardEls(root) {
       const same = childrenOf(cur.parentElement).filter((c) => sig(c) === mine).length
       if (same >= CARD_MIN_REPEAT) best = cur
     }
-    if (best) cards.add(best)
+    if (best && !insideAny(best, regions)) cards.add(best)
   }
   // 카드 안에 다른 카드가 들어 있으면 바깥 것은 뺍니다
   const list = [...cards]
   // 값만 반복되는 div 격자(사이즈표)를 걸러요: 카드 글에 리뷰 단서(구매 옵션·날짜·후기 말투) 하나는 있어야 해요.
-  return list.filter((c) => !list.some((o) => o !== c && c.contains?.(o))).filter((c) => REVIEW_CUE_RE.test(clean(c.textContent)))
+  return list.filter((c) => !list.some((o) => o !== c && c.contains?.(o))).filter((c) => REVIEW_CUE_RE.test(clean(c.textContent)) && hasProse(clean(c.textContent)))
 }
 
-export function readReviewCards(root) {
-  return readReviewCardEls(root).map((c) => clean(c.textContent))
+export function readReviewCards(root, regions) {
+  return readReviewCardEls(root, regions).map((c) => clean(c.textContent))
 }
 
 // 상품 페이지로 보이는지: JSON-LD Product, og:type=product, 또는 사이즈표가 있는 경우.
@@ -356,7 +383,10 @@ export function parsePage(root, pageUrl = '', opts = {}) {
     if (hasImageNearSizeHeading(root)) notes.push('사이즈표가 이미지로 제공된 것 같아요. 사이즈표 직접 입력을 이용해 주세요.')
   }
   // 리뷰의 'M' 같은 글자가 '1(M)' 표기의 사이즈와 이어지도록 괄호 안 글자도 후보에 넣어요.
-  const sizeLabels = sizeChart ? sizeChart.rows.flatMap((r) => [r[0], (r[0].match(/^\d{1,2}\(([^)]+)\)$/) || [])[1]].filter(Boolean)) : []
+  // 사이즈표를 못 읽었어도 구매 옵션 이름이 있으면 그 글자로 교차 확인해요.
+  const sizeLabels = sizeChart
+    ? sizeChart.rows.flatMap((r) => [r[0], (r[0].match(/^\d{1,2}\(([^)]+)\)$/) || [])[1]].filter(Boolean))
+    : optionLabels.map((l) => (l.match(/\(([^)]+)\)/) || [])[1]).filter(Boolean)
 
   const texts = []
   for (const n of [ldProduct, ...ld.filter((x) => isType(x, 'Review'))]) {
@@ -367,17 +397,18 @@ export function parsePage(root, pageUrl = '', opts = {}) {
   // 화면 요소에서 찾은 글은 키·몸무게·사이즈·핏 단서가 하나라도 있어야 리뷰로 셉니다
   // ("리뷰 작성하고 적립금 받기" 같은 안내 문구가 건수를 부풀리지 않게).
   // 카드(반복되는 형제 요소) 단위를 먼저 읽고, 그 안에 든 글은 중복으로 버려요.
-  const reviewDropped = { tooShort: 0, tooLong: 0, innerDuplicate: 0, noClue: 0, duplicate: 0 }
+  const reviewDropped = { tooShort: 0, tooLong: 0, innerDuplicate: 0, noClue: 0, duplicate: 0, inSizeChart: 0 }
   const entries = []
   const hasClue = (p) => p.height || p.weight || p.size || p.fit
-  const cardTexts = readReviewCards(root)
+  const regions = sizeChartRegions(root, grids)
+  const cardTexts = readReviewCards(root, regions)
   const cardJoined = cardTexts.join('\n')
   for (const t of cardTexts) {
     const parsed = parseReviewText(t, sizeLabels)
     if (hasClue(parsed)) entries.push({ text: t, parsed })
     else reviewDropped.noClue += 1
   }
-  for (const t of readReviewElements(root, reviewDropped)) {
+  for (const t of readReviewElements(root, reviewDropped, regions)) {
     if (cardJoined.includes(t)) {
       reviewDropped.duplicate += 1
       continue
