@@ -27,7 +27,7 @@ import { parseReviewText, analyzeSizeCharts } from '../src/lib/productCore.js'
 import { parseProductHtml } from '../server/productParser.js'
 import { readOptionLabels, parsePage, isProductPage, splitSentences, extractCardView, parseGender } from '../src/lib/pageParser.js'
 import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
-import { collectDiagnostics, formatReport, REPORT_MAX } from '../src/lib/diagnose.js'
+import { collectDiagnostics, diagnosticLines, formatReport, REPORT_MAX } from '../src/lib/diagnose.js'
 import { buildExportEnvelope, parseImportText, sanitizeItem, addImportedItem, LIMITS as IMPORT_LIMITS } from '../src/lib/wardrobeImport.js'
 import {
   SYNC_QUEUE_KEY, WEB_APP_ORIGINS, BRIDGE_MATCHES, QUEUE_MAX, QUEUE_TTL_MS, isAllowedPage, postTargetOrigin, isTrustedMessage, enqueue, pruneQueue, removeAcked,
@@ -3027,6 +3027,34 @@ test('가짜 HTML: 신발 230~280 mm + 발볼은 발길이와 발볼(mm)로 읽�
   assert.equal(page.sizeChart.measures['230'].footWidth, 95)
   const cm = sysPage('캔버스 운동화', ['사이즈(mm)', '발길이', '발볼(cm)'], sizes.map((n, i) => [n, n, 9.5 + i * 0.2]))
   assert.equal(cm.sizeChart.measures['230'].footWidth, 95, 'cm로 적힌 발볼은 mm로 바꿔요')
+})
+
+test('가짜 HTML: 1~4 수량 select는 사이즈 옵션으로 읽지 않는다', () => {
+  const qty = fakeDocument(wrapBody('<select><option>1</option><option>2</option><option>3</option><option>4</option></select>'))
+  assert.deepEqual(readOptionLabels(qty), [])
+  const sized = fakeDocument(wrapBody('<select><option>M</option><option>L</option></select>'))
+  assert.deepEqual(readOptionLabels(sized), ['M', 'L'])
+})
+
+test('가짜 HTML: 굽높이가 mm(50)로 적힌 표는 cm(5)로 읽고 cm 표기는 그대로 둔다', () => {
+  const sizes = ['230', '240', '250']
+  const mm = sysPage('앵클 부츠', ['사이즈(mm)', '발길이', '굽높이'], sizes.map((n, i) => [n, n, 50 + i * 5]))
+  assert.equal(mm.sizeChart.measures['230'].heelHeight, 5)
+  const cm = sysPage('앵클 부츠', ['사이즈(mm)', '발길이', '굽높이(cm)'], sizes.map((n, i) => [n, n, 4.5 + i]))
+  assert.equal(cm.sizeChart.measures['230'].heelHeight, 4.5)
+})
+
+test('진단: 비교 표 생성 실패는 진단 줄에 남고, 확장 비교 값에는 쓰지 않는 필드가 없다', () => {
+  const doc = fakeDocument('<html><body><h1>니트</h1></body></html>')
+  assert.ok(diagnosticLines(collectDiagnostics(doc, '', '', { compareFailed: true })).some((l) => l.includes('비교 표')))
+  assert.ok(!diagnosticLines(collectDiagnostics(doc, '', '')).some((l) => l.includes('비교 표')))
+  const r = analyzePage(fakeDocument(EXT_HTML), 'https://shop.example/p/1', buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular', measurements: {} }).profile)
+  assert.ok(!('measureOnlyLabel' in (r.compareView || {})))
+})
+
+test('웹 SizeChart: 사이즈 행 선택은 키보드로 누를 수 있는 버튼을 쓴다', () => {
+  const src = readFileSync(resolvePath('src/components/SizeChart.jsx'), 'utf8')
+  assert.ok(/<button type="button" className="row-select"/.test(src))
 })
 
 test('가짜 HTML: 표가 2개면 추천 키·몸무게 표나 부위가 적은 안내표보다 실측표를 고른다', () => {

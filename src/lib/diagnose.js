@@ -142,6 +142,7 @@ export function collectDiagnostics(root, pageUrl = '', extVersion = '', extra = 
     reviewDropped: cleanDropped(product?.reviewMeta?.dropped),
     bodyExtract: cleanBodyExtract(product?.reviewMeta?.bodyExtract),
     scroll: cleanScroll(extra?.scroll),
+    compareFailed: extra?.compareFailed === true,
     structure,
   }
 }
@@ -232,6 +233,7 @@ function reviewStatLines(d) {
     const b = d.bodyExtract
     out.push(`본문 추출: 라벨 구조 ${b.structured}건, 전체 글 대체 ${b.fallback}건, 접힘/펼침 중복 제거 ${b.deduped}건 | 닉네임 읽음 ${b.withNick}건, 상품명 읽음 ${b.withProductName}건, 사진 있는 리뷰 ${b.withPhoto}건`)
   }
+  if (d.compareFailed) out.push('사이즈별 비교 표를 만들지 못해 표시하지 않았어요')
   if (d.scroll) out.push(`리뷰 불러오기: ${d.scroll.before}건 -> ${d.scroll.after}건, 멈춘 이유 ${d.scroll.stop}`)
   return out
 }

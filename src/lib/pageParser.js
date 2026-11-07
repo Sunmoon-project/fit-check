@@ -225,14 +225,14 @@ export function readOptionLabels(root) {
     const offers = [].concat(n.offers || [], n.offers?.offers || [])
     for (const o of offers) if (o && typeof o === 'object') for (const k of ['name', 'sku']) if (typeof o[k] === 'string') add(o[k], false, true)
   }
-  // 단순 글자·번호 사이즈: 같은 종류가 2개 이상이고, 수량 선택(1,2,3...10)처럼 1부터 5개 이상 이어진 번호는 제외해요.
+  // 단순 글자·번호 사이즈: 같은 종류가 2개 이상이고, 수량 선택(1,2,3...10)처럼 1부터 2개 이상 이어진 번호(1,2 / 1~4 포함)는 제외해요.
   // 'N (X)' 옵션이 이미 있으면 그쪽을 우선하고, 글자·번호는 더하지 않아요.
   if (!out.some((x) => /\(/.test(x))) {
     const uniq = (k) => [...new Set(plain.filter((p) => p.kind === k).map((p) => p.v))]
     const alpha = uniq('alpha')
     let num = uniq('num').filter((x) => !/^\d{3}$/.test(x) || !(Number(x) >= 220 && Number(x) <= 319))
     const ns = num.map(Number)
-    if (ns.length >= 5 && ns.every((n, i) => n === i + 1)) num = []
+    if (ns.length >= 2 && ns.every((n, i) => n === i + 1)) num = []
     const mmCount = out.filter((x) => /^\d{3}$/.test(x)).length
     if (!mmCount) {
       const best = alpha.length >= num.length ? alpha : num

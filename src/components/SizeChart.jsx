@@ -41,7 +41,13 @@ export default function SizeChart({ chart, recommendedSize, selectedSize, compar
                 >
                   {row.map((cell, i) => (
                     <td key={i}>
-                      {cell}
+                      {i === 0 && onSelect ? (
+                        <button type="button" className="row-select" aria-pressed={label === selectedSize} onClick={(e) => { e.stopPropagation(); onSelect(label) }}>
+                          {cell}
+                        </button>
+                      ) : (
+                        cell
+                      )}
                       {i === 0 && isReco && <span className="reco-dot">추천</span>}
                     </td>
                   ))}

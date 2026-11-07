@@ -554,3 +554,6 @@ body {
 .tone-tryon { --tone: var(--tone-tryon); }
 .tone-feedback { --tone: var(--tone-feedback); --tone-text: #8f5400; }
 .card[class*="tone-"] .section-head { padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+
+.size-table .row-select { background: none; border: 0; padding: 0; margin: 0; font: inherit; color: inherit; font-weight: inherit; cursor: pointer; text-decoration: underline dotted; }
+.size-table .row-select:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
