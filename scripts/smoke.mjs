@@ -1304,6 +1304,22 @@ test('리뷰 키·몸무게: 가격·날짜·할인율은 읽지 않는다', () 
   }
 })
 
+test('리뷰 키·몸무게: 175/100 같은 의류 사이즈 표기는 읽지 않는다', () => {
+  for (const text of ['175/100 구매했어요', '175/100 사이즈 입니다', '사이즈 175/100', 'size: 170/95', '170/95호 샀어요']) {
+    const r = parseReviewText(text)
+    assert.deepEqual([r.height, r.weight], [null, null], text)
+  }
+})
+
+test('content.js: 더보기 후보는 button으로 좁고, 중단은 대기를 깨우며, 전체 수를 넘긴다', () => {
+  const src = readFileSync(new URL('../extension/content.js', import.meta.url), 'utf8')
+  assert.ok(!src.includes('javascript:'))
+  assert.ok(src.includes(`querySelectorAll('button, [role="button"]')`))
+  assert.ok(src.includes('quietWait(STEP_QUIET_MS, STEP_WAIT_MS, state)') && src.includes('loader.wake()'))
+  assert.ok(src.includes('count, total }') && !src.includes('total: null'))
+  assert.ok(src.includes(`behavior: 'instant'`))
+})
+
 test('DOM 파서: 리뷰 요소의 다양한 키·몸무게 표기를 읽는다', () => {
   const items = ['남성 · 175cm · 70kg L 사이즈로 구매 정사이즈예요', '키175/몸무게70 M 사이즈로 구매 잘 맞아요', '175 / 70 L 사이즈로 구매 정사이즈예요']
   const html = `<html><body><h1>니트</h1>${items.map((x) => `<div class="review-item">${x}</div>`).join('')}</body></html>`
