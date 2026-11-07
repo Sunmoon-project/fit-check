@@ -23,6 +23,7 @@ import {
   fitLinear,
 } from './lib/bodyMetrics.mjs'
 import { PRODUCTS } from '../src/data/mockData.js'
+import { parseReviewText } from '../src/lib/productCore.js'
 import { parseProductHtml } from '../server/productParser.js'
 import { parsePage, isProductPage } from '../src/lib/pageParser.js'
 import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
@@ -1273,6 +1274,41 @@ test('확장 소스에 네트워크 호출이 없다', () => {
     const code = readFileSync(new URL(`../extension/${f}`, import.meta.url), 'utf8')
     assert.ok(!/\b(fetch|XMLHttpRequest|sendBeacon|WebSocket)\b/.test(code), f)
   }
+})
+
+const HW_CASES = [
+  ['175cm 70kg', 175, 70],
+  ['175cm/70kg', 175, 70],
+  ['175cm · 70kg', 175, 70],
+  ['키 175 몸무게 70', 175, 70],
+  ['키175/몸무게70', 175, 70],
+  ['175 / 70', 175, 70],
+  ['후기 175/70 입니다', 175, 70],
+  ['175.5cm', 175.5, null],
+  ['남성 · 175cm · 70kg', 175, 70],
+  ['키 205 몸무게 90', 205, 90],
+]
+
+test('리뷰 키·몸무게: 여러 표기를 읽는다', () => {
+  for (const [text, h, w] of HW_CASES) {
+    const r = parseReviewText(text)
+    assert.deepEqual([r.height, r.weight], [h, w], text)
+  }
+})
+
+test('리뷰 키·몸무게: 가격·날짜·할인율은 읽지 않는다', () => {
+  for (const text of ['175,000원', '2024-01-175', '70% 할인', '1175 / 70', '175 / 700', '175/70/3']) {
+    const r = parseReviewText(text)
+    assert.deepEqual([r.height, r.weight], [null, null], text)
+  }
+})
+
+test('DOM 파서: 리뷰 요소의 다양한 키·몸무게 표기를 읽는다', () => {
+  const items = ['남성 · 175cm · 70kg L 사이즈로 구매 정사이즈예요', '키175/몸무게70 M 사이즈로 구매 잘 맞아요', '175 / 70 L 사이즈로 구매 정사이즈예요']
+  const html = `<html><body><h1>니트</h1>${items.map((x) => `<div class="review-item">${x}</div>`).join('')}</body></html>`
+  const p = parsePage(fakeDocument(html), '')
+  assert.equal(p.reviews.length, 3)
+  for (const r of p.reviews) assert.deepEqual([r.height, r.weight], [175, 70])
 })
 
 console.log(`\n${passed}개 통과`)
