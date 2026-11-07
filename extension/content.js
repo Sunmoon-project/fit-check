@@ -297,6 +297,8 @@ function manualForm(r) {
           msg.textContent = '먼저 확장 프로그램 아이콘을 눌러 체형 정보를 저장해주세요.'
           return
         }
+        chosenExtraRows = extraRows
+        chosenFor = location.href
         renderResult({ ...analyzePage(document, location.href, profile, EXT_VERSION, { extraRows, categoryOverride: chosenCategory }), manual: true })
       } catch {
         msg.textContent = '직접 입력한 표로 분석하지 못했어요. 입력 형식을 확인하고 다시 눌러주세요.'
@@ -1031,7 +1033,8 @@ function loadMoreBlock(r) {
       })
       const profile = await readProfile()
       if (!isUsableProfile(profile)) throw new Error('no-profile')
-      const next = analyzePage(document, location.href, profile, EXT_VERSION, { categoryOverride: chosenCategory })
+      const next = analyzePage(document, location.href, profile, EXT_VERSION, { categoryOverride: chosenCategory, ...(chosenExtraRows ? { extraRows: chosenExtraRows } : {}) })
+      if (chosenExtraRows) next.manual = true
       const scroll = { before: r.reviewsLoaded ?? 0, after: next.reviewsLoaded ?? 0, stop: toReportStop(reason) }
       if (next.status === 'ok') {
         next.diagnostics = collectDiagnostics(document, location.href, EXT_VERSION, { scroll })
@@ -1058,6 +1061,8 @@ function loadMoreBlock(r) {
 
 // 사용자가 고른 옷 종류 (이 페이지에서만 기억하고 저장하지 않아요). 자동 분류보다 우선합니다.
 let chosenCategory = null
+// 직접 입력한 사이즈표도 같은 페이지에서만 기억해요 (저장하지 않음). 종류 칩을 눌러도 유지됩니다.
+let chosenExtraRows = null
 let chosenFor = ''
 
 // 분류 신뢰도가 높지 않을 때 보이는 종류 선택 칩. 누르면 그 종류로 다시 분석해요.
@@ -1082,7 +1087,8 @@ async function reanalyzeWithCategory(key) {
   try {
     const profile = await readProfile()
     if (!isUsableProfile(profile)) throw new Error('no-profile')
-    renderResult(analyzePage(document, location.href, profile, EXT_VERSION, { categoryOverride: key }))
+    const out = analyzePage(document, location.href, profile, EXT_VERSION, { categoryOverride: key, ...(chosenExtraRows ? { extraRows: chosenExtraRows } : {}) })
+    renderResult(chosenExtraRows ? { ...out, manual: true } : out)
   } catch {
     renderResult({ status: 'error', message: '종류를 바꿔 다시 분석하다 문제가 생겼어요. 다시 눌러주세요.', diagnostics: null })
   }
@@ -1198,6 +1204,7 @@ async function run() {
       renderResult({ status: 'no-profile', message: '먼저 확장 프로그램 아이콘을 눌러 키·몸무게 등 체형 정보를 저장해주세요.' })
       return
     }
+    chosenExtraRows = null // 새로 분석할 때는 이전 직접 입력 표를 쓰지 않아요
     if (chosenFor !== location.href) chosenCategory = null // 다른 상품 페이지로 옮겼으면 이전 선택은 쓰지 않아요
     stage = 'wait'
     await waitForRender()

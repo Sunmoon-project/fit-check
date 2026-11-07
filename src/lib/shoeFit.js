@@ -44,6 +44,8 @@ const SIZE_STEP = [
 function feelSize(value) {
   const v = String(value)
   if (/정\s*사이즈|딱\s*맞|정사이즈/.test(v)) return { size: 'true', step: 0 }
+  // 부정형('작지도 크지도 않음', '작지 않아요', '크지 않음')은 정사이즈로 읽어요.
+  if (/(작|크)지\s*(도|는)?\s*(않|없)|(작|크)지도\s*(크|작)지도/.test(v)) return { size: 'true', step: 0 }
   const dir = /작/.test(v) ? 'small' : /크|큼|커/.test(v) ? 'large' : null
   if (!dir) return null
   const step = (SIZE_STEP.find(([re]) => re.test(v)) || [null, 0])[1]
@@ -188,13 +190,17 @@ export function recommendShoe({ options, footLength, footLengthEstimated = false
     // 같은 사이즈를 산 리뷰가 충분하고 '작아요'가 절반 이상이면 한 단계 위, '커요'가 절반 이상이면 한 단계 아래를 권해요.
     const agg = aggOf(rows[idx].mm)
     if (agg && agg.felt >= MIN_REVIEWS_FOR_BUMP) {
-      if (agg.size.small / agg.felt >= 0.5 && !bumped && idx < rows.length - 1) {
+      const smallMany = agg.size.small / agg.felt >= 0.5
+      const largeMany = agg.size.large / agg.felt >= 0.5
+      if (smallMany && !bumped && idx < rows.length - 1) {
         idx += 1
         reasons.push(`${rows[idx - 1].mm} 구매 리뷰 ${agg.felt}건 중 ${agg.size.small}건이 작다고 해서 한 단계 큰 ${rows[idx].label}을(를) 권해요.`)
-      } else if (agg.size.large / agg.felt >= 0.5 && idx > 0) {
+      } else if (largeMany && idx > 0) {
         idx -= 1
         reasons.push(`${rows[idx + 1].mm} 구매 리뷰 ${agg.felt}건 중 ${agg.size.large}건이 크다고 해서 한 단계 작은 ${rows[idx].label}을(를) 권해요.`)
-      } else if (agg.size.small / agg.felt >= 0.5) {
+      } else if (smallMany && bumped) {
+        notes.push(`${rows[idx].mm} 구매 리뷰에서 작다는 의견이 많지만, 발볼 때문에 이미 한 단계 큰 사이즈로 골랐어요.`)
+      } else if (smallMany) {
         notes.push(`${rows[idx].mm} 구매 리뷰에서 작다는 의견이 많아요. 한 단계 큰 사이즈가 없어 그대로 두었어요.`)
       }
     }
@@ -235,4 +241,11 @@ export function shoeViewFor(product, profile) {
     preferredFit: profile.preferredFit,
     reviews: product.reviews,
   })
+}
+
+/** 엔진 결과를 신발 추천으로 통일해요 (추천 카드·선택 기본값·옷장·입어보기가 같은 사이즈를 가리킴). 신발 추천이 없으면 그대로 돌려줘요. */
+export function withShoeRecommendation(result, shoe) {
+  const rec = shoe?.recommended
+  if (!rec) return result
+  return { ...result, recommendedSize: String(rec.mm), headline: `${rec.label} 사이즈를 추천해요`, body: shoe.reasons.join(' ') || result.body }
 }
