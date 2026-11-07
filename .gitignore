@@ -10,3 +10,6 @@ dist-ssr
 /data/
 .cache/
 validation-output/
+
+# 크롬 확장 빌드 결과
+dist-extension

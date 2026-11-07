@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "smoke": "node scripts/smoke.mjs",
     "validate:fit": "node scripts/validateFit.mjs",
-    "validate:body": "node scripts/validateBody.mjs"
+    "validate:body": "node scripts/validateBody.mjs",
+    "build:extension": "node scripts/buildExtension.mjs && node scripts/checkExtension.mjs"
   },
   "dependencies": {
     "cheerio": "^1.2.0",

@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "핏체크",
+  "version": "0.1.0",
+  "description": "쇼핑몰 상품 페이지에서 내 체형에 맞는 사이즈를 찾아줘요. 체형 정보는 이 브라우저에만 저장되고 밖으로 전송되지 않아요.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "action": {
+    "default_title": "핏체크",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://www.musinsa.com/*",
+        "*://www.29cm.co.kr/*",
+        "*://www.wconcept.co.kr/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}
