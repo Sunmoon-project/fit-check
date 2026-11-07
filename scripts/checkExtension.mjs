@@ -16,6 +16,8 @@ export function checkManifest(m, dir = null) {
   const matches = (m.content_scripts || []).flatMap((c) => c.matches || [])
   for (const x of matches) {
     if (/<all_urls>/.test(x) || /^\*:\/\/\*\//.test(x) || /^https?:\/\/\*\//.test(x)) err(`content_scripts matches가 너무 넓어요: ${x}`)
+    // file:// 은 웹 앱 단일 HTML 파일 하나로만 좁힐 때 허용 (file:///* 같은 전체 허용은 거부)
+    if (/^file:/.test(x) && !/^file:\/\/\/\*\/fit-check\.html$/.test(x)) err(`file:// matches는 fit-check.html만 허용해요: ${x}`)
   }
   const csp = JSON.stringify(m.content_security_policy || {})
   if (/https?:|unsafe-eval|unsafe-inline/.test(csp)) err('CSP에 원격 주소나 unsafe-*가 있어요')
@@ -36,10 +38,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const dir = resolve(import.meta.dirname, '..', 'dist-extension')
   const m = JSON.parse(readFileSync(resolve(dir, 'manifest.json'), 'utf8'))
   const errors = checkManifest(m, dir)
-  for (const f of ['content.js', 'popup.js', 'popup.html', 'manifest.json']) if (!existsSync(resolve(dir, f))) errors.push(`${f} 없음`)
+  for (const f of ['content.js', 'bridge.js', 'popup.js', 'popup.html', 'manifest.json']) if (!existsSync(resolve(dir, f))) errors.push(`${f} 없음`)
   const html = readFileSync(resolve(dir, 'popup.html'), 'utf8')
   if (/<script(?![^>]*\ssrc=)[^>]*>/i.test(html)) errors.push('popup.html에 인라인 스크립트가 있어요')
-  for (const f of ['content.js', 'popup.js']) {
+  for (const f of ['content.js', 'bridge.js', 'popup.js']) {
     const code = readFileSync(resolve(dir, f), 'utf8')
     try {
       const bad = findUndeclared(code)

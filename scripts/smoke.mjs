@@ -29,6 +29,11 @@ import { parsePage, isProductPage, splitSentences, extractCardView, parseGender 
 import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
 import { collectDiagnostics, formatReport, REPORT_MAX } from '../src/lib/diagnose.js'
 import { buildExportEnvelope, parseImportText, sanitizeItem, addImportedItem, LIMITS as IMPORT_LIMITS } from '../src/lib/wardrobeImport.js'
+import {
+  SYNC_QUEUE_KEY, WEB_APP_ORIGINS, BRIDGE_MATCHES, QUEUE_MAX, QUEUE_TTL_MS, isAllowedPage, postTargetOrigin, isTrustedMessage, enqueue, pruneQueue, removeAcked,
+  makeDeliverMessage, makeAckMessage, makeReadyMessage, parseDeliverMessage, parseAckMessage, isReadyMessage, applyDelivery, newQueueId, syncNotice,
+} from '../src/lib/wardrobeSync.js'
+import { connectExtensionSync } from '../src/lib/syncClient.js'
 import { buildProfile, isUsableProfile } from '../src/lib/extProfile.js'
 import { fakeDocument } from './lib/cheerioDom.mjs'
 import { checkManifest } from './checkExtension.mjs'
@@ -1350,6 +1355,7 @@ test('확장 manifest: MV3, 최소 권한, 광범위 호스트 권한·원격 �
   assert.deepEqual([...EXT_MANIFEST.permissions].sort(), ['activeTab', 'scripting', 'storage'])
   assert.equal(EXT_MANIFEST.host_permissions, undefined)
   assert.ok(EXT_MANIFEST.content_scripts[0].matches.length <= 5)
+  assert.equal(EXT_MANIFEST.background, undefined, 'service worker 없음')
 })
 
 test('확장 manifest 검사기: 나쁜 manifest를 잡아낸다', () => {
@@ -1359,7 +1365,7 @@ test('확장 manifest 검사기: 나쁜 manifest를 잡아낸다', () => {
 })
 
 test('확장 소스에 네트워크 호출이 없다', () => {
-  for (const f of ['content.js', 'popup.js']) {
+  for (const f of ['content.js', 'bridge.js', 'popup.js']) {
     const code = readFileSync(new URL(`../extension/${f}`, import.meta.url), 'utf8')
     assert.ok(!/\b(fetch|XMLHttpRequest|sendBeacon|WebSocket)\b/.test(code), f)
   }
@@ -1489,7 +1495,7 @@ async function runContentInFakeDom(pageHtml = null, extra = {}) {
       ...extra,
       chrome: {
         runtime: { getManifest: () => ({ version: '0.0.0' }), onMessage: { addListener: (f) => { listeners.msg = f } } },
-        storage: { local: { get: (k, cb) => cb({ fitcheckProfile: profile }), set: (...a) => storageCalls.push(['set', a]), remove: (...a) => storageCalls.push(['remove', a]), clear: (...a) => storageCalls.push(['clear', a]) } },
+        storage: { local: { get: (k, cb) => cb({ fitcheckProfile: profile }), set: (...a) => { storageCalls.push(['set', a]); a.find((x) => typeof x === 'function')?.() }, remove: (...a) => storageCalls.push(['remove', a]), clear: (...a) => storageCalls.push(['clear', a]) } },
       },
     }
     sandbox.window = Object.assign(sandbox.window, sandbox)
@@ -2180,9 +2186,30 @@ await atest('content.js(가짜 DOM, vm): 리뷰 탭 4개와 사진 모아보기,
   assert.ok(!created.some((e) => e.tagName === 'TEXTAREA' && e.readOnly), '누르기 전에는 내용을 만들지 않아요')
   await send._l.click()
   await new Promise((r) => setTimeout(r, 20))
+  const copy = created.find((e) => e.tagName === 'BUTTON' && e.textContent === '붙여넣기용으로 복사')
+  assert.ok(copy, '대체 복사 버튼')
+  copy._l.click()
+  await new Promise((r) => setTimeout(r, 20))
   const ta = created.find((e) => e.tagName === 'TEXTAREA' && e.readOnly)
   assert.ok(ta, '읽기 전용 칸')
   assert.equal(parseImportText(ta.value).ok, true)
+})
+
+await atest('content.js(가짜 DOM, vm): 보내기를 누르면 변환된 항목이 확장 저장소 대기열에 들어가고 체형 정보는 없다', async () => {
+  const { created, storageCalls } = await runContentInFakeDom(RB_FULL)
+  const before = storageCalls.length
+  const send = created.find((e) => e.tagName === 'BUTTON' && e.textContent === '내 옷장으로 보내기')
+  await send._l.click()
+  await new Promise((r) => setTimeout(r, 20))
+  const sets = storageCalls.slice(before).filter((c) => c[0] === 'set')
+  assert.equal(sets.length, 1)
+  const queue = sets[0][1][0][SYNC_QUEUE_KEY]
+  assert.equal(queue.length, 1)
+  assert.equal(parseImportText(JSON.stringify(queue[0].envelope)).ok, true)
+  const dump = JSON.stringify(queue)
+  assert.ok(!dump.includes('"height":175') || !dump.includes('preferredFit'), '체형 정보 없음')
+  assert.ok(!dump.includes('preferredFit') && !dump.includes('footLength'))
+  assert.ok(created.some((e) => e.tagName === 'A' && e.href === 'http://localhost:5173/' && e.rel === 'noopener noreferrer'), '웹 열기 링크')
 })
 
 test('content.js 소스: 보내기는 클릭 핸들러 안에서만 만들고 네트워크 호출을 쓰지 않는다', () => {
@@ -2351,6 +2378,341 @@ test('content.js: 체형 비교는 innerHTML을 쓰지 않고 aria-live가 없�
   assert.deepEqual(findUndeclared(src), [])
   const web = readFileSync(new URL('../src/components/SimilarityCompare.jsx', import.meta.url), 'utf8')
   assert.ok(!web.includes('aria-live') && web.includes('prefers-reduced-motion'))
+})
+
+
+// ---- 확장 → 웹 옷장 자동 전달 (가짜 데이터·가짜 창·가짜 chrome.storage만 사용. 실제 크롬에서 확인한 것이 아니에요) ----
+const FAKE_ENV = (name = '가짜 니트', url = 'https://shop.example/p/1', size = 'L') => ({
+  app: 'fitcheck', kind: 'wardrobe-item', v: 1,
+  item: { product: { name, mall: '가짜몰', category: 'top', image: null, url }, size, measures: { chest: 55 }, verdicts: [], reviews: [{ nick: '가짜닉', text: '가짜 리뷰', photos: ['https://img.example/a.jpg'] }] },
+})
+const NOW = 1_800_000_000_000
+
+test('가짜 데이터 sync: 대기열 넣기 - 항목 id·시간이 붙고 같은 상품·사이즈는 하나로 합쳐진다', () => {
+  let q = []
+  const a = enqueue(q, FAKE_ENV('A'), { now: NOW, id: 'qaaaaaaa' })
+  assert.equal(a.ok, true)
+  q = a.queue
+  const b = enqueue(q, FAKE_ENV('B', 'https://shop.example/p/2'), { now: NOW + 1, id: 'qbbbbbbb' })
+  q = b.queue
+  assert.equal(q.length, 2)
+  const a2 = enqueue(q, FAKE_ENV('A2'), { now: NOW + 2, id: 'qcccccc1' }) // 같은 상품·사이즈
+  assert.deepEqual(a2.queue.map((e) => e.envelope.item.product.name), ['B', 'A2'])
+  assert.equal(enqueue(q, null).ok, false)
+  assert.equal(enqueue(q, { item: 1 }).ok, false)
+  assert.match(newQueueId(NOW, 0.5), /^q[a-z0-9]{6,40}$/)
+})
+
+test('가짜 데이터 sync: 대기열 상한과 만료, 형식이 틀린 항목 제거', () => {
+  let q = []
+  for (let i = 0; i < QUEUE_MAX + 5; i++) q = enqueue(q, FAKE_ENV(`n${i}`, `https://shop.example/p/${i}`), { now: NOW + i, id: `qid${String(i).padStart(5, '0')}` }).queue
+  assert.equal(q.length, QUEUE_MAX)
+  assert.equal(q[q.length - 1].envelope.item.product.name, `n${QUEUE_MAX + 4}`, '오래된 것부터 버림')
+  const later = NOW + QUEUE_TTL_MS + 5000
+  assert.deepEqual(pruneQueue(q, later).map((e) => e.queuedAt), q.filter((e) => later - e.queuedAt <= QUEUE_TTL_MS).map((e) => e.queuedAt))
+  assert.equal(pruneQueue(q, NOW + QUEUE_TTL_MS + 10_000_000).length, 0, '모두 만료')
+  const bad = [{ id: 'x', queuedAt: NOW, envelope: {} }, { id: 'qgood1234', queuedAt: NOW, envelope: {} }, { id: 'qgood1234', queuedAt: NOW, envelope: {} }, null, 'str', { id: 'qfuture12', queuedAt: NOW + 3_600_000, envelope: {} }]
+  assert.deepEqual(pruneQueue(bad, NOW).map((e) => e.id), ['qgood1234'])
+  assert.deepEqual(pruneQueue('nope', NOW), [])
+  const big = { app: 'fitcheck', kind: 'wardrobe-item', v: 1, item: { x: 'a'.repeat(IMPORT_LIMITS.text + 1) } }
+  assert.equal(enqueue([], big, { now: NOW }).ok, false, '너무 큰 항목')
+})
+
+test('가짜 데이터 sync: ack로 대기열에서 삭제하고 모르는 id는 무시한다', () => {
+  const q = ['qaaaaaaa', 'qbbbbbbb', 'qcccccc1'].map((id, i) => ({ id, queuedAt: NOW + i, envelope: FAKE_ENV() }))
+  assert.deepEqual(removeAcked(q, ['qbbbbbbb', 'qzzzzzzz']).map((e) => e.id), ['qaaaaaaa', 'qcccccc1'])
+  assert.equal(removeAcked(q, null).length, 3)
+})
+
+test('가짜 데이터 sync: 페이지 허용 판정 - 허용 출처와 fit-check.html 파일만', () => {
+  for (const o of WEB_APP_ORIGINS) assert.equal(isAllowedPage({ protocol: new URL(o).protocol, origin: o, pathname: '/' }), true, o)
+  assert.equal(isAllowedPage({ protocol: 'file:', origin: 'null', pathname: '/Users/x/fit-check/dist/fit-check.html' }), true)
+  for (const loc of [
+    { protocol: 'file:', origin: 'null', pathname: '/Users/x/evil.html' },
+    { protocol: 'file:', origin: 'null', pathname: '/Users/x/fit-check.html/../a.html' },
+    { protocol: 'https:', origin: 'https://evil.example', pathname: '/' },
+    { protocol: 'http:', origin: 'http://localhost:3000', pathname: '/' },
+    { protocol: 'https:', origin: 'https://localhost:5173', pathname: '/' },
+    { protocol: 'http:', origin: 'http://localhost:5173.evil.example', pathname: '/' },
+    null, {},
+  ]) assert.equal(isAllowedPage(loc), false, JSON.stringify(loc))
+})
+
+test('가짜 데이터 sync: manifest의 브리지 matches가 허용 출처 상수와 일치한다', () => {
+  const bridge = EXT_MANIFEST.content_scripts.find((c) => c.js.includes('bridge.js'))
+  assert.ok(bridge)
+  assert.deepEqual([...bridge.matches].sort(), [...BRIDGE_MATCHES].sort())
+  assert.ok(!EXT_MANIFEST.content_scripts.find((c) => c.js.includes('content.js')).matches.some((m) => /localhost|127\.0\.0\.1|file:/.test(m)), '쇼핑몰 content script에는 웹 앱 주소가 없다')
+  assert.ok(bridge.matches.filter((m) => m.startsWith('file:')).every((m) => m === 'file:///*/fit-check.html'))
+  const bad = { ...EXT_MANIFEST, content_scripts: [{ matches: ['file:///*'], js: ['bridge.js'] }] }
+  assert.ok(checkManifest(bad).some((e) => e.includes('file://')))
+})
+
+test('가짜 데이터 sync: message 이벤트 신뢰 판정 - source, origin, file:// 의 null origin', () => {
+  const win = {}
+  const http = { protocol: 'http:', origin: 'http://localhost:5173' }
+  const file = { protocol: 'file:', origin: 'null' }
+  const ev = (o) => ({ data: { a: 1 }, source: win, origin: 'http://localhost:5173', ...o })
+  assert.equal(isTrustedMessage(ev(), win, http), true)
+  assert.equal(isTrustedMessage(ev({ source: {} }), win, http), false, '다른 창(iframe 등)')
+  assert.equal(isTrustedMessage(ev({ source: null }), win, http), false)
+  assert.equal(isTrustedMessage(ev({ origin: 'https://evil.example' }), win, http), false)
+  assert.equal(isTrustedMessage(ev({ origin: 'null' }), win, http), false, 'http 페이지에서 null origin 거부')
+  assert.equal(isTrustedMessage(ev({ data: 'str' }), win, http), false)
+  assert.equal(isTrustedMessage(ev({ data: [1] }), win, http), false)
+  assert.equal(isTrustedMessage(ev({ origin: 'null' }), win, file), true)
+  assert.equal(isTrustedMessage(ev({ origin: 'http://localhost:5173' }), win, file), false)
+  assert.equal(isTrustedMessage(ev({ origin: 'null', source: {} }), win, file), false)
+  assert.equal(postTargetOrigin(http), 'http://localhost:5173')
+  assert.equal(postTargetOrigin(file), '*')
+})
+
+test('가짜 데이터 sync: 메시지 모양 검사 - 틀린 메시지는 거부한다', () => {
+  const q = [{ id: 'qaaaaaaa', queuedAt: NOW, envelope: FAKE_ENV() }]
+  assert.equal(parseDeliverMessage(makeDeliverMessage(q)).length, 1)
+  for (const m of [null, 'x', {}, { ...makeDeliverMessage(q), source: 'other' }, { ...makeDeliverMessage(q), v: 2 }, { ...makeDeliverMessage(q), type: 'ack' }, { ...makeDeliverMessage(q), entries: 'x' }]) assert.equal(parseDeliverMessage(m), null)
+  assert.deepEqual(parseDeliverMessage({ ...makeDeliverMessage(q), entries: [...q, { id: 'bad', queuedAt: 1, envelope: {} }, null] }).map((e) => e.id), ['qaaaaaaa'])
+  assert.deepEqual(parseAckMessage(makeAckMessage(['qaaaaaaa'])), ['qaaaaaaa'])
+  assert.deepEqual(parseAckMessage({ ...makeAckMessage([]), ids: ['qaaaaaaa', 5, 'bad id', { a: 1 }] }), ['qaaaaaaa'])
+  for (const m of [null, {}, { ...makeAckMessage(['qaaaaaaa']), source: 'fitcheck-ext' }, { ...makeAckMessage(['qaaaaaaa']), ids: 'x' }, makeDeliverMessage(q)]) assert.equal(parseAckMessage(m), null)
+  assert.equal(isReadyMessage(makeReadyMessage()), true)
+  assert.equal(isReadyMessage({ ...makeReadyMessage(), source: 'x' }), false)
+  assert.equal(isReadyMessage(makeAckMessage([])), false)
+})
+
+test('가짜 데이터 sync: 전달 반영 - 한 번만 저장(중복 전달), 형식 오류·만료는 건너뛰고 처리 완료로 표시', () => {
+  const entries = [
+    { id: 'qaaaaaaa', queuedAt: NOW, envelope: FAKE_ENV('A', 'https://shop.example/p/1') },
+    { id: 'qbbbbbbb', queuedAt: NOW + 1, envelope: FAKE_ENV('B', 'https://shop.example/p/2') },
+  ]
+  const r1 = applyDelivery([], entries, [], { now: NOW + 5, addItem: addImportedItem })
+  assert.deepEqual(r1.savedIds.sort(), ['qaaaaaaa', 'qbbbbbbb'])
+  assert.deepEqual(r1.list.map((w) => w.product.name), ['B', 'A'], '최근 것이 맨 앞')
+  assert.ok(r1.list.every((w) => w.source === 'extension'))
+  assert.equal(syncNotice(r1), '확장에서 2벌 가져왔어요.')
+  // 같은 항목을 다시 전달(ack가 늦거나 유실): 저장하지 않고 처리 완료만
+  const r2 = applyDelivery(r1.list, entries, r1.seen, { now: NOW + 6, addItem: addImportedItem })
+  assert.deepEqual(r2.savedIds, [])
+  assert.equal(r2.list.length, 2)
+  assert.deepEqual(r2.ignoredIds.sort(), ['qaaaaaaa', 'qbbbbbbb'])
+  assert.equal(syncNotice(r2), '')
+  // 한 번의 전달 안에서 같은 id가 두 번
+  const r3 = applyDelivery([], [entries[0], entries[0]], [], { now: NOW + 5, addItem: addImportedItem })
+  assert.equal(r3.list.length, 1)
+  assert.equal(r3.duplicates, 1)
+  // 형식 오류 / 만료 / 위험 주소
+  const evil = FAKE_ENV('악성')
+  evil.item.product.url = 'javascript:alert(1)'
+  evil.item.product.image = 'data:image/png;base64,AAAA'
+  evil.item.reviews[0].photos = ['javascript:1', 'https://ok.example/x.jpg']
+  const r4 = applyDelivery([], [
+    { id: 'qbad00001', queuedAt: NOW, envelope: { app: 'other' } },
+    { id: 'qold00001', queuedAt: NOW - QUEUE_TTL_MS - 1, envelope: FAKE_ENV('만료') },
+    { id: 'qevil0001', queuedAt: NOW, envelope: evil },
+  ], [], { now: NOW + 5, addItem: addImportedItem })
+  assert.equal(r4.rejected, 2)
+  assert.deepEqual(r4.savedIds, ['qevil0001'])
+  assert.equal(r4.list[0].product.url, '')
+  assert.equal(r4.list[0].product.image, null)
+  assert.deepEqual(r4.list[0].reviews[0].photos, ['https://ok.example/x.jpg'])
+  assert.equal(r4.ignoredIds.length, 2)
+  assert.equal(syncNotice({ savedIds: [], rejected: 1 }), '확장에서 보낸 내용을 읽지 못했어요.')
+  // seen 상한
+  const many = applyDelivery([], [entries[0]], Array.from({ length: 500 }, (_, i) => `qold${i}xxxx`), { now: NOW + 5, addItem: addImportedItem })
+  assert.equal(many.seen.length, 200)
+  assert.equal(many.seen[many.seen.length - 1], 'qaaaaaaa')
+})
+
+test('가짜 데이터 sync: 같은 상품·사이즈가 옷장에 있으면 합성 이미지는 유지하고 id 기준 중복 저장은 없다', () => {
+  const existing = [{ id: 'wold', savedAt: 1, product: { name: '기존', mall: '', category: 'top', image: null, emoji: null, url: 'https://shop.example/p/1' }, size: 'L', measures: null, verdicts: [], image: 'data:image/png;base64,XX', imageKind: 'ai', reviews: [] }]
+  const r = applyDelivery(existing, [{ id: 'qaaaaaaa', queuedAt: NOW, envelope: FAKE_ENV('새 이름') }], [], { now: NOW + 1, addItem: addImportedItem })
+  assert.equal(r.list.length, 1)
+  assert.equal(r.list[0].id, 'wold')
+  assert.equal(r.list[0].image, 'data:image/png;base64,XX')
+  assert.equal(r.list[0].product.name, '새 이름')
+})
+
+// 가짜 창: postMessage는 같은 창의 리스너에게 source=창 자신, origin=설정값으로 전달합니다.
+function fakeWindow(origin, protocol = 'http:') {
+  const listeners = []
+  const posted = []
+  const win = {
+    location: { origin, protocol, pathname: protocol === 'file:' ? '/x/fit-check.html' : '/' },
+    posted,
+    addEventListener: (t, f) => t === 'message' && listeners.push(f),
+    removeEventListener: (t, f) => { const i = listeners.indexOf(f); if (i >= 0) listeners.splice(i, 1) },
+    postMessage(data, target) { posted.push({ data, target }) },
+    deliverToSelf(data, ev = {}) { for (const f of [...listeners]) f({ data, source: win, origin: win.location.origin, ...ev }) },
+    listenerCount: () => listeners.length,
+  }
+  return win
+}
+
+test('가짜 데이터 sync: 웹 앱 연결 - 전달을 받으면 처리하고 ack, 출처가 다르면 무시, 해제하면 더 받지 않는다', () => {
+  const win = fakeWindow('http://localhost:5173')
+  const got = []
+  const off = connectExtensionSync((entries) => { got.push(entries); return entries.map((e) => e.id) }, win)
+  assert.equal(win.posted[0].data.type, 'ready')
+  assert.equal(win.posted[0].target, 'http://localhost:5173')
+  const q = [{ id: 'qaaaaaaa', queuedAt: NOW, envelope: FAKE_ENV() }]
+  win.deliverToSelf(makeDeliverMessage(q), { origin: 'https://evil.example' })
+  win.deliverToSelf(makeDeliverMessage(q), { source: {} })
+  win.deliverToSelf({ type: 'deliver', entries: q })
+  win.deliverToSelf(makeDeliverMessage([]))
+  assert.equal(got.length, 0)
+  win.deliverToSelf(makeDeliverMessage(q))
+  assert.equal(got.length, 1)
+  assert.deepEqual(win.posted[1].data, makeAckMessage(['qaaaaaaa']))
+  off()
+  win.deliverToSelf(makeDeliverMessage(q))
+  assert.equal(got.length, 1)
+  assert.equal(win.listenerCount(), 0)
+  // 저장에 실패해 아무것도 처리하지 못하면 ack를 보내지 않는다
+  const w2 = fakeWindow('null', 'file:')
+  connectExtensionSync(() => [], w2)
+  w2.deliverToSelf(makeDeliverMessage(q))
+  assert.equal(w2.posted.length, 1, 'ready만 있고 ack 없음')
+  assert.equal(w2.posted[0].target, '*')
+})
+
+// 브리지(extension/bridge.js)를 IIFE로 빌드해 가짜 window·chrome.storage에서 실행합니다.
+async function runBridge(loc, initialQueue) {
+  const root = resolvePath(import.meta.dirname, '..')
+  const outDir = mkdtempSync(join(tmpdir(), 'fitcheck-bridge-'))
+  try {
+    await viteBuild({
+      configFile: false, root, logLevel: 'silent', publicDir: false,
+      build: { outDir, emptyOutDir: true, minify: false, target: 'es2020', lib: { entry: resolvePath(root, 'extension/bridge.js'), formats: ['iife'], name: 'fitcheck_bridge', fileName: () => 'bridge.js' } },
+    })
+    const code = readFileSync(join(outDir, 'bridge.js'), 'utf8')
+    assert.deepEqual(findUndeclared(code), [])
+    assert.ok(!/\b(fetch|XMLHttpRequest|sendBeacon|WebSocket)\b/.test(code))
+    const win = fakeWindow(loc.origin, loc.protocol)
+    win.location = loc
+    const store = { [SYNC_QUEUE_KEY]: initialQueue }
+    let changed = null
+    const chromeFake = {
+      storage: {
+        local: {
+          get: (k, cb) => cb({ [k]: store[k] }),
+          set: (obj, cb) => { Object.assign(store, JSON.parse(JSON.stringify(obj))); changed?.({ [SYNC_QUEUE_KEY]: {} }, 'local'); cb?.() },
+        },
+        onChanged: { addListener: (f) => { changed = f } },
+      },
+    }
+    const sandbox = { window: win, chrome: chromeFake, console }
+    vm.createContext(sandbox)
+    vm.runInContext(code, sandbox)
+    return { win, store, fireChanged: (area = 'local') => changed?.({ [SYNC_QUEUE_KEY]: {} }, area), hasChangedListener: () => !!changed }
+  } finally {
+    rmSync(outDir, { recursive: true, force: true })
+  }
+}
+
+await atest('브리지(가짜 window·chrome.storage): 열릴 때와 ready 요청에 대기열을 전달하고, ack를 받은 항목만 지운다', async () => {
+  const now = Date.now()
+  const q = [
+    { id: 'qaaaaaaa', queuedAt: now - 1000, envelope: FAKE_ENV('A', 'https://shop.example/p/1') },
+    { id: 'qbbbbbbb', queuedAt: now - 500, envelope: FAKE_ENV('B', 'https://shop.example/p/2') },
+  ]
+  const { win, store, fireChanged } = await runBridge({ protocol: 'http:', origin: 'http://localhost:5173', pathname: '/' }, q)
+  assert.equal(win.posted.length, 1)
+  assert.equal(win.posted[0].data.type, 'deliver')
+  assert.equal(win.posted[0].data.entries.length, 2)
+  assert.equal(win.posted[0].target, 'http://localhost:5173')
+  win.deliverToSelf(makeReadyMessage())
+  assert.equal(win.posted.length, 2)
+  // 다른 출처·다른 창에서 온 ack는 무시
+  win.deliverToSelf(makeAckMessage(['qaaaaaaa']), { origin: 'https://evil.example' })
+  win.deliverToSelf(makeAckMessage(['qaaaaaaa']), { source: {} })
+  assert.equal(store[SYNC_QUEUE_KEY].length, 2)
+  // 모르는 명령은 무시 (페이지가 확장에 시킬 수 있는 일은 ready, ack뿐)
+  win.deliverToSelf({ source: 'fitcheck-web', v: 1, type: 'clear-all' })
+  win.deliverToSelf({ source: 'fitcheck-web', v: 1, type: 'set-profile', profile: {} })
+  assert.equal(store[SYNC_QUEUE_KEY].length, 2)
+  win.deliverToSelf(makeAckMessage(['qaaaaaaa']))
+  assert.deepEqual(store[SYNC_QUEUE_KEY].map((e) => e.id), ['qbbbbbbb'])
+  // 저장소가 바뀌면(웹이 이미 열려 있을 때 새로 보냄) 바로 전달
+  const n = win.posted.length
+  fireChanged('sync')
+  assert.equal(win.posted.length, n, 'local 영역이 아니면 무시')
+  fireChanged('local')
+  assert.equal(win.posted.length, n + 1)
+  win.deliverToSelf(makeAckMessage(['qbbbbbbb']))
+  assert.equal(store[SYNC_QUEUE_KEY].length, 0)
+  const m = win.posted.length
+  fireChanged('local')
+  assert.equal(win.posted.length, m, '빈 대기열은 보내지 않아요')
+})
+
+await atest('브리지(가짜 window·chrome.storage): 만료·형식 오류 항목은 전달하지 않고 대기열에서 정리한다', async () => {
+  const now = Date.now()
+  const q = [
+    { id: 'qold00001', queuedAt: now - QUEUE_TTL_MS - 1000, envelope: FAKE_ENV('만료') },
+    { id: 'bad', queuedAt: now, envelope: {} },
+    { id: 'qgood0001', queuedAt: now, envelope: FAKE_ENV('정상') },
+  ]
+  const { win, store } = await runBridge({ protocol: 'http:', origin: 'http://127.0.0.1:4173', pathname: '/' }, q)
+  assert.deepEqual(Array.from(win.posted[0].data.entries, (e) => e.id), ['qgood0001']) // vm 안에서 만든 배열이라 realm이 달라 Array.from으로 옮겨요
+  assert.deepEqual(store[SYNC_QUEUE_KEY].map((e) => e.id), ['qgood0001'])
+})
+
+await atest('브리지(가짜 window): file:// 단일 HTML에서는 null origin과 targetOrigin * 로 동작한다', async () => {
+  const now = Date.now()
+  const q = [{ id: 'qaaaaaaa', queuedAt: now, envelope: FAKE_ENV() }]
+  const { win, store } = await runBridge({ protocol: 'file:', origin: 'null', pathname: '/Users/x/fit-check/dist/fit-check.html' }, q)
+  assert.equal(win.posted[0].target, '*')
+  win.deliverToSelf(makeAckMessage(['qaaaaaaa']), { origin: 'http://localhost:5173' })
+  assert.equal(store[SYNC_QUEUE_KEY].length, 1)
+  win.deliverToSelf(makeAckMessage(['qaaaaaaa']), { origin: 'null' })
+  assert.equal(store[SYNC_QUEUE_KEY].length, 0)
+})
+
+await atest('브리지(가짜 window): 허용 목록에 없는 페이지에서는 아무것도 하지 않는다', async () => {
+  const q = [{ id: 'qaaaaaaa', queuedAt: Date.now(), envelope: FAKE_ENV() }]
+  for (const loc of [
+    { protocol: 'https:', origin: 'https://evil.example', pathname: '/' },
+    { protocol: 'file:', origin: 'null', pathname: '/Users/x/other.html' },
+    { protocol: 'http:', origin: 'http://localhost:3000', pathname: '/' },
+  ]) {
+    const { win, store, hasChangedListener } = await runBridge(loc, q)
+    assert.equal(win.posted.length, 0, loc.origin + loc.pathname)
+    assert.equal(win.listenerCount(), 0)
+    assert.equal(hasChangedListener(), false)
+    win.deliverToSelf(makeAckMessage(['qaaaaaaa']))
+    assert.equal(store[SYNC_QUEUE_KEY].length, 1)
+  }
+})
+
+test('빌드된 웹 앱 소스: 자동 가져오기 연결과 알림이 App에 있고, 확장 → 웹 메시지에 체형 정보 필드가 없다', () => {
+  const app = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
+  assert.ok(app.includes('connectExtensionSync') && app.includes('applyDelivery') && app.includes('sync-notice'))
+  const sync = readFileSync(new URL('../src/lib/wardrobeSync.js', import.meta.url), 'utf8')
+  assert.ok(!/preferredFit|footLength|loadProfile|EXT_PROFILE_KEY/.test(sync))
+  const bridge = readFileSync(new URL('../extension/bridge.js', import.meta.url), 'utf8')
+  assert.ok(!/EXT_PROFILE_KEY|fitcheckProfile|innerHTML|eval\(/.test(bridge))
+  assert.ok(!bridge.includes("'*'"), 'targetOrigin 결정은 postTargetOrigin 한 곳')
+})
+
+test('웹 앱 소스: 이미 처리된 전달만 받아도 옷장 상태를 저장소 기준으로 새로 읽는다 (여러 탭)', () => {
+  const app = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
+  const i = app.indexOf('if (r.savedIds.length === 0) {')
+  assert.ok(i > 0 && app.slice(i, i + 300).includes('setWardrobe(loadWardrobe())'))
+})
+
+test('가짜 데이터 sync: 두 탭(가짜 window)이 같은 전달을 받아도 한 번만 담긴다', () => {
+  const entries = [{ id: 'qaaaaaaa', queuedAt: NOW, envelope: FAKE_ENV() }]
+  let store = [], seen = []
+  const handler = (es) => {
+    const r = applyDelivery(store, es, seen, { now: NOW + 1, addItem: addImportedItem })
+    store = r.list; seen = r.seen
+    return [...r.savedIds, ...r.ignoredIds]
+  }
+  const a = fakeWindow('http://localhost:5173'), b = fakeWindow('http://localhost:5173')
+  connectExtensionSync(handler, a); connectExtensionSync(handler, b)
+  a.deliverToSelf(makeDeliverMessage(entries)); b.deliverToSelf(makeDeliverMessage(entries))
+  assert.equal(store.length, 1)
+  assert.deepEqual(b.posted[1].data.ids, ['qaaaaaaa'], '두 번째 탭도 처리 완료로 ack')
 })
 
 console.log(`\n${passed}개 통과`)

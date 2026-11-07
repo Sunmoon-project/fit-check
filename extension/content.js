@@ -3,6 +3,7 @@
 import { isProductPage, REVIEW_SELECTOR, readReviewTotal, readReviewCardEls } from '../src/lib/pageParser.js'
 import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
 import { buildExportEnvelope } from '../src/lib/wardrobeImport.js'
+import { SYNC_QUEUE_KEY, WEB_APP_OPEN_URL, enqueue } from '../src/lib/wardrobeSync.js'
 import { collectDiagnostics, formatReport } from '../src/lib/diagnose.js'
 import { shouldStop, isSafeMoreButton, toReportStop, STOP_LABEL } from '../src/lib/reviewLoader.js'
 import { compareBody, countUpValue } from '../src/lib/similarityBreakdown.js'
@@ -39,6 +40,7 @@ p{margin:0}
 .det{margin:8px 0 0;padding-left:16px;color:#555;font-size:11px}
 .btn{margin-top:8px;border:1px solid #111;border-radius:8px;background:#fff;color:#111;padding:6px 10px;font-size:12px;cursor:pointer}
 .ok{margin-top:6px;font-size:12px;color:#0a7a3c}
+.weblink{display:inline-block;margin-top:6px;margin-right:8px;font-size:12px;color:#111}
 .inp{width:100%;margin-top:6px;border:1px solid #d4d4d4;border-radius:6px;padding:6px;font-size:12px;font-family:inherit}
 .prog{margin-top:6px;font-size:12px;color:#555}
 .note{margin-top:6px;font-size:11px;color:#8a8a8e}
@@ -565,29 +567,69 @@ function compareTab(rvs, all) {
   return { node: box, play }
 }
 
-// 내 옷장으로 보내기: 누를 때만 JSON을 클립보드에 복사하고, 같은 글을 읽기 전용 칸에도 보여줘요. 어디로도 전송하지 않아요.
+// 내 옷장으로 보내기: 누를 때만 변환된 항목을 이 브라우저의 확장 저장소(대기열)에 넣어요. 핏체크 웹이 열려 있으면 바로, 아니면 열 때 자동으로 옷장에 들어가요.
+// 서버로 보내지 않고, 체형 정보는 담지 않아요. 자동 전달이 안 될 때를 위해 '붙여넣기용으로 복사'도 남겨둡니다.
+function queueEnvelope(env) {
+  return new Promise((resolve) => {
+    if (typeof chrome === 'undefined' || !chrome.storage?.local) {
+      resolve(false)
+      return
+    }
+    try {
+      chrome.storage.local.get(SYNC_QUEUE_KEY, (res) => {
+        const q = enqueue(Array.isArray(res?.[SYNC_QUEUE_KEY]) ? res[SYNC_QUEUE_KEY] : [], env)
+        if (!q.ok) {
+          resolve(false)
+          return
+        }
+        chrome.storage.local.set({ [SYNC_QUEUE_KEY]: q.queue }, () => resolve(!chrome.runtime?.lastError))
+      })
+    } catch {
+      resolve(false)
+    }
+  })
+}
+
 function exportBlock(r) {
   const box = el('div')
   const btn = el('button', 'btn', '내 옷장으로 보내기')
   btn.type = 'button'
   const msg = el('p', 'ok')
   msg.setAttribute('role', 'status')
+  const extra = el('div')
   btn.addEventListener('click', async () => {
     const env = buildExportEnvelope(r)
     if (!env) {
       msg.textContent = '보낼 수 있는 내용을 만들지 못했어요.'
       return
     }
-    const text = JSON.stringify(env)
-    const ta = el('textarea', 'inp')
-    ta.readOnly = true
-    ta.rows = 3
-    ta.value = text
-    ta.setAttribute('aria-label', '옷장으로 보낼 내용')
-    box.append(ta)
-    msg.textContent = (await copyText(text)) ? '복사했어요. 핏체크 웹의 내 옷장 > 가져오기에 붙여넣어주세요.' : '복사하지 못했어요. 아래 글을 직접 복사해주세요.'
+    extra.replaceChildren()
+    const queued = await queueEnvelope(env)
+    if (!queued) {
+      msg.textContent = '자동으로 보내지 못했어요. 아래 ‘붙여넣기용으로 복사’를 눌러 웹 옷장에 붙여넣어주세요.'
+    } else {
+      msg.textContent = '보냈어요. 핏체크 웹이 열려 있으면 바로, 아니면 열 때 내 옷장에 자동으로 담겨요.'
+      const link = el('a', 'weblink', '개발 서버 웹 열기 (localhost:5173)')
+      link.href = WEB_APP_OPEN_URL
+      link.target = '_blank'
+      link.rel = 'noopener noreferrer'
+      extra.append(link)
+    }
+    const copy = el('button', 'btn', '붙여넣기용으로 복사')
+    copy.type = 'button'
+    copy.addEventListener('click', async () => {
+      const text = JSON.stringify(env)
+      const ta = el('textarea', 'inp')
+      ta.readOnly = true
+      ta.rows = 3
+      ta.value = text
+      ta.setAttribute('aria-label', '옷장으로 보낼 내용')
+      extra.append(ta)
+      msg.textContent = (await copyText(text)) ? '복사했어요. 핏체크 웹의 내 옷장 > 직접 가져오기에 붙여넣어주세요.' : '복사하지 못했어요. 아래 글을 직접 복사해주세요.'
+    })
+    extra.append(copy)
   })
-  box.append(btn, msg, el('p', 'tiny', '닉네임·리뷰 원문·사진 주소를 담아요. 서버로 보내지 않고, 붙여넣은 브라우저에만 저장돼요.'))
+  box.append(btn, msg, extra, el('p', 'tiny', '닉네임·리뷰 원문·사진 주소와 리뷰 작성자의 키·몸무게를 담아요(내 체형 정보는 제외). 서버로 보내지 않고, 이 브라우저의 핏체크 웹에만 저장돼요. 3일 안에 웹을 열지 않으면 대기열에서 지워져요. file://로 연 웹은 크롬 확장 설정에서 ‘파일 URL에 대한 액세스 허용’을 켜야 자동으로 받아요.'))
   return box
 }
 

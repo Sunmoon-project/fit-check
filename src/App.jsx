@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Onboarding from './components/Onboarding.jsx'
 import UrlInput from './components/UrlInput.jsx'
 import ResultView from './components/ResultView.jsx'
 import Wardrobe from './components/Wardrobe.jsx'
 import { addImportedItem } from './lib/wardrobeImport.js'
-import { loadProfile, saveProfile, loadFeedback, saveFeedback, loadWardrobe, saveWardrobe } from './lib/storage.js'
+import { loadProfile, saveProfile, loadFeedback, saveFeedback, loadWardrobe, saveWardrobe, loadSyncSeen, saveSyncSeen, trimNote } from './lib/storage.js'
+import { applyDelivery, syncNotice } from './lib/wardrobeSync.js'
+import { connectExtensionSync } from './lib/syncClient.js'
 import { computeCalibration } from './lib/fitEngine.js'
 
 // 흐름: 내 정보(온보딩, 저장된 정보가 없을 때만) → 상품 링크 → 사이즈·핏 추천
@@ -18,6 +20,7 @@ export default function App() {
   const calibration = useMemo(() => computeCalibration(feedback), [feedback])
   const [wardrobe, setWardrobe] = useState(() => loadWardrobe())
   const [showWardrobe, setShowWardrobe] = useState(false)
+  const [notice, setNotice] = useState(null) // { text, error } 확장에서 자동으로 가져온 결과 한 줄
 
   const step = editing || !profile ? 'onboarding' : product ? 'result' : 'product'
   const stepIndex = step === 'onboarding' ? 0 : step === 'product' ? 1 : 2
@@ -57,6 +60,30 @@ export default function App() {
     if (!res.failed) setWardrobe(res.list)
     return res
   }
+
+  // 확장 브리지가 보낸 항목을 옷장에 반영. 저장소가 기준이라 최신 목록을 다시 읽고, 항목 id로 한 번만 담아요.
+  // 반환: 처리 끝난 id (저장에 실패한 항목은 빼서 확장이 대기열에 남겨요).
+  function handleExtensionEntries(entries) {
+    const r = applyDelivery(loadWardrobe(), entries, loadSyncSeen(), { addItem: addImportedItem })
+    if (r.savedIds.length === 0) {
+      setWardrobe(loadWardrobe()) // 다른 탭이 먼저 담았을 수 있어요: 오래된 목록으로 덮어쓰지 않게 최신으로 맞춰요
+      if (r.rejected > 0) setNotice({ text: syncNotice(r), error: true })
+      if (r.ignoredIds.length > 0) saveSyncSeen(r.seen)
+      return r.ignoredIds
+    }
+    const res = saveWardrobe(r.list)
+    if (res.failed) {
+      setNotice({ text: '저장 공간이 부족해서 확장에서 보낸 옷을 담지 못했어요. 오래된 옷을 지우면 다시 가져와요.', error: true })
+      return r.ignoredIds
+    }
+    setWardrobe(res.list)
+    saveSyncSeen(r.seen)
+    setNotice({ text: syncNotice(r, trimNote(res)), error: false })
+    return [...r.savedIds, ...r.ignoredIds]
+  }
+  const syncHandler = useRef(handleExtensionEntries)
+  syncHandler.current = handleExtensionEntries
+  useEffect(() => connectExtensionSync((entries) => syncHandler.current(entries)), [])
 
   function handleClearReviews(id) {
     setWardrobe(saveWardrobe(wardrobe.map((w) => (w.id === id ? { ...w, reviews: [] } : w))).list)
@@ -99,6 +126,16 @@ export default function App() {
             </div>
           ))}
         </nav>
+      )}
+
+      {notice && (
+        <div className={`sync-notice ${notice.error ? 'error' : ''}`} role="status">
+          <span>{notice.text}</span>
+          {!notice.error && !showWardrobe && profile && !editing && (
+            <button type="button" className="btn text" onClick={() => { setShowWardrobe(true); setNotice(null) }}>옷장 보기</button>
+          )}
+          <button type="button" className="btn text" onClick={() => setNotice(null)}>닫기</button>
+        </div>
       )}
 
       <main className="app-main">
