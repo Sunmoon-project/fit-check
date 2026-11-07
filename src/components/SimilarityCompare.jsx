@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { compareBody, countUpValue, similarityTier, TIER_LABEL, diffText } from '../lib/similarityBreakdown.js'
+import { compareBody, countUpValue, similarityTier, TIER_LABEL, diffText, buySizeText } from '../lib/similarityBreakdown.js'
 
 const COUNT_MS = 900
 const MAX_ROWS = 20
@@ -44,12 +44,12 @@ function useCountUp(targets, active) {
 }
 
 // 후기 작성자의 키·몸무게만 보여줘요 (내 체형은 위쪽 큰 카드에 있어요).
-function BodyPair({ c }) {
+function BodyPair({ c, size }) {
   const dt = diffText(c)
   return (
     <>
       <div className="cmp-pair">
-        <div className="cmp-col"><span className="cmp-who">후기 체형</span><span className="cmp-val">{c.height.review}cm · {c.weight.review}kg</span></div>
+        <div className="cmp-col"><span className="cmp-who">후기 체형</span><span className="cmp-val">{c.height.review}cm · {c.weight.review}kg</span><span className="cmp-buy">{buySizeText(size)}</span></div>
       </div>
       {dt && <p className="cmp-diff">{dt}</p>}
     </>
@@ -114,7 +114,7 @@ export default function SimilarityCompare({ profile, reviews }) {
                   <span className={`cmp-chip ${c.gender.state === 'diff' ? 'diff' : ''}`}>
                     {r.gender ? `${gt} (${GENDER_TEXT[r.gender]})` : gt}
                   </span>
-                  <BodyPair c={c} />
+                  <BodyPair c={c} size={r.size} />
                   <SimBar sim={targets[i]} shown={shown[i] ?? targets[i]} />
                   {c.gender.state === 'diff' && <p className="muted small">성별이 달라 유사도는 0%예요. 막대는 키·몸무게만 비교한 거예요.</p>}
                 </li>

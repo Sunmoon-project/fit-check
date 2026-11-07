@@ -2328,7 +2328,7 @@ test('가짜 데이터: 체형 차이가 커질수록 유사도는 줄어들기�
 
 
 // ---- 체형 비교 (직접 만든 가짜 데이터와 가짜 DOM이에요. 실제 무신사·크롬에서 확인한 것이 아니에요) ----
-import { compareBody, countUpValue, similarityTier, TIER_LABEL, diffText } from '../src/lib/similarityBreakdown.js'
+import { compareBody, countUpValue, similarityTier, TIER_LABEL, diffText, buySizeText } from '../src/lib/similarityBreakdown.js'
 
 test('가짜 데이터: compareBody는 성별 같음/다름/모름과 키 없는 후기를 구분한다', () => {
   const me = { gender: 'male', height: 175, weight: 70 }
@@ -2833,9 +2833,22 @@ await atest('content.js(가짜 DOM, vm): 체형 비교는 키·몸무게를 한 
   assert.equal(labels.length, rows.length)
   assert.ok(labels.every((t) => t === '후기 체형'), '내 값 칸(나) 없이 후기 체형만')
   assert.ok(created.filter((e) => e.className === 'ccv').every((e) => /^\d+cm · \d+kg$/.test(e.textContent)), '후기 키·몸무게 값')
+  const buys = created.filter((e) => e.className === 'cbuy')
+  assert.equal(buys.length, rows.length, '후기마다 구매 사이즈 한 줄')
+  assert.ok(buys.every((e) => /^(구매 .+|사이즈 못 읽음)$/.test(e.textContent)), '구매 사이즈 문구')
   assert.equal(created.filter((e) => e.className === 'cbf').length, rows.length, '퍼센트 막대는 후기마다 하나')
   assert.equal(created.filter((e) => /^cb (high|mid|low)$/.test(e.className)).length, rows.length, '구간 색 클래스')
   assert.ok(created.every((e) => e.className !== 'cbl' || e.children.length === 2))
+})
+
+test('가짜 데이터: buySizeText는 원문 라벨을 그대로 쓰고 못 읽으면 안내한다', () => {
+  assert.equal(buySizeText('2 (L)'), '구매 2 (L)')
+  assert.equal(buySizeText('L'), '구매 L')
+  assert.equal(buySizeText('  2   (L) '), '구매 2 (L)')
+  for (const v of [null, undefined, '', '   ', 5]) assert.equal(buySizeText(v), '사이즈 못 읽음')
+  assert.equal(buySizeText('가'.repeat(100)), `구매 ${'가'.repeat(40)}`)
+  const web = readFileSync(new URL('../src/components/SimilarityCompare.jsx', import.meta.url), 'utf8')
+  assert.ok(web.includes('buySizeText(size)') && web.includes('size={r.size}'), '웹도 구매 사이즈 표시')
 })
 
 test('체형 비교: 유사도 구간과 차이 문구 (순수 함수, 가짜 값)', () => {
