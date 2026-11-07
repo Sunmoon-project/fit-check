@@ -38,6 +38,11 @@ const CSS = `
 h3{margin:10px 0 2px;font-size:14px}
 p{margin:0}
 .det{margin:8px 0 0;padding-left:16px;color:#555;font-size:11px}
+.btns{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px}
+.btns:empty{display:none}
+.btns>.btn{margin-top:0}
+.btns>.weblink{margin:0}
+.btns>.inp{margin-top:0;flex:1 1 100%}
 .btn{margin-top:8px;border:1px solid #111;border-radius:8px;background:#fff;color:#111;padding:6px 10px;font-size:12px;cursor:pointer}
 .ok{margin-top:6px;font-size:12px;color:#0a7a3c}
 .weblink{display:inline-block;margin-top:6px;margin-right:8px;font-size:12px;color:#111}
@@ -224,7 +229,9 @@ function reportBlock(report) {
   btn.addEventListener('click', async () => {
     done.textContent = (await copyText(report)) ? '복사했어요' : '복사하지 못했어요. 브라우저 권한을 확인해주세요.'
   })
-  box.append(btn, done)
+  const btns = el('div', 'btns')
+  btns.append(btn)
+  box.append(btns, done)
   box.append(el('p', 'tiny', '주소 경로(상품명이 있으면 포함)·개수·화면 구조 기호만 담겨요. 체형 정보와 리뷰 글은 없어요.'))
   return box
 }
@@ -263,9 +270,13 @@ function manualForm(r) {
         msg.textContent = '직접 입력한 표로 분석하지 못했어요. 입력 형식을 확인하고 다시 눌러주세요.'
       }
     })
-    box.append(cols, lines, go, msg, el('p', 'tiny', '저장·전송하지 않고 이번 분석에만 써요.'))
+    const goRow = el('div', 'btns')
+    goRow.append(go)
+    box.append(cols, lines, goRow, msg, el('p', 'tiny', '저장·전송하지 않고 이번 분석에만 써요.'))
   })
-  box.append(open)
+  const openRow = el('div', 'btns')
+  openRow.append(open)
+  box.append(openRow)
   box.openForm = () => open.click()
   return box
 }
@@ -697,7 +708,7 @@ function exportBlock(r) {
   btn.type = 'button'
   const msg = el('p', 'ok')
   msg.setAttribute('role', 'status')
-  const extra = el('div')
+  const extra = el('div', 'btns')
   btn.addEventListener('click', async () => {
     const env = buildExportEnvelope(r)
     if (!env) {
@@ -730,7 +741,9 @@ function exportBlock(r) {
     })
     extra.append(copy)
   })
-  box.append(btn, msg, extra, el('p', 'tiny', '닉네임·리뷰 원문·사진 주소와 리뷰 작성자의 키·몸무게를 담아요(내 체형 정보는 제외). 서버로 보내지 않고, 이 브라우저의 핏체크 웹에만 저장돼요. 3일 안에 웹을 열지 않으면 대기열에서 지워져요. file://로 연 웹은 크롬 확장 설정에서 ‘파일 URL에 대한 액세스 허용’을 켜야 자동으로 받아요.'))
+  const sendRow = el('div', 'btns')
+  sendRow.append(btn)
+  box.append(sendRow, msg, extra, el('p', 'tiny', '3일 안에 웹을 열지 않으면 대기열에서 지워져요. file://로 연 웹은 크롬 확장 설정에서 ‘파일 URL에 대한 액세스 허용’을 켜야 자동으로 받아요.'))
   return box
 }
 
@@ -851,7 +864,9 @@ function loadMoreBlock(r) {
     }
   })
   btn.setAttribute('title', '누를 때만 동작해요. 리뷰 영역을 스크롤하며 리뷰의 더보기 버튼만 누르고, 최대 약 30초 뒤 멈춰요. 끝나면 원래 위치로 돌아와요.')
-  box.append(btn, stop, prog)
+  const btns = el('div', 'btns')
+  btns.append(btn, stop)
+  box.append(btns, prog)
   return box
 }
 
