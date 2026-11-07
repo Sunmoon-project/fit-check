@@ -3527,7 +3527,7 @@ await atest('content.js(가짜 DOM, vm): 가짜 HTML에서 분류 신뢰도가 �
 
 
 // ---------- 신발 전용 사이즈 비교 ----------
-import { parseShoeOption, parseShoeOptions, parseShoeFeel, aggregateShoeReviews, reviewAggregateLine, recommendShoe, shoeViewFor } from '../src/lib/shoeFit.js'
+import { parseShoeOption, parseShoeOptions, parseShoeFeel, aggregateShoeReviews, reviewAggregateLine, recommendShoe, shoeViewFor, withShoeRecommendation } from '../src/lib/shoeFit.js'
 
 const SHOE_NAME = '[xYASE] braided moc boots (grunge taupe)'
 const shoeOpts = ['230 (230-235)', '240 (240-245)', '250 (250-255)']
@@ -3664,6 +3664,59 @@ await atest('content.js(가짜 DOM, vm): 가짜 HTML 신발 페이지는 신발 
   assert.ok(texts.some((t) => t.includes('휴리스틱')))
   assert.ok(texts.includes('발 정보 비교'))
   assert.ok(!texts.includes('체형 비교'))
+})
+
+
+// ---------- 신발 리뷰 수정 ----------
+test('가짜 데이터: 발볼 보정 뒤 작아요 다수면 "큰 사이즈가 없다"가 아니라 이미 보정했다고 안내한다', () => {
+  const options = parseShoeOptions(shoeOpts)
+  const small = (mm, n) => Array.from({ length: n }, () => ({ size: String(mm), view: { shoeFeel: { size: 'small', sizeStep: 0, width: null } } }))
+  const r = recommendShoe({ options, footLength: 225, footWidth: 'wide', reviews: small(240, 3) })
+  assert.equal(r.recommended.mm, 240)
+  assert.ok(r.notes.some((t) => t.includes('이미 한 단계 큰 사이즈')))
+  assert.ok(!r.notes.some((t) => t.includes('한 단계 큰 사이즈가 없어')))
+  const last = recommendShoe({ options, footLength: 245, reviews: small(250, 3) })
+  assert.ok(last.notes.some((t) => t.includes('한 단계 큰 사이즈가 없어')))
+})
+
+test('가짜 데이터: 만족도 부정형("작지도 크지도 않음")은 정사이즈로 읽는다', () => {
+  assert.equal(parseShoeFeel('사이즈 작지도 크지도 않음').size, 'true')
+  assert.equal(parseShoeFeel('사이즈 크지 않아요').size, 'true')
+  assert.equal(parseShoeFeel('사이즈 작지 않음').size, 'true')
+  assert.equal(parseShoeFeel('사이즈 작아요').size, 'small')
+  assert.equal(parseShoeFeel('사이즈 반 사이즈 커요').size, 'large')
+})
+
+test('가짜 HTML: 사이즈표·리뷰가 없어도 신발 옵션과 발길이가 있으면 no-data 없이 신발 비교를 만든다', () => {
+  const r = analyzePage(fakeDocument(shoePage([])), '', shoeProfile())
+  assert.equal(r.status, 'ok')
+  assert.ok(r.shoeView && r.shoeView.rows.length === 3)
+  assert.equal(r.recommendedSize, String(r.shoeView.recommended.mm))
+  // 신발이 아니면 같은 조건에서 여전히 no-data
+  const none = analyzePage(fakeDocument('<html><body><h1>Daily piece</h1></body></html>'), '', shoeProfile())
+  assert.notEqual(none.status, 'ok')
+})
+
+test('가짜 데이터: 웹 신발 추천은 엔진 결과를 신발 추천 사이즈로 통일하고, 신발 값이 없으면 그대로 둔다', () => {
+  const sv = shoeViewFor({ shoeOptionLabels: shoeOpts, reviews: [] }, shoeProfile({ footWidth: 'wide' }))
+  const base = { recommendedSize: 'M', headline: 'h', body: 'b', perSize: [] }
+  const out = withShoeRecommendation(base, sv)
+  assert.equal(out.recommendedSize, String(sv.recommended.mm))
+  assert.ok(out.headline.includes(sv.recommended.label))
+  assert.equal(withShoeRecommendation(base, null), base)
+  // cm 단위 표(25.0)는 mm 옵션으로 읽을 수 없어 null: 웹은 기존 비교로 돌아간다
+  assert.equal(shoeViewFor({ sizeChart: { measures: { '25.0': {}, '25.5': {} } }, reviews: [] }, shoeProfile()), null)
+})
+
+await atest('content.js(가짜 DOM, vm): 가짜 HTML에서 종류 칩으로 신발을 고르면 신발 사이즈 비교가 나온다 (사이즈표·리뷰 없음)', async () => {
+  const { texts, created } = await runContentInFakeDom(catHtml({ title: 'Daily piece', options: ['230 (230-235)', '240 (240-245)', '250 (250-255)'] }))
+  const chips = created.filter((e) => /^cat( on)?$/.test(e.className))
+  const shoes = chips.find((e) => e._text === '신발')
+  assert.ok(shoes, '신발 칩')
+  const before = texts.length
+  shoes.click()
+  for (let i = 0; i < 50 && !texts.slice(before).includes('신발 사이즈 비교'); i++) await new Promise((r) => setTimeout(r, 10))
+  assert.ok(texts.slice(before).includes('신발 사이즈 비교'))
 })
 
 

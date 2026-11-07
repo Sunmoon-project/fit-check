@@ -101,7 +101,9 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
   if (!product) return { status: 'no-product', message: NOT_PRODUCT_MESSAGE }
 
   // 사이즈표도 없고 참고할 리뷰도 거의 없으면 추천하지 않고 솔직하게 알립니다.
-  if (!product.sizeChart && product.reviews.length < MIN_REVIEWS_WITHOUT_CHART) {
+  // 신발은 사이즈표 없이 옵션 범위(예: '250 (250-255)')와 발길이만으로도 비교할 수 있어 이 조건을 통과시켜요.
+  const canCompareShoe = product.category === 'shoes' && !!shoeViewFor(product, profile)
+  if (!product.sizeChart && product.reviews.length < MIN_REVIEWS_WITHOUT_CHART && !canCompareShoe) {
     const diagnostics = collectDiagnostics(root, pageUrl, extVersion, { categoryOverride: opts.categoryOverride })
     return {
       status: 'no-data',
@@ -118,7 +120,7 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
   }
 
   const result = generateFitComment(profile, product)
-  const shoe = product.category === 'shoes' ? shoeViewFor(product, profile) : null
+  const shoe = canCompareShoe ? shoeViewFor(product, profile) : null
   const cmpView = shoe ? { view: null, failed: false } : compareView(product, profile, result)
   // 사이즈표의 표시 이름('1 (M)')이 있으면 그 이름으로 보여줍니다.
   const disp = (x) => product.sizeChart?.display?.[String(x).replace(/\s/g, '').toUpperCase()] || x

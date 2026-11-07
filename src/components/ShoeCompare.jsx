@@ -1,19 +1,7 @@
-import { shoeViewFor } from '../lib/shoeFit.js'
-
 // 신발 전용 사이즈 비교: 사이즈(옵션)별 여유 mm와 판정, 구매 리뷰 집계, 추천 이유.
 // 신발 후기에는 키·몸무게가 없는 경우가 많아서 체형 비교 대신 발 정보(발길이·발볼)로 비교해요.
-export default function ShoeCompare({ product, profile, selectedSize, onSelect }) {
-  const sv = shoeViewFor(product, profile)
-  if (!sv) {
-    return (
-      <div className="card tone-measure">
-        <div className="section-head">
-          <h3>신발 사이즈 비교</h3>
-        </div>
-        <p className="muted small">신발 사이즈(mm)를 읽지 못했어요. 사이즈표나 구매 옵션을 확인해 주세요.</p>
-      </div>
-    )
-  }
+export default function ShoeCompare({ view: sv, selectedSize, onSelect }) {
+  if (!sv) return null
   return (
     <div className="card tone-measure shoe-compare">
       <div className="section-head">
