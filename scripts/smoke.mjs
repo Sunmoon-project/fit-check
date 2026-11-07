@@ -24,6 +24,12 @@ import {
 } from './lib/bodyMetrics.mjs'
 import { PRODUCTS } from '../src/data/mockData.js'
 import { parseProductHtml } from '../server/productParser.js'
+import { parsePage } from '../src/lib/pageParser.js'
+import { analyzePage } from '../src/lib/extAnalyze.js'
+import { buildProfile, isUsableProfile } from '../src/lib/extProfile.js'
+import { fakeDocument } from './lib/cheerioDom.mjs'
+import { checkManifest } from './checkExtension.mjs'
+import { readFileSync } from 'node:fs'
 import { findSimilar, describeDiff, categoryGroup, makeWardrobeItem } from '../src/lib/wardrobe.js'
 import { isPrivateIp, decodeHtml } from '../server/safeFetch.js'
 import { checkPostRequest } from '../server/api.js'
@@ -878,6 +884,108 @@ test('describeEvidence: 리뷰·사이즈표가 없으면 낮음과 사유', () 
   assert.ok(d.summary.includes('리뷰 없음') && d.summary.includes('사이즈표 없음'))
   assert.ok(d.reasons.some((x) => x.includes('리뷰가 없어요')))
   assert.ok(!/\d/.test(d.summary.replace(CONFIDENCE_LABEL.low.text, '')))
+})
+
+
+// ---------- 크롬 확장: DOM 파서 ----------
+// JS로 그려진 페이지처럼 div 기반 리뷰 + 표 하나 (실제 쇼핑몰 HTML이 아니라 직접 만든 예시예요)
+const EXT_HTML = `<html><head><title>x</title><meta property="og:title" content="오버핏 후드 티셔츠"></head><body>
+<h1>오버핏 후드 티셔츠</h1>
+<table><tr><th>사이즈</th><th>어깨너비</th><th>가슴단면</th><th>총장</th></tr>
+<tr><td>M</td><td>50</td><td>57</td><td>68</td></tr>
+<tr><td>L</td><td>52</td><td>60</td><td>70</td></tr></table>
+<div class="ReviewList"><div class="review-item"><span>키 175 몸무게 70 L 사이즈로 구매했는데 딱 맞아요 정사이즈예요</span></div>
+<div class="review-item"><span>키 173 몸무게 68 M 샀는데 작아요 타이트합니다</span></div>
+<div class="review-item"><span>짧음</span></div></div></body></html>`
+
+test('DOM 파서: 이름·사이즈표(단면 ×2)·리뷰를 읽는다', () => {
+  const p = parsePage(fakeDocument(EXT_HTML), 'https://shop.example/p/1')
+  assert.equal(p.name, '오버핏 후드 티셔츠')
+  assert.equal(p.category, 'top')
+  assert.deepEqual(p.sizeChart.rows.map((r) => r[0]), ['M', 'L'])
+  assert.equal(p.sizeChart.measures.M.chest, 114)
+  assert.equal(p.sizeChart.measures.L.shoulder, 52)
+  assert.equal(p.reviews.length, 2)
+  assert.deepEqual([p.reviews[0].height, p.reviews[0].weight, p.reviews[0].size, p.reviews[0].fit], [175, 70, 'L', 'true'])
+  assert.equal(p.reviews[1].fit, 'small')
+})
+
+test('DOM 파서와 서버 파서가 같은 표에서 같은 사이즈표를 만든다', () => {
+  const html = `<html><head><title>t</title><meta property="og:title" content="오버핏 후드 티셔츠"></head><body>${EXT_HTML.match(/<table>[\s\S]*<\/table>/)[0]}</body></html>`
+  const server = parseProductHtml(html, 'https://shop.example/p/1')
+  const dom = parsePage(fakeDocument(html), 'https://shop.example/p/1')
+  assert.deepEqual(dom.sizeChart, server.sizeChart)
+  assert.equal(dom.category, server.category)
+})
+
+test('DOM 파서: JSON-LD 리뷰도 읽고 같은 문장은 한 번만 센다', () => {
+  const ld = JSON.stringify({ '@type': 'Product', name: '슬랙스 팬츠', review: [{ reviewBody: '키 180 몸무게 75 L 사이즈로 구매 정사이즈예요 잘 맞아요' }] })
+  const html = `<html><body><script type="application/ld+json">${ld}</script><div class="review">키 180 몸무게 75 L 사이즈로 구매 정사이즈예요 잘 맞아요</div></body></html>`
+  const p = parsePage(fakeDocument(html), 'https://shop.example/p/2')
+  assert.equal(p.category, 'bottom')
+  assert.equal(p.reviews.length, 1)
+  assert.equal(p.sizeChart, null)
+  assert.ok(p.notes.some((n) => n.includes('사이즈표')))
+})
+
+test('DOM 파서: 이름을 못 읽으면 null, 깨진 JSON-LD는 무시', () => {
+  assert.equal(parsePage(fakeDocument('<html><body><p>hi</p></body></html>'), ''), null)
+  const p = parsePage(fakeDocument('<html><body><h1>니트</h1><script type="application/ld+json">{oops</script></body></html>'), '')
+  assert.equal(p.name, '니트')
+})
+
+test('확장 분석: generateFitComment와 같은 추천·확신도·근거 문장', () => {
+  const profile = buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular', measurements: {} }).profile
+  const doc = fakeDocument(EXT_HTML)
+  const r = analyzePage(doc, 'https://shop.example/p/1', profile)
+  const direct = generateFitComment(profile, parsePage(doc, 'https://shop.example/p/1'))
+  assert.equal(r.status, 'ok')
+  assert.equal(r.recommendedSize, direct.recommendedSize)
+  assert.equal(r.confidence, direct.confidence)
+  assert.equal(r.summary, describeEvidence(direct.evidence, direct.confidence).summary)
+  assert.ok(r.summary.includes(CONFIDENCE_LABEL[direct.confidence].text))
+})
+
+test('확장 분석: 사이즈표도 리뷰도 없으면 추천하지 않고 알린다', () => {
+  const profile = buildProfile({ gender: 'male', height: '175', weight: '70' }).profile
+  const r = analyzePage(fakeDocument('<html><body><h1>니트 스웨터</h1></body></html>'), '', profile)
+  assert.equal(r.status, 'no-data')
+  assert.ok(!('recommendedSize' in r))
+  assert.equal(analyzePage(fakeDocument('<html><body></body></html>'), '', profile).status, 'no-product')
+})
+
+test('확장 프로필: 입력 검증과 치수 정리', () => {
+  assert.ok(buildProfile({ gender: '', height: '175', weight: '70' }).error)
+  assert.ok(buildProfile({ gender: 'male', height: '90', weight: '70' }).error)
+  assert.ok(buildProfile({ gender: 'male', height: '175', weight: '500' }).error)
+  const { profile } = buildProfile({ gender: 'female', height: '160', weight: '50', preferredFit: 'bad', measurements: { chest: '88', waist: '', hip: 'abc' } })
+  assert.equal(profile.preferredFit, 'regular')
+  assert.deepEqual(profile.measurements, { chest: 88 })
+  assert.ok(isUsableProfile(profile))
+  assert.ok(!isUsableProfile(null))
+})
+
+// ---------- 크롬 확장: manifest ----------
+const EXT_MANIFEST = JSON.parse(readFileSync(new URL('../extension/manifest.json', import.meta.url), 'utf8'))
+
+test('확장 manifest: MV3, 최소 권한, 광범위 호스트 권한·원격 코드 없음', () => {
+  assert.deepEqual(checkManifest(EXT_MANIFEST), [])
+  assert.deepEqual([...EXT_MANIFEST.permissions].sort(), ['activeTab', 'scripting', 'storage'])
+  assert.equal(EXT_MANIFEST.host_permissions, undefined)
+  assert.ok(EXT_MANIFEST.content_scripts[0].matches.length <= 5)
+})
+
+test('확장 manifest 검사기: 나쁜 manifest를 잡아낸다', () => {
+  const bad = { ...EXT_MANIFEST, manifest_version: 2, host_permissions: ['<all_urls>'], content_scripts: [{ matches: ['<all_urls>'], js: ['content.js'] }], content_security_policy: { extension_pages: "script-src 'self' https://evil.example/x.js" } }
+  const errs = checkManifest(bad)
+  assert.ok(errs.length >= 4, errs.join('|'))
+})
+
+test('확장 소스에 네트워크 호출이 없다', () => {
+  for (const f of ['content.js', 'popup.js']) {
+    const code = readFileSync(new URL(`../extension/${f}`, import.meta.url), 'utf8')
+    assert.ok(!/\b(fetch|XMLHttpRequest|sendBeacon|WebSocket)\b/.test(code), f)
+  }
 })
 
 console.log(`\n${passed}개 통과`)

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>핏체크</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <h1>핏체크</h1>
+    <p class="hint">체형 정보는 이 브라우저(chrome.storage.local)에만 저장되고 밖으로 전송되지 않아요.</p>
+    <form id="form" novalidate>
+      <fieldset>
+        <legend>성별</legend>
+        <label><input type="radio" name="gender" value="male" /> 남성</label>
+        <label><input type="radio" name="gender" value="female" /> 여성</label>
+      </fieldset>
+      <div class="two">
+        <label>키 (cm)<input name="height" type="number" inputmode="decimal" min="130" max="220" /></label>
+        <label>몸무게 (kg)<input name="weight" type="number" inputmode="decimal" min="30" max="200" /></label>
+      </div>
+      <label>선호 핏
+        <select name="preferredFit">
+          <option value="slim">슬림</option>
+          <option value="regular" selected>레귤러</option>
+          <option value="relaxed">여유</option>
+        </select>
+      </label>
+      <details>
+        <summary>직접 잰 치수 (선택)</summary>
+        <div class="two">
+          <label>어깨너비<input name="m-shoulder" type="number" inputmode="decimal" /></label>
+          <label>가슴둘레<input name="m-chest" type="number" inputmode="decimal" /></label>
+          <label>허리둘레<input name="m-waist" type="number" inputmode="decimal" /></label>
+          <label>엉덩이둘레<input name="m-hip" type="number" inputmode="decimal" /></label>
+          <label>허벅지둘레<input name="m-thigh" type="number" inputmode="decimal" /></label>
+          <label>발길이(mm)<input name="m-footLength" type="number" inputmode="decimal" /></label>
+        </div>
+      </details>
+      <button type="submit" class="secondary">체형 정보 저장</button>
+    </form>
+    <button id="run" type="button" class="primary">이 페이지에서 내 사이즈 찾기</button>
+    <p id="status" role="status" aria-live="polite"></p>
+    <script src="popup.js"></script>
+  </body>
+</html>
