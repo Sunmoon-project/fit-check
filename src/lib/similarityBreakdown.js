@@ -43,6 +43,14 @@ export function diffText(c) {
   return `키 ${r(c.height.diff)}cm · 몸무게 ${r(c.weight.diff)}kg 차이`
 }
 
+// 후기 작성자가 산 사이즈 문구. 원문 라벨('2 (L)')을 그대로 쓰고, 못 읽었으면 '사이즈 못 읽음'
+export const BUY_SIZE_MAX = 40
+export function buySizeText(size) {
+  const t = typeof size === 'string' ? size.replace(/\s+/g, ' ').trim() : ''
+  if (!t) return '사이즈 못 읽음'
+  return `구매 ${t.length > BUY_SIZE_MAX ? t.slice(0, BUY_SIZE_MAX) : t}`
+}
+
 // 숫자가 0에서 target까지 올라가는 값 (easeOutCubic). 항상 정수이고 0~target 범위에 있어요.
 export function countUpValue(elapsedMs, durationMs, target) {
   const end = isNum(target) ? Math.max(0, Math.round(target)) : 0

@@ -529,6 +529,7 @@ body {
 .cmp-col { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; background: var(--panel); border-radius: var(--radius-sm); }
 .cmp-who { font-size: 12px; font-weight: 700; color: var(--muted-2); }
 .cmp-val { font-size: 15px; font-weight: 800; color: var(--ink); }
+.cmp-buy { font-size: 12.5px; font-weight: 600; color: var(--ink-2); overflow-wrap: anywhere; }
 .cmp-diff { margin: 6px 0 0; font-size: 12.5px; color: var(--muted-2); }
 .cmp-sim { margin-top: 10px; }
 .cmp-sim-label { display: flex; justify-content: space-between; align-items: baseline; }

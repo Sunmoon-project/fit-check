@@ -6,7 +6,7 @@ import { buildExportEnvelope } from '../src/lib/wardrobeImport.js'
 import { SYNC_QUEUE_KEY, WEB_APP_OPEN_URL, enqueue } from '../src/lib/wardrobeSync.js'
 import { collectDiagnostics, formatReport } from '../src/lib/diagnose.js'
 import { shouldStop, isSafeMoreButton, toReportStop, STOP_LABEL } from '../src/lib/reviewLoader.js'
-import { compareBody, countUpValue, similarityTier, TIER_LABEL, diffText } from '../src/lib/similarityBreakdown.js'
+import { compareBody, countUpValue, similarityTier, TIER_LABEL, diffText, buySizeText } from '../src/lib/similarityBreakdown.js'
 import { EXT_PROFILE_KEY, isUsableProfile } from '../src/lib/extProfile.js'
 
 const WAIT_MS = 4000 // 늦게 그려지는 표·리뷰를 기다리는 최대 시간
@@ -104,6 +104,7 @@ tr.rec .cv{color:#9fe0ba}
 .ccol{flex:1;display:flex;flex-direction:column;gap:2px;background:#f6f6f7;border-radius:8px;padding:6px 8px}
 .ccl{font-size:11px;color:#6b6b70;font-weight:600}
 .ccv{font-size:13px;font-weight:700;color:#111}
+.cbuy{font-size:12px;font-weight:600;color:#444;overflow-wrap:anywhere}
 .cdiff{margin:4px 0 0;font-size:11px;color:#6b6b70}
 .ctier{font-size:12px;font-weight:700}
 .cb.high .ctier,.cb.high .cpct{color:#0a7a3c}
@@ -610,7 +611,7 @@ function compareTab(rvs, all) {
     // 후기 작성자의 키·몸무게만 보여주고(내 체형은 탭 맨 위에 있어요), 그 아래에 비슷한 체형인지 보여주는 퍼센트 막대 하나
     const grp = el('div', 'cgrp')
     const col = el('div', 'ccol')
-    col.append(el('span', 'ccl', '후기 체형'), el('span', 'ccv', `${c.height.review}cm · ${c.weight.review}kg`))
+    col.append(el('span', 'ccl', '후기 체형'), el('span', 'ccv', `${c.height.review}cm · ${c.weight.review}kg`), el('span', 'cbuy', buySizeText(rv.size)))
     grp.append(col)
     li.append(grp)
     const dt = diffText(c)
