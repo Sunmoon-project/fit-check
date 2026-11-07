@@ -9,7 +9,8 @@
     "build": "vite build",
     "build:file": "vite build --mode file",
     "preview": "vite preview",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "validate:fit": "node scripts/validateFit.mjs"
   },
   "dependencies": {
     "cheerio": "^1.2.0",
