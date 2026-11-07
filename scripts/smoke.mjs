@@ -25,7 +25,7 @@ import {
 import { PRODUCTS } from '../src/data/mockData.js'
 import { parseReviewText, analyzeSizeCharts } from '../src/lib/productCore.js'
 import { parseProductHtml } from '../server/productParser.js'
-import { parsePage, isProductPage, splitSentences, extractCardView, parseGender } from '../src/lib/pageParser.js'
+import { readOptionLabels, parsePage, isProductPage, splitSentences, extractCardView, parseGender } from '../src/lib/pageParser.js'
 import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
 import { collectDiagnostics, formatReport, REPORT_MAX } from '../src/lib/diagnose.js'
 import { buildExportEnvelope, parseImportText, sanitizeItem, addImportedItem, LIMITS as IMPORT_LIMITS } from '../src/lib/wardrobeImport.js'
@@ -1134,6 +1134,18 @@ const chartTable = (labels) =>
   labels.map((l, i) => `<tr><td>${l}</td><td>${67 + i * 2}</td><td>${44 + i * 2}</td><td>${52 + i * 2}</td><td>${60 + i}</td></tr>`).join('') +
   `</table>`
 const fakeProfile = { height: 175, weight: 70, gender: 'male', preferredFit: 'regular' }
+
+test('가짜 HTML: li/button의 "리뷰 250" "좋아요 300"은 mm 옵션으로 읽지 않고, select의 mm 옵션은 읽는다', () => {
+  const noise = fakeDocument(wrapBody(`<ul><li>리뷰 250</li><li>좋아요 300</li></ul><button>찜 280</button>`))
+  assert.deepEqual(readOptionLabels(noise), [])
+  const shoe = fakeDocument(wrapBody(`<select><option>화이트 / 250</option><option>화이트 / 260</option></select><ul><li>블랙 / 270</li></ul>`))
+  assert.deepEqual(readOptionLabels(shoe), ['250', '260', '270'])
+})
+
+test('가짜 HTML: "N (X)" 옵션과 mm 숫자가 섞이면 더 많은 한 종류만 돌려준다', () => {
+  const doc = fakeDocument(wrapBody(`<select><option>블랙 / 0 (S)</option><option>블랙 / 1 (M)</option><option>블랙 / 2 (L)</option><option>블랙 / 250</option><option>블랙 / 260</option></select>`))
+  assert.deepEqual(readOptionLabels(doc), ['0 (S)', '1 (M)', '2 (L)'])
+})
 
 test('가짜 HTML: "0 (S)"~"4 (2XL)" 옵션과 같은 이름의 사이즈표는 인식하고 추천은 옵션 이름으로 보여준다', () => {
   const doc = fakeDocument(wrapBody(`<h1>코튼 재킷 아우터</h1>${optionsHtml}${chartTable(OPTION_LIST_LABELS())}`))
