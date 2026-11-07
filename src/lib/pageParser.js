@@ -4,6 +4,7 @@
 // 표 해석과 리뷰 문장 해석은 서버 파서와 같은 productCore.js를 씁니다.
 import { classifyCategory, userChosen, categoryInfo, ldCategoryHints, CATEGORY_ORDER } from './categoryClassifier.js'
 import { guessCategory, analyzeSizeCharts, parseReviewText, CATEGORY_EMOJI, SIZE_LABEL_RE } from './productCore.js'
+import { parseShoeFeel } from './shoeFit.js'
 
 const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim()
 const all = (root, sel) => Array.from(root.querySelectorAll(sel))
@@ -185,6 +186,13 @@ export function readOptionLabels(root) {
   for (const e of els) {
     const text = clean(e.textContent)
     if (text.length > 80) continue
+    // 신발 옵션 '250 (250-255)': 사이즈 이름으로는 대표 mm('250')를 써요. 범위 원문은 readShoeRangeOptions가 읽어요.
+    const shoe = text.match(SHOE_RANGE_RE)
+    if (shoe) {
+      if (!out.includes(shoe[1])) out.push(shoe[1])
+      if (out.length >= MAX_OPTIONS) break
+      continue
+    }
     const m = text.match(OPTION_RE)
     if (!m) continue
     // 안쪽 요소가 같은 모양이면 안쪽이 대표라 건너뛰어도 결과는 같아요. 중복은 아래에서 합칩니다.
@@ -411,7 +419,7 @@ export function readReviewCards(root, regions) {
 const UI_ONLY_RE = /^(?:더보기|접기|도움\s*돼요(?:\s*\d+)?|댓글(?:\s*\d+)?|신고|공유|좋아요(?:\s*\d+)?|\d+명에게 도움이 됐어요)$/
 const DATE_RE = /^\d{2,4}[.\-/]\d{1,2}[.\-/]\d{1,2}\.?$/
 const RATING_RE = /^[1-5](?:\.\d)?$/
-const LABEL_KIND = { 상품명: 'product', 구매옵션: 'option', 체형정보: 'body' }
+const LABEL_KIND = { 상품명: 'product', 구매옵션: 'option', 체형정보: 'body', 만족도: 'satisfaction' }
 const OPTION_SIZE_RE = /^(?:\d{1,2}\s*\(\s*(?:XXS|XS|S|M|L|XL|XXL|[2-5]XL|FREE|F)\s*\)|XXS|XS|S|M|L|XL|XXL|[2-5]XL|FREE|F|\d{1,3})$/i
 const AVATAR_ALT_RE = /프로필|profile|avatar|아이콘|icon|logo|badge/i
 const MAX_PHOTOS = 5
@@ -473,6 +481,9 @@ function sizePartOf(option) {
   for (const seg of String(option || '').split(/[·/,]/)) {
     const s = clean(seg)
     if (OPTION_SIZE_RE.test(s)) return s
+    // 신발 '250 (250-255)': 대표 mm만 써요.
+    const shoe = s.match(SHOE_RANGE_RE)
+    if (shoe) return shoe[1]
   }
   return ''
 }
@@ -604,6 +615,7 @@ export function extractCardView(card) {
     option,
     sizePart: sizePartOf(option),
     bodyInfo: found.body?.value || '',
+    shoeFeel: found.satisfaction?.value ? parseShoeFeel(found.satisfaction.value) : null,
     body,
     photos,
     structured,
@@ -750,7 +762,7 @@ export function parsePage(root, pageUrl = '', opts = {}) {
       return
     }
     // 화면에 그릴 때만 메모리에 두는 값이에요. 저장하거나 보내지 않습니다.
-    entries.push({ text: t, parsed, view: { nick: v.nick, productName: v.productName, body: v.body, photos: v.photos }, stat: v })
+    entries.push({ text: t, parsed, view: { nick: v.nick, productName: v.productName, body: v.body, photos: v.photos, option: v.option, shoeFeel: v.shoeFeel }, stat: v })
   })
   for (const t of readReviewElements(root, reviewDropped, regions)) {
     if (cardJoined.includes(t)) {
@@ -815,6 +827,7 @@ export function parsePage(root, pageUrl = '', opts = {}) {
         }
       : null,
     optionLabels,
+    shoeOptionLabels: readShoeRangeOptions(root),
     reviewTotalOnPage,
     reviewMeta: { cards: cardTexts.length, dropped: reviewDropped, bodyExtract },
     sizeChartMeta: {

@@ -3526,4 +3526,145 @@ await atest('content.js(가짜 DOM, vm): 가짜 HTML에서 분류 신뢰도가 �
 })
 
 
+// ---------- 신발 전용 사이즈 비교 ----------
+import { parseShoeOption, parseShoeOptions, parseShoeFeel, aggregateShoeReviews, reviewAggregateLine, recommendShoe, shoeViewFor } from '../src/lib/shoeFit.js'
+
+const SHOE_NAME = '[xYASE] braided moc boots (grunge taupe)'
+const shoeOpts = ['230 (230-235)', '240 (240-245)', '250 (250-255)']
+const shoeCard = (i, opt, feel, nick) =>
+  `<li class="sh-card"><div class="u1"><span class="n1">${nick}</span></div><span class="d1">26.10.0${i + 1}</span>` +
+  `<div class="pr"><dl><span class="l">상품명</span><span class="v">${SHOE_NAME}</span></dl></div>` +
+  `<div class="o1"><span class="l">구매옵션</span><span class="v">${opt}</span></div>` +
+  `<div class="m1"><span class="l">만족도</span><span class="v">${feel}</span></div>` +
+  `<p class="t1">발이 편하고 예뻐요 배송도 빨랐어요 ${nick}</p><button class="h">도움돼요 1</button></li>`
+const SHOE_FEEL = (size, width) => `사이즈 ${size} · 발볼 넓이 ${width} · 착용감 아주 편함 · 발목·종아리 둘레 조금 넉넉 · 착용 편리성 아주 편함`
+const shoePage = (cards = []) =>
+  `<html><head><title>${SHOE_NAME}</title></head><body><h1>${SHOE_NAME}</h1>` +
+  `<ul class="opts">${shoeOpts.map((o, i) => `<li><span>${o}</span><span>${['11.11(수) 이내 발송 예정', '5개 남음', '예약배송'][i]}</span></li>`).join('')}</ul>` +
+  `<ul class="rvs">${cards.join('')}</ul></body></html>`
+const SHOE_CARDS = [
+  shoeCard(0, '250 (250-255)', SHOE_FEEL('정사이즈', '적당함'), '가나'),
+  shoeCard(1, '250 (250-255)', SHOE_FEEL('정사이즈', '적당함'), '다라'),
+  shoeCard(2, '250 (250-255)', SHOE_FEEL('반 사이즈 작아요', '좁음'), '마바'),
+  shoeCard(3, '240 (240-245)', SHOE_FEEL('커요', '넓음'), '사아'),
+]
+const shoeProfile = (extra = {}) => ({ ...buildProfile({ gender: 'male', height: '175', weight: '70', measurements: { footLength: '245' } }).profile, ...extra })
+
+test('가짜 HTML: 신발 옵션 "NNN (NNN-NNN)"은 라벨 원문·범위로 읽고 배송 문구는 무시한다', () => {
+  const doc = fakeDocument(shoePage())
+  assert.deepEqual(readOptionLabels(doc), ['230', '240', '250'])
+  const p = parsePage(doc, '')
+  assert.deepEqual(p.shoeOptionLabels, shoeOpts)
+  assert.equal(p.category, 'shoes')
+  const opts = parseShoeOptions(p.shoeOptionLabels)
+  assert.deepEqual(opts.map((o) => [o.label, o.mm, o.lo, o.hi]), [['230 (230-235)', 230, 230, 235], ['240 (240-245)', 240, 240, 245], ['250 (250-255)', 250, 250, 255]])
+  assert.equal(parseShoeOption('5개 남음'), null)
+  assert.equal(parseShoeOption('예약배송'), null)
+  assert.equal(parseShoeOption('250 (250-255)11.11(수) 이내 발송 예정').hi, 255)
+})
+
+test('가짜 데이터: 신발 만족도 문구 파싱 - 정사이즈/작아요/커요, 발볼 좁음·적당함·넓음, 여러 항목 "·"', () => {
+  const f = parseShoeFeel(SHOE_FEEL('정사이즈', '적당함'))
+  assert.equal(f.size, 'true')
+  assert.equal(f.width, 'normal')
+  assert.deepEqual(f.extras.map((e) => e.label), ['착용감', '발목·종아리 둘레', '착용 편리성'])
+  assert.equal(f.extras[1].value, '조금 넉넉')
+  assert.equal(parseShoeFeel('사이즈 작아요 · 발볼 넓이 좁음').size, 'small')
+  assert.equal(parseShoeFeel('사이즈 반 사이즈 작아요').sizeStep, 0.5)
+  assert.equal(parseShoeFeel('사이즈 커요 · 발볼 넓이 넓음').size, 'large')
+  assert.equal(parseShoeFeel('사이즈 커요 · 발볼 넓이 넓음').width, 'wide')
+  assert.equal(parseShoeFeel('사이즈 정사이즈').width, null)
+  assert.equal(parseShoeFeel(''), null)
+})
+
+test('가짜 HTML: 신발 리뷰 카드(상품명/구매옵션/만족도, 체형정보 없음)를 읽는다', () => {
+  const doc = fakeDocument(shoePage(SHOE_CARDS))
+  const v = extractCardView(doc.querySelectorAll('li.sh-card')[0])
+  assert.equal(v.structured, true)
+  assert.equal(v.productName, SHOE_NAME)
+  assert.equal(v.option, '250 (250-255)')
+  assert.equal(v.sizePart, '250')
+  assert.equal(v.bodyInfo, '')
+  assert.equal(v.shoeFeel.size, 'true')
+  assert.equal(v.shoeFeel.width, 'normal')
+  assert.ok(!v.body.includes('만족도') && !v.body.includes('정사이즈 ·'), '만족도 문구는 본문에 섞이지 않는다')
+  const p = parsePage(doc, '')
+  assert.equal(p.reviews.length, 4)
+  assert.equal(p.reviews[0].size, '250')
+  assert.equal(p.reviews[0].view.shoeFeel.width, 'normal')
+})
+
+test('가짜 데이터: 신발 추천·리뷰 집계 - 발길이 여유 mm, 발볼 넓음이면 한 단계 위, 작아요 다수면 한 단계 위', () => {
+  const options = parseShoeOptions(shoeOpts)
+  const r = recommendShoe({ options, footLength: 245, preferredFit: 'regular' })
+  assert.equal(r.recommended.label, '250 (250-255)')
+  assert.deepEqual(r.rows.map((x) => x.ease), [-15, -5, 5])
+  assert.ok(r.heuristicNote.includes('휴리스틱'))
+  const wide = recommendShoe({ options, footLength: 235, footWidth: 'wide' })
+  assert.equal(recommendShoe({ options, footLength: 235 }).recommended.mm, 240)
+  assert.equal(wide.recommended.mm, 250)
+  const noFoot = recommendShoe({ options, footLength: null })
+  assert.equal(noFoot.recommended, null)
+  assert.ok(noFoot.notes[0].includes('발길이'))
+  // 리뷰 집계
+  const mk = (size, fit, w) => ({ size, view: { shoeFeel: { size: fit, width: w, extras: [] } } })
+  const reviews = [mk('250', 'true', 'normal'), mk('250', 'true', 'normal'), mk('250', 'small', 'narrow'), mk('240', 'large', 'wide')]
+  const agg = aggregateShoeReviews(reviews)
+  assert.equal(reviewAggregateLine(agg.find((a) => a.mm === 250)), '250 구매 리뷰 3건 중 정사이즈 2 · 작아요 1, 발볼 적당 2 · 좁음 1')
+  const small = [mk('250', 'small'), mk('250', 'small'), mk('250', 'true')]
+  const bumped = recommendShoe({ options: parseShoeOptions([...shoeOpts, '260 (260-265)']), footLength: 245, reviews: small })
+  assert.equal(bumped.recommended.mm, 260)
+  assert.ok(bumped.reasons.some((t) => t.includes('작다고')))
+})
+
+test('가짜 데이터: 신발 사이즈표(발길이/발볼) 변형을 shoeViewFor가 함께 쓴다', () => {
+  const html = `<html><head><title>러닝화</title></head><body><h1>러닝 스니커즈</h1><table><tr><th>사이즈</th><th>발길이</th><th>발볼</th></tr><tr><td>240</td><td>240</td><td>95</td></tr><tr><td>250</td><td>250</td><td>98</td></tr><tr><td>260</td><td>260</td><td>100</td></tr></table></body></html>`
+  const p = parsePage(fakeDocument(html), '')
+  assert.equal(p.category, 'shoes')
+  const v = shoeViewFor(p, shoeProfile())
+  assert.deepEqual(v.rows.map((r) => r.mm), [240, 250, 260])
+  assert.equal(v.recommended.mm, 250)
+})
+
+test('가짜 HTML: analyzePage는 신발이면 shoeView를 주고 옷 실측 비교·요약은 만들지 않는다', () => {
+  const doc = fakeDocument(shoePage(SHOE_CARDS))
+  const r = analyzePage(doc, '', shoeProfile({ footWidth: 'wide' }))
+  assert.equal(r.status, 'ok')
+  assert.equal(r.category, 'shoes')
+  assert.equal(r.compareView, null)
+  assert.equal(r.sizeSummary, null)
+  assert.equal(r.reviewViews.isShoes, true)
+  assert.equal(r.shoeView.footWidthLabel, '넓은 편')
+  assert.equal(r.shoeView.footLengthEstimated, false)
+  assert.equal(r.shoeView.rows.length, 3)
+  assert.ok(r.shoeView.rows.find((x) => x.mm === 250).reviewLine.startsWith('250 구매 리뷰 3건'))
+  assert.equal(r.recommendedLabel, r.shoeView.recommended.label)
+  const rv = r.reviewViews.others.concat(r.reviewViews.matched).find((x) => x.shoe?.sizeFeel === '반 사이즈 작아요')
+  assert.ok(rv, '리뷰 카드에 사이즈 체감이 담긴다')
+  assert.equal(rv.shoe.width, '좁음')
+})
+
+test('가짜 데이터: 발볼이 없는 기존 프로필도 로딩되고 분석이 동작하며, 발볼은 선택 필드로 저장된다', () => {
+  const old = { gender: 'male', height: 175, weight: 70, preferredFit: 'regular', usual: { top: '', bottom: '' }, measurements: {} }
+  assert.equal(isUsableProfile(old), true)
+  const r = analyzePage(fakeDocument(shoePage(SHOE_CARDS)), '', old)
+  assert.equal(r.status, 'ok')
+  assert.equal(r.shoeView.footLengthEstimated, true)
+  assert.ok(r.shoeView.notes.some((t) => t.includes('추정')))
+  assert.equal(r.shoeView.footWidthLabel, '')
+  assert.equal('footWidth' in buildProfile({ gender: 'male', height: '175', weight: '70' }).profile, false)
+  assert.equal(buildProfile({ gender: 'male', height: '175', weight: '70', footWidth: 'wide' }).profile.footWidth, 'wide')
+  assert.equal('footWidth' in buildProfile({ gender: 'male', height: '175', weight: '70', footWidth: 'huge' }).profile, false)
+})
+
+await atest('content.js(가짜 DOM, vm): 가짜 HTML 신발 페이지는 신발 사이즈 비교와 발 정보 비교 탭을 그린다', async () => {
+  const { texts } = await runContentInFakeDom(shoePage(SHOE_CARDS))
+  assert.ok(texts.includes('신발 사이즈 비교'))
+  assert.ok(texts.some((t) => t.includes('여유')))
+  assert.ok(texts.some((t) => t.includes('휴리스틱')))
+  assert.ok(texts.includes('발 정보 비교'))
+  assert.ok(!texts.includes('체형 비교'))
+})
+
+
 console.log(`\n${passed}개 통과`)

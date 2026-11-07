@@ -124,6 +124,12 @@ tr.rec .cv{color:#9fe0ba}
 .ccl{font-size:11px;color:#6b6b70;font-weight:600}
 .ccv{font-size:13px;font-weight:700;color:#111}
 .cbuy{font-size:12px;font-weight:600;color:#444;overflow-wrap:anywhere}
+.shr{list-style:none;margin:6px 0 0;padding:0}
+.shr li{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline;padding:6px 8px;border:1px solid #e3e3e3;border-radius:8px;margin-top:4px}
+.shr li.on{border-color:#111;background:#f4f4f5}
+.shl{font-weight:700}
+.shs{font-size:11px;color:#6b6b70}
+.shv{margin-left:auto;font-size:12px;font-weight:600}
 .cdiff{margin:4px 0 0;font-size:11px;color:#6b6b70}
 .ctier{font-size:12px;font-weight:700}
 .cb.high .ctier,.cb.high .cpct{color:#0a7a3c}
@@ -434,6 +440,12 @@ function reviewItem(rv) {
   tag('몸무게', rv.weight, `${rv.weight}kg`)
   tag('구매 사이즈', rv.size, rv.size)
   tag('핏 평가', rv.fitLabel, rv.fitLabel)
+  if (rv.shoe) {
+    if (rv.shoe.option) meta.append(el('span', 'tag', `구매 옵션 ${rv.shoe.option}`))
+    if (rv.shoe.sizeFeel) meta.append(el('span', 'tag', `사이즈 ${rv.shoe.sizeFeel}`))
+    if (rv.shoe.width) meta.append(el('span', 'tag', `발볼 ${rv.shoe.width}`))
+    for (const x of rv.shoe.extras || []) meta.append(el('span', 'tag', `${x.label} ${x.value}`.trim()))
+  }
   li.append(meta)
 
   const sentences = Array.isArray(rv.sentences) && rv.sentences.length ? rv.sentences : null
@@ -610,7 +622,7 @@ function reviewsBlock(rvs) {
       },
     },
     { label: '사진 모아보기', build: () => photoGallery(all) },
-    { label: '체형 비교', compare: true },
+    rvs.isShoes ? { label: '발 정보 비교', build: () => footCompare(all) } : { label: '체형 비교', compare: true },
   ]
   const list = el('div', 'rtabs')
   list.setAttribute('role', 'tablist')
@@ -654,6 +666,26 @@ function reviewsBlock(rvs) {
   box.append(list, panel)
   select(0, false)
   return box
+}
+
+// 발 정보 비교 탭(신발): 후기마다 구매 사이즈·사이즈 체감·발볼을 보여줘요. 신발 후기에는 키·몸무게가 없는 경우가 많아서 체형 유사도는 쓰지 않아요.
+function footCompare(all) {
+  const box = el('div')
+  const rows = all.filter((r) => r.shoe || r.size != null).slice(0, COMPARE_MAX)
+  if (!rows.length) {
+    box.append(el('p', 'note', '구매 사이즈나 사이즈 체감을 읽은 리뷰가 없어요.'))
+    return { node: box, play() {} }
+  }
+  const ul = el('ul', 'shr')
+  for (const r of rows) {
+    const li = el('li')
+    li.append(el('span', 'shl', r.shoe?.option || (r.size ? `${r.size}` : '구매 사이즈 못 읽음')))
+    li.append(el('span', 'shs', `사이즈 ${r.shoe?.sizeFeel || r.fitLabel || '못 읽음'}`))
+    li.append(el('span', 'shs', `발볼 ${r.shoe?.width || '못 읽음'}`))
+    ul.append(li)
+  }
+  box.append(ul)
+  return { node: box, play() {} }
 }
 
 // 체형 비교 탭: 후기마다 성별·키·몸무게를 내 값과 나란히 보여주고, 유사도 숫자가 0에서 올라가요.
@@ -946,6 +978,30 @@ function sizeSummaryBlock(r, targets) {
   return box
 }
 
+// 신발 전용 비교: 사이즈(옵션)별 여유 mm와 판정, 구매 리뷰 집계, 추천 이유. 규칙은 휴리스틱이라고 함께 알려요.
+function shoeBlock(sv) {
+  const box = el('div', 'ss')
+  box.append(el('div', 'sst', '신발 사이즈 비교'))
+  const foot = sv.footLength
+    ? `내 발길이 ${sv.footLength}mm${sv.footLengthEstimated ? ' (키로 추정)' : ''} · 발볼 ${sv.footWidthLabel || '입력 안 함'}`
+    : '발길이를 알 수 없어요'
+  box.append(el('p', null, foot))
+  const ul = el('ul', 'shr')
+  for (const row of sv.rows) {
+    const li = el('li', row.recommended ? 'on' : null)
+    li.append(el('span', 'shl', row.recommended ? `${row.label} 추천` : row.label))
+    if (row.ease != null) li.append(el('span', 'shs', `여유 ${row.ease > 0 ? '+' : ''}${row.ease}mm`))
+    if (row.verdict) li.append(el('span', 'shv', row.verdict))
+    if (row.reviewLine) li.append(el('span', 'shs', row.reviewLine))
+    ul.append(li)
+  }
+  box.append(ul)
+  for (const t of sv.reasons) box.append(el('p', 'tiny', t))
+  for (const t of sv.notes) box.append(el('p', 'tiny', t))
+  box.append(el('p', 'tiny', sv.heuristicNote))
+  return box
+}
+
 function loadMoreBlock(r) {
   const box = el('div')
   const btn = el('button', 'btn', '리뷰 더 불러오기')
@@ -1095,6 +1151,7 @@ function renderResult(r) {
     fold.append(ch.det)
     const summary = sizeSummaryBlock(r, { cp: cpSec?.det || null, ch: ch.det, manual })
     if (summary) summarySlot.append(summary)
+    if (r.shoeView) summarySlot.append(shoeBlock(r.shoeView))
 
     if (r.diagnostics) {
       const rep = section('문제가 있나요? 진단 리포트')

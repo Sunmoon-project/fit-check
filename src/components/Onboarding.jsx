@@ -14,6 +14,7 @@ const DEFAULT_PROFILE = {
   usual: { top: '', bottom: '' },
   preferredFit: 'regular',
   measurements: {},
+  footWidth: '', // 선택: narrow | normal | wide (예전에 저장한 프로필에는 없어도 돼요)
 }
 
 const SHAPE_OPTIONS = [
@@ -212,6 +213,15 @@ export default function Onboarding({ initial, onComplete, onCancel }) {
               </label>
             ))}
           </div>
+          <div className="measure-field">
+            <span>발볼 <span className="muted small">(신발 추천에 쓰여요, 선택)</span></span>
+            <Chips
+              name="발볼"
+              value={profile.footWidth || ''}
+              options={[['', '모름'], ['narrow', '좁은 편'], ['normal', '보통'], ['wide', '넓은 편']]}
+              onChange={(v) => set({ footWidth: v })}
+            />
+          </div>
         </>
       )}
 
@@ -260,8 +270,10 @@ function normalize(p) {
   for (const [k, v] of Object.entries(p.measurements || {})) {
     if (v !== '' && v != null && Number.isFinite(Number(v))) measurements[k] = Number(v)
   }
+  const { footWidth, ...rest } = p
   return {
-    ...p,
+    ...rest,
+    ...(['narrow', 'normal', 'wide'].includes(footWidth) ? { footWidth } : {}),
     height: Number(p.height),
     weight: Number(p.weight),
     usual: {

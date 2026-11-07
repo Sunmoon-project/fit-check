@@ -19,7 +19,9 @@ export function buildProfile(form) {
     const v = Number(raw)
     if (Number.isFinite(v) && v > 0) measurements[k] = v
   }
-  return { profile: { gender, height, weight, preferredFit, usual: { top: '', bottom: '' }, measurements } }
+  // 발볼은 선택 항목이에요. 없거나 알 수 없는 값이면 저장하지 않아요(예전 프로필과 호환).
+  const footWidth = ['narrow', 'normal', 'wide'].includes(form.footWidth) ? form.footWidth : ''
+  return { profile: { gender, height, weight, preferredFit, usual: { top: '', bottom: '' }, measurements, ...(footWidth ? { footWidth } : {}) } }
 }
 
 /** 저장된 프로필이 쓸 만한지 */
