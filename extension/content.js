@@ -2,6 +2,7 @@
 // 페이지 데이터는 이 브라우저 안에서만 읽고, 어디로도 보내지 않아요. 네트워크 호출이 없습니다.
 import { isProductPage, REVIEW_SELECTOR, readReviewTotal, readReviewCardEls } from '../src/lib/pageParser.js'
 import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
+import { buildExportEnvelope } from '../src/lib/wardrobeImport.js'
 import { collectDiagnostics, formatReport } from '../src/lib/diagnose.js'
 import { shouldStop, isSafeMoreButton, toReportStop, STOP_LABEL } from '../src/lib/reviewLoader.js'
 import { EXT_PROFILE_KEY, isUsableProfile } from '../src/lib/extProfile.js'
@@ -65,6 +66,14 @@ tr.rec .cv{color:#9fe0ba}
 .sent{margin:3px 0 0;padding:2px 0 2px 8px;border-left:2px solid #d4d4d4;white-space:pre-wrap}
 .phs{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
 .ph{width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid #ececec}
+.tabs{display:flex;gap:4px;border-bottom:1px solid #ececec;margin-top:2px}
+.tab{border:0;border-bottom:2px solid transparent;background:none;padding:6px 8px;font-size:12px;color:#8a8a8e;cursor:pointer}
+.tab.on{color:#111;border-bottom-color:#111;font-weight:600}
+.tab:focus-visible{outline:2px solid #111;outline-offset:1px}
+.tp{max-height:320px;overflow-y:auto;overscroll-behavior:contain;padding-top:2px}
+.gal{display:flex;flex-direction:column;gap:10px;margin-top:6px}
+.pf{margin:0;display:flex;flex-direction:column;gap:4px}
+.ph.big{width:100%;height:auto;max-height:280px;object-fit:contain;background:#f6f6f6}
 .lnk{border:0;background:none;padding:0;margin-left:4px;font-size:11px;color:#555;text-decoration:underline;cursor:pointer}
 `
 
@@ -339,23 +348,122 @@ function reviewList(list) {
   return ul
 }
 
-// 추천 근거가 된 리뷰를 페이지에서 읽은 그대로. 비슷한 체형 리뷰를 먼저, 나머지는 접어 둡니다. 저장·전송하지 않아요.
+// 사진 모아보기: 리뷰 사진을 큰 크기로 세로로 이어서 봅니다 (https 주소만).
+function photoGallery(list) {
+  const box = el('div', 'gal')
+  let count = 0
+  for (const rv of list) {
+    const urls = (rv.photos || []).filter((u) => /^https:\/\//i.test(u)).slice(0, 5)
+    if (!urls.length) continue
+    const fig = el('figure', 'pf')
+    for (const url of urls) {
+      const img = document.createElement('img')
+      img.className = 'ph big'
+      img.src = url
+      img.alt = '리뷰 사진'
+      img.loading = 'lazy'
+      img.referrerPolicy = 'no-referrer'
+      img.decoding = 'async'
+      fig.append(img)
+      count += 1
+    }
+    const cap = [rv.nick || '구매자', rv.height != null && rv.weight != null ? `${rv.height}cm ${rv.weight}kg` : null, rv.size].filter(Boolean).join(' · ')
+    fig.append(el('figcaption', 'tiny', cap))
+    box.append(fig)
+  }
+  if (!count) box.append(el('p', 'note', '불러온 리뷰에 사진이 없어요.'))
+  return box
+}
+
+// 추천 근거가 된 리뷰를 페이지에서 읽은 그대로, 탭 세 개(비슷한 체형 / 전체 리뷰 / 사진 모아보기)로 보여줘요.
+// 각 탭은 처음 열 때 그리고, 세로로 스크롤돼요. 저장·전송하지 않아요.
 function reviewsBlock(rvs) {
   const box = el('div')
-  if (rvs.matched.length) box.append(reviewList(rvs.matched))
-  else box.append(el('p', 'note', '비슷한 체형(키·몸무게를 읽은) 리뷰가 없어요.'))
-  if (rvs.matchedTotal > rvs.matched.length) box.append(el('p', 'note', `비슷한 체형 ${rvs.matchedTotal - rvs.matched.length}건은 표시하지 않았어요.`))
-  if (rvs.others.length) {
-    const rest = section(`나머지 리뷰 ${rvs.othersTotal}건 (체형 정보가 없거나 다른 리뷰)`)
-    let built = false
-    rest.det.addEventListener('toggle', () => {
-      if (built || !rest.det.open) return
-      built = true
-      rest.body.append(reviewList(rvs.others))
-      if (rvs.othersTotal > rvs.others.length) rest.body.append(el('p', 'note', `${rvs.othersTotal - rvs.others.length}건은 표시하지 않았어요.`))
+  const all = [...rvs.matched, ...rvs.others]
+  const tabs = [
+    {
+      label: '비슷한 체형',
+      build() {
+        const d = el('div')
+        if (rvs.matched.length) d.append(reviewList(rvs.matched))
+        else d.append(el('p', 'note', '비슷한 체형(키·몸무게를 읽은) 리뷰가 없어요.'))
+        if (rvs.matchedTotal > rvs.matched.length) d.append(el('p', 'note', `비슷한 체형 ${rvs.matchedTotal - rvs.matched.length}건은 표시하지 않았어요.`))
+        return d
+      },
+    },
+    {
+      label: '전체 리뷰',
+      build() {
+        const d = el('div')
+        if (all.length) d.append(reviewList(all))
+        else d.append(el('p', 'note', '불러온 리뷰가 없어요.'))
+        const hidden = rvs.matchedTotal + rvs.othersTotal - all.length
+        if (hidden > 0) d.append(el('p', 'note', `${hidden}건은 표시하지 않았어요.`))
+        return d
+      },
+    },
+    { label: '사진 모아보기', build: () => photoGallery(all) },
+  ]
+  const list = el('div', 'tabs')
+  list.setAttribute('role', 'tablist')
+  list.setAttribute('aria-label', '리뷰 보기')
+  const panel = el('div', 'tp')
+  panel.setAttribute('role', 'tabpanel')
+  const btns = []
+  const built = []
+  const select = (i, focus) => {
+    btns.forEach((b, j) => {
+      b.setAttribute('aria-selected', j === i ? 'true' : 'false')
+      b.tabIndex = j === i ? 0 : -1
+      b.className = j === i ? 'tab on' : 'tab'
     })
-    box.append(rest.det)
+    if (!built[i]) built[i] = tabs[i].build()
+    panel.replaceChildren(built[i])
+    if (focus && btns[i].focus) btns[i].focus()
   }
+  tabs.forEach((t, i) => {
+    const b = el('button', 'tab', t.label)
+    b.type = 'button'
+    b.setAttribute('role', 'tab')
+    b.addEventListener('click', () => select(i, false))
+    b.addEventListener('keydown', (e) => {
+      const n = tabs.length
+      const next = { ArrowRight: (i + 1) % n, ArrowLeft: (i + n - 1) % n, Home: 0, End: n - 1 }[e.key]
+      if (next == null) return
+      if (e.preventDefault) e.preventDefault()
+      select(next, true)
+    })
+    btns.push(b)
+    list.append(b)
+  })
+  box.append(list, panel)
+  select(0, false)
+  return box
+}
+
+// 내 옷장으로 보내기: 누를 때만 JSON을 클립보드에 복사하고, 같은 글을 읽기 전용 칸에도 보여줘요. 어디로도 전송하지 않아요.
+function exportBlock(r) {
+  const box = el('div')
+  const btn = el('button', 'btn', '내 옷장으로 보내기')
+  btn.type = 'button'
+  const msg = el('p', 'ok')
+  msg.setAttribute('role', 'status')
+  btn.addEventListener('click', async () => {
+    const env = buildExportEnvelope(r)
+    if (!env) {
+      msg.textContent = '보낼 수 있는 내용을 만들지 못했어요.'
+      return
+    }
+    const text = JSON.stringify(env)
+    const ta = el('textarea', 'inp')
+    ta.readOnly = true
+    ta.rows = 3
+    ta.value = text
+    ta.setAttribute('aria-label', '옷장으로 보낼 내용')
+    box.append(ta)
+    msg.textContent = (await copyText(text)) ? '복사했어요. 핏체크 웹의 내 옷장 > 가져오기에 붙여넣어주세요.' : '복사하지 못했어요. 아래 글을 직접 복사해주세요.'
+  })
+  box.append(btn, msg, el('p', 'tiny', '닉네임·리뷰 원문·사진 주소를 담아요. 서버로 보내지 않고, 붙여넣은 브라우저에만 저장돼요.'))
   return box
 }
 
@@ -524,6 +632,7 @@ function renderResult(r) {
       rv.body.append(reviewsBlock(r.reviewViews))
       fold.append(rv.det)
     }
+    if (r.exportData) fold.append(exportBlock(r))
     const manual = manualForm(r)
     const ch = section(r.chartView ? '읽은 사이즈표 (페이지 그대로)' : '사이즈표 (읽지 못함)', !r.chartView)
     if (r.chartView) ch.body.append(chartTable(r.chartView), el('p', 'tiny', '읽은 표가 다르면 직접 입력으로 고칠 수 있어요.'))

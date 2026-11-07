@@ -76,7 +76,7 @@ export function recordsForUpload(queue, currentConsentVersion) {
   return queue.filter((e) => e && e.consentVersion === currentConsentVersion && e.record).map((e) => e.record)
 }
 
-// 옷장: 최근 순으로 최대 WARDROBE_MAX개. 용량이 부족하면 오래된 항목의 이미지부터 뺍니다.
+// 옷장: 최근 순으로 최대 WARDROBE_MAX개. 용량이 부족하면 오래된 항목의 이미지부터, 그다음 리뷰 글·사진 주소를 뺍니다.
 export const WARDROBE_MAX = 30
 export const loadWardrobe = () => read(WARDROBE_KEY, [])
 export function saveWardrobe(list) {
@@ -85,6 +85,12 @@ export function saveWardrobe(list) {
   for (let i = next.length - 1; i >= 0; i--) {
     if (!next[i].image) continue
     next = next.map((w, j) => (j === i ? { ...w, image: null, imageKind: null } : w))
+    if (write(WARDROBE_KEY, next)) return { list: next, trimmed: true }
+  }
+  // 이미지를 다 빼도 모자라면 오래된 항목의 리뷰 글·사진 주소를 뺍니다 (옷 정보는 남겨요).
+  for (let i = next.length - 1; i >= 0; i--) {
+    if (!next[i].reviews?.length) continue
+    next = next.map((w, j) => (j === i ? { ...w, reviews: [] } : w))
     if (write(WARDROBE_KEY, next)) return { list: next, trimmed: true }
   }
   return { list: next, trimmed: true, failed: true }

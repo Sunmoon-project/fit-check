@@ -44,6 +44,28 @@ function reviewView(r, disp = (x) => x) {
   }
 }
 
+// 옷장으로 보낼 때만 쓰는 값 (사용자가 '내 옷장으로 보내기'를 누를 때 wardrobeImport가 검사해서 담아요).
+// 진단 리포트·기여 기록에는 쓰이지 않습니다.
+function exportData(product, pageUrl, result) {
+  let mall = ''
+  try {
+    mall = new URL(pageUrl).hostname.replace(/^www\./, '')
+  } catch {
+    mall = ''
+  }
+  const size = result.recommendedSize ?? null
+  const key = size == null ? null : Object.keys(product.sizeChart?.measures || {}).find((k) => String(k).toUpperCase() === String(size).toUpperCase())
+  return {
+    mall,
+    category: product.category,
+    image: product.image || null,
+    url: /^https?:\/\//i.test(pageUrl || '') ? pageUrl : '',
+    size: size == null ? null : String(result.recommendedLabel || size),
+    measures: key == null ? null : product.sizeChart.measures[key],
+    verdicts: (result.verdicts || []).map((v) => ({ part: v.part, label: v.label, verdict: v.verdict, key: v.key, ease: v.ease })),
+  }
+}
+
 export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) {
   const product = parsePage(root, pageUrl, opts)
   if (!product) return { status: 'no-product', message: '상품 정보를 읽지 못했어요. 상품 상세 페이지에서 눌러주세요.' }
@@ -82,6 +104,7 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
       matchedTotal: (result.matched || []).length,
       othersTotal: (result.otherReviews || []).length,
     },
+    exportData: exportData(product, pageUrl, result),
     chartView: product.sizeChart?.view ? { ...product.sizeChart.view, recommended: result.recommendedSize ?? null } : null,
     confidence: result.confidence,
     confidenceLabel: CONFIDENCE_LABEL[result.confidence],
