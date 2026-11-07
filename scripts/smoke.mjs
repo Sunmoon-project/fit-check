@@ -2889,6 +2889,12 @@ test('가짜 HTML: 신발 사이즈표 변형(사이즈(mm) 줄, 발길이 열, 
   assert.deepEqual(Object.keys(c.sizeChart?.measures || {}), ['250', '255', '260'])
 })
 
+test('확장 카드 CSS: 근거 요약은 배경 박스 없이 12px, 글꼴은 한글 폰트 우선', () => {
+  const js = readFileSync(new URL('../extension/content.js', import.meta.url), 'utf8')
+  assert.ok(js.includes('.sum{margin:8px 0 0;color:#555;font-size:12px}'))
+  assert.ok(js.includes("font-family:'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',-apple-system"))
+})
+
 test('색 대비: 제목·막대 색이 흰/연회색 배경에서 기준(글자 4.5:1, 막대 3:1) 이상이다 (계산, 실제 화면 확인 아님)', () => {
   const lum = (hex) => {
     const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
