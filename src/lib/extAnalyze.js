@@ -88,7 +88,7 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
 
   // 사이즈표도 없고 참고할 리뷰도 거의 없으면 추천하지 않고 솔직하게 알립니다.
   if (!product.sizeChart && product.reviews.length < MIN_REVIEWS_WITHOUT_CHART) {
-    const diagnostics = collectDiagnostics(root, pageUrl, extVersion)
+    const diagnostics = collectDiagnostics(root, pageUrl, extVersion, { categoryOverride: opts.categoryOverride })
     return {
       status: 'no-data',
       name: product.name,
@@ -113,12 +113,17 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     status: 'ok',
     name: product.name,
     categoryLabel: CATEGORY_LABEL[product.category] || '',
+    category: product.category,
+    categoryConfidence: product.categoryConfidence,
+    categoryEvidence: product.categoryEvidence,
+    categoryCandidates: (product.categoryCandidates || []).map((c) => ({ key: c, label: CATEGORY_LABEL[c] || c })),
+    categoryOverridden: product.categoryOverridden === true,
     recommendedSize: result.recommendedSize,
     recommendedLabel: result.recommendedLabel,
     reviewsLoaded: product.reviews.length,
     reviewTotalOnPage: product.reviewTotalOnPage ?? null,
     sizeChartMissing: !product.sizeChart,
-    diagnostics: collectDiagnostics(root, pageUrl, extVersion, { compareFailed: cmpView.failed }),
+    diagnostics: collectDiagnostics(root, pageUrl, extVersion, { compareFailed: cmpView.failed, categoryOverride: opts.categoryOverride }),
     reviewViews: {
       matched: (result.matched || []).slice(0, MAX_SHOWN.matched).map(view),
       others: (result.otherReviews || []).slice(0, MAX_SHOWN.others).map(view),

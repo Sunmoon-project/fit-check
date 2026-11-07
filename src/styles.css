@@ -575,3 +575,6 @@ body {
 .ss-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .ss-chip { font-size: 12px; border: 1px solid #d4d4d4; border-radius: 999px; padding: 0 8px; color: #111; background: #fff; }
 .ss-chip.on { background: #4a5a6a; border-color: #4a5a6a; color: #fff; font-weight: 700; }
+
+.category-picker { margin: 6px 0 10px; }
+.category-picker .chip-row { margin-top: 6px; }
