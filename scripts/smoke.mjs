@@ -2780,6 +2780,10 @@ await atest('content.js(가짜 DOM, vm): 체형 비교는 키·몸무게를 한 
   await new Promise((r) => setTimeout(r, 50))
   const rows = created.filter((e) => e.className === 'cr')
   assert.ok(rows.length >= 2)
+  const mecard = created.filter((e) => e.className === 'mecard')
+  assert.equal(mecard.length, 1, '탭 맨 위 큰 내 체형 카드 하나')
+  assert.ok(created.filter((e) => e.className === 'men').every((e) => /^\d+$/.test(e.textContent)) && created.filter((e) => e.className === 'men').length === 2, '키·몸무게 큰 숫자')
+  assert.ok(!created.some((e) => e.className === 'tiny' && /^내 체형:/.test(e.textContent)), '작은 한 줄 제거')
   const groups = created.filter((e) => e.className === 'cgrp')
   assert.equal(groups.length, rows.length, '후기마다 키·몸무게 묶음 하나')
   assert.ok(groups.every((g) => g.children.length === 1), '후기 체형 한 칸만')
@@ -2805,6 +2809,7 @@ test('체형 비교: 유사도 구간과 차이 문구 (순수 함수, 가짜 �
   const web = readFileSync(new URL('../src/components/SimilarityCompare.jsx', import.meta.url), 'utf8')
   assert.ok(web.includes('<BodyPair') && web.includes('<SimBar') && !web.includes('<Bar '), '웹도 묶음 + 막대 하나')
   assert.ok(!web.includes('c.height.me') && !web.includes('c.weight.me'), '웹도 내 값 칸 없음')
+  assert.ok(web.includes('me-card') && web.includes('me-num') && !web.includes('내 체형: {'), '웹도 큰 내 체형 카드')
 })
 
 test('사이즈표 회귀 방지: 95/100·S/M 같은 묶음 옵션은 표 줄 이름을 바꾸지 않고, 옵션만으로 의류를 신발로 만들지 않는다 (가짜 표)', () => {

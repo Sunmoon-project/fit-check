@@ -43,7 +43,7 @@ function useCountUp(targets, active) {
   return { shown, grown }
 }
 
-// 후기 작성자의 키·몸무게만 보여줘요 (내 체형은 위쪽 한 줄에 있어요).
+// 후기 작성자의 키·몸무게만 보여줘요 (내 체형은 위쪽 큰 카드에 있어요).
 function BodyPair({ c }) {
   const dt = diffText(c)
   return (
@@ -94,9 +94,14 @@ export default function SimilarityCompare({ profile, reviews }) {
       </div>
       {open && (
         <div id="sim-compare-panel">
-          <p className="muted small">
-            내 체형: {profile.height}cm {profile.weight}kg{GENDER_TEXT[profile.gender] ? ` · ${GENDER_TEXT[profile.gender]}` : ''}
-          </p>
+          <div className="me-card">
+            <span className="me-label">내 체형</span>
+            <div className="me-values">
+              <span className="me-item"><span className="me-num">{profile.height}</span><span className="me-unit">cm</span></span>
+              <span className="me-item"><span className="me-num">{profile.weight}</span><span className="me-unit">kg</span></span>
+            </div>
+            {GENDER_TEXT[profile.gender] && <span className="me-gender">{GENDER_TEXT[profile.gender]}</span>}
+          </div>
           <ul className={`cmp-list ${gradual}`}>
             {rows.map(({ r, c }, i) => {
               const gt = c.gender.state === 'same' ? '성별 같음' : c.gender.state === 'diff' ? '성별 다름' : '성별 확인 불가'
