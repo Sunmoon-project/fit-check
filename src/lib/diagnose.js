@@ -159,12 +159,13 @@ function chartJudgment(m) {
     labelClass: ['paren', 'alpha', 'numeric', 'mixed', 'none'].includes(meta.labelClass) ? meta.labelClass : 'none',
     monotonic: typeof meta.monotonic === 'boolean' ? meta.monotonic : null,
     flipped: meta.flipped || 0,
+    normalRetry: meta.normalRetry || 0,
     rejectedMeasureHeader: meta.rejectedMeasureHeader || 0,
     rejectedNumeric: meta.rejectedNumeric || 0,
     rejectedNoOverlap: meta.rejectedNoOverlap || 0,
     overlap: meta.overlap || 0,
     optionCount: meta.optionCount || 0,
-    namesFrom: ['table', 'other-table', 'options'].includes(meta.namesFrom) ? meta.namesFrom : null,
+    namesFrom: ['table', 'other-table', 'options', 'normal-retry'].includes(meta.namesFrom) ? meta.namesFrom : null,
     candidates: cleanCandidates(meta.candidates),
   }
 }
@@ -180,7 +181,7 @@ const CAND_REASON_TEXT = {
   'not-best': '읽을 수는 있었으나 다른 후보가 더 적합',
   selected: '선택함',
 }
-const NAMES_FROM_TEXT = { table: '같은 표', 'other-table': '다른 표', options: '구매 옵션 순서' }
+const NAMES_FROM_TEXT = { table: '같은 표', 'other-table': '다른 표', options: '구매 옵션 순서', 'normal-retry': '정상 표로 재시도(첫 열이 증가하는 정수)' }
 const SHAPE_RE = /^[LNT_ ]{0,40}$/
 const KINDS = ['table', 'grid', 'transposed', 'manual']
 const smallInt = (v) => (Number.isInteger(v) && v >= 0 && v <= 999 ? v : 0)
@@ -240,7 +241,7 @@ function candidateLines(c) {
   const out = (c.candidates || []).map(
     (x) => `후보 ${x.index + 1}번(${x.kind || '?'}, ${x.rows}줄 x ${x.cols}칸${x.flipped && ['selected', 'not-best'].includes(x.reason) ? ', 뒤집어 읽음' : ''}) 머리글 [${x.head}] 첫 열 [${x.firstCol}] -> ${CAND_REASON_TEXT[x.reason]}`,
   )
-  if (c.namesFrom) out.push(`뒤집어 읽을 때 사이즈 이름 출처: ${NAMES_FROM_TEXT[c.namesFrom]}`)
+  if (c.namesFrom) out.push(`${c.namesFrom === 'normal-retry' ? '사이즈 이름 출처' : '뒤집어 읽을 때 사이즈 이름 출처'}: ${NAMES_FROM_TEXT[c.namesFrom]}`)
   return out
 }
 
@@ -251,7 +252,7 @@ function chartLines(d) {
   const total = d.reviewTotalOnPage != null ? `, 페이지 표시 전체 리뷰 약 ${d.reviewTotalOnPage}건` : ', 페이지에 표시된 전체 리뷰 수 못 찾음'
   return [
     `사이즈표 후보 ${c.considered}개 검토(실측 제목 있는 후보 ${c.withHeader}개), ${sel}`,
-    `뒤집어 읽은 후보 ${c.flipped}개, 뒤집어도 못 쓴 후보 ${c.rejectedMeasureHeader}개, 숫자 이름 규칙 위반 ${c.rejectedNumeric}개, 구매 옵션과 안 겹쳐 버린 후보 ${c.rejectedNoOverlap}개`,
+    `뒤집어 읽은 후보 ${c.flipped}개, 뒤집어도 못 쓴 후보 ${c.rejectedMeasureHeader}개, 숫자 이름 규칙 위반 ${c.rejectedNumeric}개, 구매 옵션과 안 겹쳐 버린 후보 ${c.rejectedNoOverlap}개, 정상 표로 재시도해 읽은 후보 ${c.normalRetry}개`,
     ...candidateLines(c),
     `사이즈 이름 ${c.labelCount}개, 모양 ${c.labelClass}, 숫자 이름 순서 증가: ${c.monotonic == null ? '해당 없음' : yn(c.monotonic)}`,
     `구매 옵션 이름 ${d.optionLabelCount ?? c.optionCount}개, 표와 겹침 ${c.overlap}개`,

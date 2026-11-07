@@ -2830,6 +2830,60 @@ test('리뷰 사이즈: 사이즈표가 없을 때 2024 주문 같은 연도·�
   assert.equal(parseReviewText('265 주문했어요', []).size, '265')
 })
 
+const SIZE_ROWS_0_3 = [['0', '66', '50', '56', '60', '48'], ['1', '68', '52', '58', '61', '50'], ['2', '70', '54', '60', '62', '52'], ['3', '72', '56', '62', '63', '54']]
+const tableHtml = (head, second) => `<html><body><h1>오버핏 맨투맨</h1><table>${[head, second, ...SIZE_ROWS_0_3].filter(Boolean).map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</table></body></html>`
+
+test('가짜 HTML: 후보1 모양(머리글에 실측 항목, 첫 열 0~3, 구매 옵션 없음)에서 사이즈표 4행을 읽는다', () => {
+  const heads = [['사이즈 기장', '총장', '어깨너비', '가슴단면', '소매길이', '밑단'], ['총장', '총장', '어깨너비', '가슴단면', '소매길이', '밑단']]
+  for (const head of heads) {
+    for (const second of [['cm', 'cm', 'cm', 'cm', 'cm', 'cm'], ['MY', '', '', '', '', ''], ['', '', '', '', '', ''], null]) {
+      const page = parsePage(fakeDocument(tableHtml(head, second)), 'https://example.com/p/1')
+      assert.equal(page.sizeChart?.rows.length, 4, `${head[0]}/${second?.[0]}`)
+      assert.deepEqual(Object.keys(page.sizeChart.measures), ['0', '1', '2', '3'])
+      assert.equal(page.sizeChartMeta.namesFrom, 'normal-retry')
+    }
+  }
+  const rep = formatReport(collectDiagnostics(fakeDocument(tableHtml(heads[0], ['cm', 'cm', 'cm', 'cm', 'cm', 'cm'])), 'https://shop.example/p/1', '0.1.0'))
+  assert.match(rep, /정상 표로 재시도/)
+})
+
+test('가짜 HTML: 옵션 \'0 (S)\' 변형은 표 \'0\'과 이어져 원문 라벨로 보인다', () => {
+  const opts = '<select><option>블랙 / 0 (S)</option><option>블랙 / 1 (M)</option><option>블랙 / 2 (L)</option><option>블랙 / 3 (XL)</option></select>'
+  const html = tableHtml(['사이즈 기장', '총장', '어깨너비', '가슴단면', '소매길이', '밑단'], ['cm', 'cm', 'cm', 'cm', 'cm', 'cm']).replace('<h1>', `${opts}<h1>`)
+  const page = parsePage(fakeDocument(html), '')
+  assert.deepEqual(page.optionLabels, ['0 (S)', '1 (M)', '2 (L)', '3 (XL)'])
+  assert.deepEqual(Object.keys(page.sizeChart.measures), ['0(S)', '1(M)', '2(L)', '3(XL)'])
+  const ld = `<script type="application/ld+json">{"@type":"Product","name":"x","offers":[{"name":"블랙 / 0 (S)"},{"name":"블랙 / 1 (M)"}]}</script>`
+  assert.deepEqual(parsePage(fakeDocument(`<html><body>${ld}<h1>x</h1></body></html>`), '').optionLabels, ['0 (S)', '1 (M)'])
+})
+
+test('가짜 HTML: 총장 67처럼 첫 열이 치수값이고 머리글이 실측 항목이 아니면 정상 표로 오인하지 않는다', () => {
+  const rows = [['총장', '67', '69', '71'], ['어깨', '50', '52', '54']]
+  assert.equal(analyzeSizeCharts([rows], 'top', []).chart, null)
+  const page = parsePage(fakeDocument('<html><body><h1>x</h1><table><tr><td>총장</td><td>67</td></tr><tr><td>69</td><td>50</td></tr><tr><td>71</td><td>52</td></tr></table></body></html>'), '')
+  assert.equal(page.sizeChart, null)
+})
+
+test('리뷰 구매옵션: 상품 사이즈 목록이 비어 있어도 마지막 칸 숫자·FREE·250을 사이즈로 읽는다 (가짜 글)', () => {
+  assert.equal(parseReviewText('구매 옵션 블랙 · 1 키 175 몸무게 70', []).size, '1')
+  assert.equal(parseReviewText('구매 옵션 그레이 · 2 (L)', []).size, 'L')
+  assert.equal(parseReviewText('구매 옵션 블랙 · FREE', []).size, 'FREE')
+  assert.equal(parseReviewText('구매 옵션 화이트 / 250', []).size, '250')
+  assert.equal(parseReviewText('평소 L 입는데 잘 맞아요', []).size, null, '평소 L은 계속 차단')
+  assert.equal(parseReviewText('구매 옵션 2024 좋아요', []).size, null)
+  assert.equal(parseReviewText('구매 옵션 블랙 · 1', ['S', 'M']).size, null, '사이즈 목록이 있으면 목록과 맞을 때만')
+})
+
+test('가짜 HTML: 신발 사이즈표 변형(사이즈(mm) 줄, 발길이 열, 옵션만)도 읽는다', () => {
+  const shoe = (html) => parsePage(fakeDocument(`<html><body><h1>러닝화</h1>${html}</body></html>`), '')
+  const a = shoe('<table><tr><th>사이즈</th><th>발길이</th><th>발볼</th></tr><tr><td>mm</td><td>mm</td><td>mm</td></tr><tr><td>230</td><td>230</td><td>95</td></tr><tr><td>240</td><td>240</td><td>98</td></tr></table>')
+  assert.deepEqual(Object.keys(a.sizeChart.measures), ['230', '240'])
+  const b = shoe('<table><tr><td>KR</td><td>230</td><td>240</td><td>250</td></tr><tr><td>US</td><td>5</td><td>6</td><td>7</td></tr></table>')
+  assert.deepEqual(Object.keys(b.sizeChart.measures), ['230', '240', '250'])
+  const c = shoe('<select><option>화이트 / 250</option><option>화이트 / 255</option><option>화이트 / 260</option></select>')
+  assert.deepEqual(Object.keys(c.sizeChart?.measures || {}), ['250', '255', '260'])
+})
+
 test('색 대비: 제목·막대 색이 흰/연회색 배경에서 기준(글자 4.5:1, 막대 3:1) 이상이다 (계산, 실제 화면 확인 아님)', () => {
   const lum = (hex) => {
     const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
