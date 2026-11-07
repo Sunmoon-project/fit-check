@@ -1,8 +1,9 @@
-import { CONFIDENCE_LABEL } from '../lib/fitEngine.js'
+import { CONFIDENCE_LABEL, describeEvidence } from '../lib/fitEngine.js'
 
 // 추천 사이즈 카드 (후기 투표 + 실측 비교 종합)
 export default function FitComment({ result }) {
   const conf = CONFIDENCE_LABEL[result.confidence]
+  const evidence = result.evidence ? describeEvidence(result.evidence, result.confidence) : null
 
   return (
     <div className="card reco-card">
@@ -13,6 +14,17 @@ export default function FitComment({ result }) {
           {conf.text}
         </span>
       </div>
+
+      {evidence && (
+        <div className="evidence">
+          <p className="evidence-summary">{evidence.summary}</p>
+          {evidence.reasons.length > 0 && (
+            <ul className="evidence-why" aria-label="확신도가 더 높지 않은 이유">
+              {evidence.reasons.map((r) => <li key={r}>{r}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
 
       {result.recommendedSize && (
         <div className="reco-size">
