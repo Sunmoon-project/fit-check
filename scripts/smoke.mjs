@@ -1427,6 +1427,30 @@ test('content.js: 더보기 후보는 button으로 좁고, 중단은 대기를 �
   assert.ok(src.includes(`behavior: 'instant'`))
 })
 
+test('content.js CSS(소스 분석, 가짜 DOM 아님): 탭 규칙이 중복되지 않고 선택된 탭의 글자·배경 대비가 4.5:1 이상이다', () => {
+  const src = readFileSync(new URL('../extension/content.js', import.meta.url), 'utf8')
+  const rules = []
+  for (const m of src.matchAll(/^(\.[a-z][\w.:-]*)\{([^}]*)\}$/gm)) rules.push({ sel: m[1], decl: m[2] })
+  const count = (sel) => rules.filter((r) => r.sel === sel).length
+  for (const sel of ['.tabs', '.tab', '.tab.on', '.rtabs', '.rtab', '.rtab.on']) assert.ok(count(sel) <= 1, `${sel} 중복 정의`)
+  const hex = (c) => { const h = c.replace('#', ''); const f = h.length === 3 ? [...h].map((x) => x + x).join('') : h; return [0, 2, 4].map((i) => parseInt(f.slice(i, i + 2), 16) / 255) }
+  const lum = (c) => { const [r, g, b] = hex(c).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * r + 0.7152 * g + 0.0722 * b }
+  const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05) }
+  const prop = (decl, name) => decl.match(new RegExp(`(?:^|;)${name}:(#[0-9a-fA-F]{3,6}|none)`))?.[1]
+  // 선택된 탭 = 기본 규칙 + .on 규칙(.on이 특이도가 높아 우선). background 미지정/none은 흰 카드 위라고 봐요.
+  for (const base of ['.tab', '.rtab']) {
+    const b = rules.filter((r) => r.sel === base).map((r) => r.decl).join(';')
+    const on = rules.filter((r) => r.sel === `${base}.on`).map((r) => r.decl).join(';')
+    const color = prop(on, 'color') || prop(b, 'color')
+    const bgRaw = prop(on, 'background') || prop(b, 'background')
+    const bg = !bgRaw || bgRaw === 'none' ? '#ffffff' : bgRaw
+    assert.ok(color, `${base}.on 글자색`)
+    assert.ok(ratio(color, bg) >= 4.5, `${base}.on 대비 ${color} on ${bg}`)
+  }
+  assert.ok(src.includes(`'rtab on' : 'rtab'`) && src.includes(`el('button', 'rtab'`) && src.includes(`el('div', 'rtabs')`), '리뷰 탭은 rtab 클래스를 써요')
+  assert.ok(src.includes(`'tab on' : 'tab'`), '사이즈 비교 알약 탭은 tab 클래스를 유지해요')
+})
+
 test('DOM 파서: 리뷰 요소의 다양한 키·몸무게 표기를 읽는다', () => {
   const items = ['남성 · 175cm · 70kg L 사이즈로 구매 정사이즈예요', '키175/몸무게70 M 사이즈로 구매 잘 맞아요', '175 / 70 L 사이즈로 구매 정사이즈예요']
   const html = `<html><body><h1>니트</h1>${items.map((x) => `<div class="review-item">${x}</div>`).join('')}</body></html>`
@@ -1480,7 +1504,7 @@ async function runContentInFakeDom(pageHtml = null, extra = {}) {
         tagName: String(tag).toUpperCase(), children: [], className: '', hidden: false, disabled: false, style: {},
         set innerHTML(v) { throw new Error('innerHTML 사용 금지') }, set outerHTML(v) { throw new Error('outerHTML 사용 금지') }, insertAdjacentHTML() { throw new Error('insertAdjacentHTML 사용 금지') },
         _text: '', set textContent(v) { this._text = String(v); texts.push(this._text) }, get textContent() { return this._text },
-        append(...n) { this.children.push(...n) }, appendChild(n) { this.children.push(n); return n }, replaceChildren() { this.children = [] },
+        append(...n) { this.children.push(...n) }, appendChild(n) { this.children.push(n); return n }, replaceChildren(...n) { this.children = [...n] },
         setAttribute() {}, getAttribute() { return null }, addEventListener(type, fn) { (this._l ||= {})[type] = fn },
         classList: {
           contains: (c) => e.className.split(' ').includes(c),
@@ -1616,7 +1640,7 @@ await atest('content.js(가짜 DOM, vm): 리뷰 원문·사이즈표 구역이 �
     d._l?.toggle?.()
   }
   assert.ok(!has('ZQOTHER'), '전체 리뷰 탭은 열기 전에는 그리지 않아요')
-  created.find((e) => e.className.split(' ').includes('tab') && e.textContent === '전체 리뷰')._l.click()
+  created.find((e) => e.className.split(' ').includes('rtab') && e.textContent === '전체 리뷰')._l.click()
   assert.ok(has('ZQOTHER'), '전체 리뷰 탭')
   assert.ok(texts.some((t) => t.includes('키 못 읽음') && t.length < 20), '못 읽은 항목 표시')
   // 페이지 글에 든 <img ...> 는 요소가 아니라 글자로만 들어간다
@@ -2185,10 +2209,15 @@ test('가짜 HTML: 닉네임·리뷰 본문은 진단 리포트와 기여 기록
 await atest('content.js(가짜 DOM, vm): 리뷰 탭 4개와 사진 모아보기, 내 옷장으로 보내기 버튼이 오류 없이 그려진다', async () => {
   const { texts, created } = await runContentInFakeDom(RB_FULL)
   assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
-  const tabs = created.filter((e) => e.className.split(' ').includes('tab'))
+  const tabs = created.filter((e) => e.className.split(' ').includes('rtab'))
   assert.deepEqual(tabs.map((t) => t.textContent), ['비슷한 체형', '전체 리뷰', '사진 모아보기', '체형 비교'])
+  assert.equal(created.find((e) => e.children.includes(tabs[0]))?.className, 'rtabs', '리뷰 탭 목록은 사이즈 알약 탭(tabs)과 다른 클래스')
+  assert.ok(tabs.every((t) => !t.className.split(' ').includes('tab')), '리뷰 탭은 사이즈 알약 탭(tab) 클래스를 같이 쓰지 않아요')
   const panel = created.find((e) => e.className === 'tp')
   assert.ok(panel, '스크롤 패널')
+  tabs[1]._l.click()
+  assert.deepEqual(tabs.map((t) => t.className), ['rtab', 'rtab on', 'rtab', 'rtab'], '누른 리뷰 탭만 rtab on')
+  assert.ok(panel.children.length > 0, '리뷰 탭을 누른 뒤 패널이 비어 있지 않아요')
   tabs[2]._l.click()
   const imgs = created.filter((e) => e.tagName === 'IMG' && e.className === 'ph big')
   assert.ok(imgs.length >= 1 && imgs.every((i) => i.src.startsWith('https://') && i.referrerPolicy === 'no-referrer' && i.loading === 'lazy'))

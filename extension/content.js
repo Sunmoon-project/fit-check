@@ -80,10 +80,10 @@ tr.rec .cv{color:#9fe0ba}
 .sent{margin:3px 0 0;padding:2px 0 2px 8px;border-left:2px solid #d4d4d4;white-space:pre-wrap}
 .phs{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
 .ph{width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid #ececec}
-.tabs{display:flex;gap:4px;border-bottom:1px solid #ececec;margin-top:2px}
-.tab{border:0;border-bottom:2px solid transparent;background:none;padding:6px 8px;font-size:12px;color:#6b6b70;cursor:pointer}
-.tab.on{color:#111;border-bottom-color:#111;font-weight:600}
-.tab:focus-visible{outline:2px solid #111;outline-offset:1px}
+.rtabs{display:flex;gap:4px;border-bottom:1px solid #ececec;margin-top:2px}
+.rtab{border:0;border-bottom:2px solid transparent;background:none;padding:6px 8px;font-size:12px;color:#6b6b70;cursor:pointer}
+.rtab.on{color:#111;border-bottom-color:#111;font-weight:600}
+.rtab:focus-visible{outline:2px solid #111;outline-offset:1px}
 .tp{max-height:320px;overflow-y:auto;overscroll-behavior:contain;padding-top:2px}
 .gal{display:flex;flex-direction:column;gap:10px;margin-top:6px}
 .pf{margin:0;display:flex;flex-direction:column;gap:4px}
@@ -507,7 +507,7 @@ function reviewsBlock(rvs) {
     { label: '사진 모아보기', build: () => photoGallery(all) },
     { label: '체형 비교', compare: true },
   ]
-  const list = el('div', 'tabs')
+  const list = el('div', 'rtabs')
   list.setAttribute('role', 'tablist')
   list.setAttribute('aria-label', '리뷰 보기')
   const panel = el('div', 'tp')
@@ -522,7 +522,7 @@ function reviewsBlock(rvs) {
       b.setAttribute('aria-controls', 'fc-tabpanel')
       b.id = `fc-tab-${j}`
       b.tabIndex = j === i ? 0 : -1
-      b.className = j === i ? 'tab on' : 'tab'
+      b.className = j === i ? 'rtab on' : 'rtab'
     })
     cancelAnim()
     panel.setAttribute('aria-labelledby', `fc-tab-${i}`)
@@ -532,7 +532,7 @@ function reviewsBlock(rvs) {
     if (focus && btns[i].focus) btns[i].focus()
   }
   tabs.forEach((t, i) => {
-    const b = el('button', 'tab', t.label)
+    const b = el('button', 'rtab', t.label)
     b.type = 'button'
     b.setAttribute('role', 'tab')
     b.addEventListener('click', () => select(i, false))
