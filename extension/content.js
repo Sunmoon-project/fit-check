@@ -1,5 +1,6 @@
 // 상품 페이지에 "내 사이즈 찾기" 버튼과 결과 카드를 띄웁니다.
 // 페이지 데이터는 이 브라우저 안에서만 읽고, 어디로도 보내지 않아요. 네트워크 호출이 없습니다.
+import { isProductPage } from '../src/lib/pageParser.js'
 import { analyzePage } from '../src/lib/extAnalyze.js'
 import { EXT_PROFILE_KEY, isUsableProfile } from '../src/lib/extProfile.js'
 
@@ -102,6 +103,7 @@ function renderResult(r) {
       card.append(ul)
     }
     card.append(el('h3', null, r.headline), el('p', null, r.body))
+    card.append(el('p', 'note', '확신도는 후기·사이즈표 근거가 얼마나 있는지로 나눈 참고 단계예요. 정확도를 측정한 값이 아니에요.'))
   })
 }
 
@@ -157,5 +159,13 @@ if (!window.__fitcheckLoaded) {
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg?.type === 'fitcheck-run') run()
   })
-  ensureUi()
+  // 상품 페이지로 보일 때만 버튼을 띄웁니다. 늦게 그려지는 페이지는 몇 번 다시 확인해요.
+  // 팝업에서 직접 실행한 경우(메시지)에는 어느 페이지든 버튼과 결과를 보여줘요.
+  let tries = 0
+  const maybeShow = () => {
+    if (host) return
+    if (isProductPage(document)) ensureUi()
+    else if (++tries < 4) setTimeout(maybeShow, 1500)
+  }
+  maybeShow()
 }
