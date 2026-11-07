@@ -196,12 +196,17 @@ const FIT_WORDS = {
 
 export function parseReviewText(text, sizeLabels = []) {
   const t = text || ''
+  const H = '(1[4-9]\\d|20\\d|210)(?:\\.\\d)?'
+  const pairM = t.match(new RegExp(`(?<![\\d.,/:-])${H}\\s*[/·]\\s*(\\d{2,3})(?:\\.\\d)?(?![\\d.,%:/-]|\\s*(?:원|%|[-/]\\s*\\d))`))
+  const pair = pairM && Number(pairM[2]) >= 35 && Number(pairM[2]) <= 150 ? pairM : null
   const height =
-    toNumber((t.match(/키\s*[:：]?\s*(1[4-9]\d)/) || [])[1] ?? '') ??
-    toNumber((t.match(/(1[4-9]\d)\s*(?:cm|센치|㎝|씨엠)/i) || [])[1] ?? '')
+    toNumber((t.match(/키\s*[:：]?\s*(1[4-9]\d(?:\.\d)?|20\d(?:\.\d)?|210)(?![\d.]*\d)/) || [])[1] ?? '') ??
+    toNumber((t.match(/(?<![\d.,])(1[4-9]\d(?:\.\d)?|20\d(?:\.\d)?)\s*(?:cm|센치|㎝|씨엠)/i) || [])[1] ?? '') ??
+    toNumber(pair ? t.slice(pair.index).match(/\d+(?:\.\d)?/)[0] : '')
   const weight =
     toNumber((t.match(/몸무게\s*[:：]?\s*(\d{2,3})/) || [])[1] ?? '') ??
-    toNumber((t.match(/(\d{2,3})\s*(?:kg|키로|킬로|㎏)/i) || [])[1] ?? '')
+    toNumber((t.match(/(?<![\d.,])(\d{2,3}(?:\.\d)?)\s*(?:kg|키로|킬로|㎏)/i) || [])[1] ?? '') ??
+    toNumber(pair ? pair[2] : '')
 
   let size = null
   const labels = sizeLabels.map((s) => String(s).toUpperCase())
