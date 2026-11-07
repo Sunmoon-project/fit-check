@@ -152,7 +152,7 @@ export function trueRateByBucket(rows, key, edges) {
 }
 
 // 이웃 투표: 같은 상품·같은 사이즈의 다른 사람 중 bodySimilarity >= threshold 인 사람들의 가중 다수결.
-// 자기 자신(같은 인덱스)은 제외(leave-one-out). 이웃이 없으면 predicted=null (예측 불가).
+// 자기 자신(같은 인덱스)은 제외(leave-one-out). 이웃이 없거나 최다 득표가 동률이면 predicted=null (예측 불가).
 // similarityFn(profile, review) 는 fitEngine.bodySimilarity 를 주입.
 export function neighborVotePredictions(rows, similarityFn, threshold = 55) {
   const groups = new Map()
@@ -175,8 +175,15 @@ export function neighborVotePredictions(rows, similarityFn, threshold = 55) {
         neighbors += 1
       }
       let predicted = null
-      if (neighbors > 0) predicted = LABELS.reduce((best, l) => (votes[l] > votes[best] ? l : best), 'true')
-      results.push({ index: i, actual: me.fit, predicted, neighbors })
+      let tie = false
+      if (neighbors > 0) {
+        const top = Math.max(votes.small, votes.true, votes.large)
+        const leaders = LABELS.filter((l) => votes[l] === top)
+        // 동률이면 특정 라벨(예: true)로 기울이지 않고 예측 불가로 둬요.
+        if (leaders.length === 1) predicted = leaders[0]
+        else tie = true
+      }
+      results.push({ index: i, actual: me.fit, predicted, neighbors, tie })
     }
   }
   return results
@@ -192,6 +199,7 @@ export function evaluate(rows, similarityFn, threshold = 55) {
   return {
     samples: rows.length,
     answered: answered.length,
+    ties: preds.filter((p) => p.tie).length,
     coverage: rows.length ? answered.length / rows.length : null,
     threshold,
     matrix,

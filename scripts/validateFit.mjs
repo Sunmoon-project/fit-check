@@ -62,7 +62,7 @@ function printReport(res, norm, source) {
   out.push(`비교 기준(항상 '${res.baselineLabel}'로 답함) 정확도: ${pct(res.baselineAccuracy)}`)
   out.push('')
   out.push(`[이웃 투표] 같은 상품·같은 사이즈에서 bodySimilarity ${res.threshold} 이상인 다른 사람들의 가중 다수결`)
-  out.push(`예측 가능 ${res.answered}개 (커버리지 ${pct(res.coverage)}), 예측 불가(이웃 없음) ${res.samples - res.answered}개`)
+  out.push(`예측 가능 ${res.answered}개 (커버리지 ${pct(res.coverage)}), 예측 불가 ${res.samples - res.answered}개 (이웃 없음 또는 득표 동률, 그중 동률 ${res.ties}개)`)
   out.push(`정확도(예측 가능한 행 기준): ${pct(res.accuracy)}`)
   out.push('라벨별            precision   recall   표본')
   for (const l of LABELS) {

@@ -41,7 +41,13 @@ const CONSENT_KEY = 'fitcheck.consent.v1'
 const QUEUE_KEY = 'fitcheck.contribQueue.v1'
 export const loadConsent = (version) => {
   const c = read(CONSENT_KEY, null)
-  return Boolean(c && c.agreed === true && c.version === version)
+  if (c && c.version !== version) {
+    // 문구가 바뀌어 이전 동의가 무효가 되면, 그 동의로 쌓인 대기열도 함께 지워요.
+    write(QUEUE_KEY, null)
+    write(CONSENT_KEY, null)
+    return false
+  }
+  return Boolean(c && c.agreed === true)
 }
 export function saveConsent(agreed, version) {
   if (!agreed) {
@@ -51,11 +57,12 @@ export function saveConsent(agreed, version) {
   return write(CONSENT_KEY, { agreed: true, version, at: Date.now() })
 }
 export const loadContribQueue = () => read(QUEUE_KEY, [])
-export function enqueueContribution(record) {
-  if (!record) return false
-  // 같은 상품 도메인·종류·사이즈 기록은 최신 것으로 바꿔요(중복 집계 방지).
-  const rest = loadContribQueue().filter((r) => !(r.domain === record.domain && r.category === record.category && r.size === record.size && r.month === record.month))
-  return write(QUEUE_KEY, [...rest, record].slice(-200))
+// 항목: { key, consentVersion, record }. key는 같은 상품·사이즈 기록을 수정해 다시 저장할 때 이전 기록을 바꾸는 용도예요.
+// 키가 다르면(다른 상품) 서로 덮어쓰지 않아요. 200건을 넘으면 오래된 것부터 빠져요.
+export function enqueueContribution(record, key, consentVersion) {
+  if (!record || !key) return false
+  const rest = loadContribQueue().filter((e) => e.key !== key)
+  return write(QUEUE_KEY, [...rest, { key, consentVersion, record }].slice(-200))
 }
 
 // 옷장: 최근 순으로 최대 WARDROBE_MAX개. 용량이 부족하면 오래된 항목의 이미지부터 뺍니다.
