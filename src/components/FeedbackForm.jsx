@@ -1,5 +1,8 @@
 import { useState } from 'react'
 import { calibrationSummary } from '../lib/fitEngine.js'
+import { toContribution } from '../lib/contribution.js'
+import { loadConsent, saveConsent, enqueueContribution } from '../lib/storage.js'
+import { CONSENT_VERSION, CONSENT_LABEL, CONSENT_SUMMARY, CONSENT_STATUS_NOTE } from '../data/consent.js'
 
 const RESULTS = [
   ['small', '작았음'],
@@ -8,12 +11,14 @@ const RESULTS = [
 ]
 
 // 착용 기록: 산 사이즈가 어땠는지 남기면 다음 추천부터 부위별 기준을 내 몸에 맞게 보정합니다.
-export default function FeedbackForm({ product, perSize, defaultSize, existing, calibration, feedbackCount, onSave }) {
+export default function FeedbackForm({ product, perSize, defaultSize, existing, calibration, feedbackCount, profile, onSave }) {
   const sizes = perSize.map((p) => p.size)
   const [size, setSize] = useState(existing?.size || defaultSize || sizes[0] || '')
   const [result, setResult] = useState(existing?.result || '')
   const [returned, setReturned] = useState(Boolean(existing?.returned))
   const [saved, setSaved] = useState(false)
+  // 기본은 해제. 사용자가 직접 체크한 경우에만 켜져요.
+  const [consent, setConsent] = useState(() => loadConsent(CONSENT_VERSION))
 
   if (sizes.length === 0) return null
 
@@ -21,7 +26,7 @@ export default function FeedbackForm({ product, perSize, defaultSize, existing, 
     e.preventDefault()
     if (!result) return
     const verdicts = perSize.find((p) => p.size === size)?.verdicts || []
-    onSave({
+    const item = {
       url: product.url,
       productName: product.name,
       category: product.category,
@@ -30,8 +35,16 @@ export default function FeedbackForm({ product, perSize, defaultSize, existing, 
       returned,
       parts: Object.fromEntries(verdicts.map((v) => [v.part, v.ease])),
       savedAt: Date.now(),
-    })
+    }
+    onSave(item)
+    // 동의한 경우에만 익명 레코드를 이 브라우저 대기열에 둡니다(서버 전송 없음).
+    if (consent) enqueueContribution(toContribution(item, profile, true))
     setSaved(true)
+  }
+
+  function changeConsent(v) {
+    setConsent(v)
+    saveConsent(v, CONSENT_VERSION) // 해제하면 대기열도 함께 지워져요
   }
 
   const summary = calibrationSummary(calibration, feedbackCount)
@@ -70,6 +83,18 @@ export default function FeedbackForm({ product, perSize, defaultSize, existing, 
         <input type="checkbox" checked={returned} onChange={(e) => { setReturned(e.target.checked); setSaved(false) }} />
         반품했어요
       </label>
+
+      <label className="check">
+        <input type="checkbox" checked={consent} onChange={(e) => changeConsent(e.target.checked)} />
+        {CONSENT_LABEL}
+      </label>
+      <details className="muted small">
+        <summary>어떤 정보가 쓰이나요?</summary>
+        <ul>
+          {CONSENT_SUMMARY.map((t) => <li key={t}>{t}</li>)}
+        </ul>
+      </details>
+      {consent && <p className="muted small" role="status">{CONSENT_STATUS_NOTE}</p>}
 
       <button type="submit" className="btn primary block" disabled={!result}>
         기록 저장

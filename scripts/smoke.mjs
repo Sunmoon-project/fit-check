@@ -32,6 +32,9 @@ import {
 import { bodySimilarity } from '../src/lib/fitEngine.js'
 import { runHfTryOn, parseSse, spaceBaseUrl, isValidSpaceId, clearTryOnCache, garmentDescription, isTryOnSupported, DEFAULT_SPACE } from '../server/hfTryOn.js'
 
+import { toContribution, toBand, toDomain, SCHEMA_VERSION } from '../src/lib/contribution.js'
+import { CONSENT_SUMMARY } from '../src/data/consent.js'
+
 let passed = 0
 function test(name, fn) {
   try {
@@ -661,6 +664,57 @@ test('bodyMetrics: 최소제곱 회귀가 정확한 선형 관계를 복원', ()
   assert.ok(Math.abs(f.height - 0.3) < 1e-6 && Math.abs(f.weight - 0.5) < 1e-6 && Math.abs(f.intercept - 7) < 1e-4)
   assert.equal(fitLinear(samples.slice(0, 3)), null)
   assert.equal(fitLinear(samples.map((s) => ({ ...s, weight: 50 }))), null)
+})
+
+const FB = { url: 'https://www.musinsa.com/products/123456?utm=x', productName: '오버핏 셔츠 아주긴이름', category: 'top', size: 'M', result: 'large', returned: true, parts: { chest: 9.3, shoulder: 1.1 }, savedAt: Date.UTC(2026, 10, 2) }
+const PF = { gender: 'male', height: '172', weight: 63, shape: { shoulder: 'normal', belly: 'none', lower: 'normal' }, usual: { top: 'M', bottom: '30' }, measurements: { chest: 98 }, preferredFit: 'regular' }
+
+test('toBand: 5단위 구간 경계', () => {
+  assert.equal(toBand(170, 5), '170-174')
+  assert.equal(toBand(174.9, 5), '170-174')
+  assert.equal(toBand(175, 5), '175-179')
+  assert.equal(toBand('63', 5), '60-64')
+  assert.equal(toBand(0, 5), null)
+  assert.equal(toBand('abc', 5), null)
+})
+
+test('toDomain: 도메인만 남김', () => {
+  assert.equal(toDomain('https://www.musinsa.com/products/1?a=b'), 'musinsa.com')
+  assert.equal(toDomain('not a url'), null)
+})
+
+test('toContribution: 미동의면 null', () => {
+  assert.equal(toContribution(FB, PF, false), null)
+  assert.equal(toContribution(FB, PF, undefined), null)
+  assert.equal(toContribution(FB, PF, 'true'), null)
+})
+
+test('toContribution: 식별 정보 제외, 구간 값만', () => {
+  const c = toContribution(FB, PF, true)
+  assert.equal(c.schemaVersion, SCHEMA_VERSION)
+  assert.equal(c.body.heightBand, '170-174')
+  assert.equal(c.body.weightBand, '60-64')
+  assert.equal(c.domain, 'musinsa.com')
+  assert.equal(c.month, '2026-11')
+  assert.deepEqual(c.parts, { chest: 10, shoulder: 2 })
+  const json = JSON.stringify(c)
+  for (const bad of ['productName', 'url', 'photo', 'image', 'measurements', 'usual', '오버핏', '123456', 'utm']) assert.ok(!json.includes(bad), bad)
+  assert.ok(!json.includes('172') && !/"weight":63/.test(json))
+  assert.ok(!('productName' in c) && !('url' in c) && !('savedAt' in c))
+})
+
+test('toContribution: 기존 feedback 형식(parts 없음 등)도 처리, 필수값 없으면 null', () => {
+  const old = { url: 'https://a.com/x', productName: 'x', category: 'top', size: 'L', result: 'true', returned: false, savedAt: 1 }
+  const c = toContribution(old, PF, true)
+  assert.deepEqual(c.parts, {})
+  assert.equal(c.returned, false)
+  assert.equal(toContribution({ ...old, result: '?' }, PF, true), null)
+  assert.equal(toContribution(old, { ...PF, height: '' }, true), null)
+})
+
+test('동의 문구에 철회와 미동의 사용 가능 안내 포함', () => {
+  const all = CONSENT_SUMMARY.join(' ')
+  assert.ok(all.includes('철회') && all.includes('동의하지 않아도'))
 })
 
 console.log(`\n${passed}개 통과`)
