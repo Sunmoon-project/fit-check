@@ -994,11 +994,13 @@ function shoeBlock(sv) {
     li.append(el('span', 'shl', row.recommended ? `${row.label} 추천` : row.label))
     if (row.ease != null) li.append(el('span', 'shs', `여유 ${row.ease > 0 ? '+' : ''}${row.ease}mm`))
     if (row.verdict) li.append(el('span', 'shv', row.verdict))
+    if (row.widthText) li.append(el('span', 'shs', row.widthText))
     if (row.reviewLine) li.append(el('span', 'shs', row.reviewLine))
     ul.append(li)
   }
   box.append(ul)
   for (const t of sv.reasons) box.append(el('p', 'tiny', t))
+  if (sv.widthLine) box.append(el('p', 'tiny', sv.widthLine))
   for (const t of sv.notes) box.append(el('p', 'tiny', t))
   box.append(el('p', 'tiny', sv.heuristicNote))
   return box

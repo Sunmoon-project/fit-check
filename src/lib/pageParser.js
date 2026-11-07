@@ -823,6 +823,7 @@ export function parsePage(root, pageUrl = '', opts = {}) {
           rows: sizeChart.rows,
           measures: sizeChart.measures,
           ...(sizeChart.display ? { display: sizeChart.display } : {}),
+          ...(sizeChart.widthLevels ? { widthLevels: sizeChart.widthLevels } : {}),
           ...(sizeChart.view ? { view: { ...sizeChart.view, manual: chartMeta.selectedIndex != null && kinds[chartMeta.selectedIndex] === 'manual' } } : {}),
         }
       : null,
