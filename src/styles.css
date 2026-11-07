@@ -497,6 +497,12 @@ body {
 
 /* 체형 비교 */
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.me-card { display: flex; align-items: baseline; gap: 10px; background: var(--panel); border-radius: 10px; padding: 12px 14px; margin-top: 8px; }
+.me-label { font-size: 12px; color: var(--muted); }
+.me-values { display: flex; gap: 14px; flex: 1; }
+.me-num { font-size: 26px; font-weight: 700; color: var(--ink); }
+.me-unit { font-size: 13px; color: var(--muted); margin-left: 2px; }
+.me-gender { font-size: 13px; color: var(--muted); }
 .cmp-list { list-style: none; margin: 8px 0 0; padding: 0; }
 .cmp-item { padding: 12px 0; border-top: 1px solid var(--line); }
 .cmp-item:first-child { border-top: none; padding-top: 0; }

@@ -82,6 +82,12 @@ tr.rec .cv{color:#9fe0ba}
 .pf{margin:0;display:flex;flex-direction:column;gap:4px}
 .ph.big{width:100%;height:auto;max-height:280px;object-fit:contain;background:#f6f6f6}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.mecard{display:flex;align-items:baseline;gap:10px;background:#f4f4f5;border-radius:10px;padding:10px 12px;margin-top:2px}
+.mel{font-size:11px;color:#6b6b70}
+.mev{display:flex;gap:12px;flex:1}
+.men{font-size:22px;font-weight:700;color:#111}
+.meu{font-size:12px;color:#555;margin-left:2px}
+.meg{font-size:12px;color:#555}
 .cmp{list-style:none;margin:6px 0 0;padding:0}
 .cr{padding:8px 0;border-top:1px solid #ececec}
 .cr:first-child{border-top:0}
@@ -518,7 +524,16 @@ function compareTab(rvs, all) {
     box.append(el('p', 'note', '키·몸무게를 읽은 리뷰가 없어서 비교할 수 없어요.'))
     return { node: box, play() {} }
   }
-  box.append(el('p', 'tiny', `내 체형: ${me.height}cm ${me.weight}kg${me.gender ? ` · ${GENDER_TEXT[me.gender]}` : ''}`))
+  const card = el('div', 'mecard')
+  const vals = el('div', 'mev')
+  for (const [n, u] of [[me.height, 'cm'], [me.weight, 'kg']]) {
+    const v = el('span', 'mevi')
+    v.append(el('span', 'men', String(n)), el('span', 'meu', u))
+    vals.append(v)
+  }
+  card.append(el('span', 'mel', '내 체형'), vals)
+  if (me.gender && GENDER_TEXT[me.gender]) card.append(el('span', 'meg', GENDER_TEXT[me.gender]))
+  box.append(card)
   const ul = el('ul', 'cmp')
   const fills = [] // { node, pct }
   const counters = [] // { node, target }
