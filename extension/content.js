@@ -346,9 +346,7 @@ function waitForRender() {
       quiet = setTimeout(done, QUIET_MS)
     })
     mo.observe(document.body || document.documentElement, { childList: true, subtree: true })
-    if (state) state.wake = done // 중단하면 기다리던 것을 바로 끝냅니다
     function done() {
-      if (state) state.wake = null
       mo.disconnect()
       clearTimeout(quiet)
       clearTimeout(limit)
@@ -363,13 +361,16 @@ async function run() {
   ensureUi()
   fab.disabled = true
   fab.textContent = '분석 중…'
+  let stage = 'wait' // 오류가 난 단계 (고정 문자열만 리포트에 넣습니다)
   try {
     const profile = await readProfile()
     if (!isUsableProfile(profile)) {
       renderResult({ status: 'no-profile', message: '먼저 확장 프로그램 아이콘을 눌러 키·몸무게 등 체형 정보를 저장해주세요.' })
       return
     }
+    stage = 'wait'
     await waitForRender()
+    stage = 'analyze'
     // 사이즈표를 못 찾으면 짧게 기다렸다가 다시 읽어요. 클릭·스크롤은 하지 않고 화면 글만 읽습니다.
     let result = analyzePage(document, location.href, profile, EXT_VERSION)
     for (const delay of RETRY_DELAYS) {
@@ -377,6 +378,7 @@ async function run() {
       await new Promise((r) => setTimeout(r, delay))
       result = analyzePage(document, location.href, profile, EXT_VERSION)
     }
+    stage = 'render'
     renderResult(result)
   } catch (err) {
     // 오류는 이름만 리포트에 넣습니다 (메시지에 페이지 글이 섞일 수 있어 제외).
@@ -384,6 +386,10 @@ async function run() {
     try {
       diagnostics = collectDiagnostics(document, location.href, EXT_VERSION)
       diagnostics.errorName = String(err?.name || 'Error')
+      diagnostics.errorWhere = stage
+      // 메시지 원문은 저장하지 않고, 'X is not defined' 의 식별자 이름만 검증 후 담습니다.
+      const m = /^([A-Za-z_$][\w$]{0,40}) is not defined$/.exec(String(err?.message || ''))
+      if (m) diagnostics.errorIdent = m[1]
     } catch {
       diagnostics = null
     }
