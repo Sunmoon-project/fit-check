@@ -2,6 +2,7 @@
 // 사이트마다 구조가 달라서, 표준 메타데이터(JSON-LD, Open Graph)와 HTML 표를 일반적인 규칙으로 읽습니다.
 // 리뷰를 자바스크립트로 따로 불러오는 사이트는 여기서 리뷰를 못 가져올 수 있어요.
 import * as cheerio from 'cheerio'
+import { classifyCategory, ldCategoryHints, categoryInfo } from '../src/lib/categoryClassifier.js'
 import { guessCategory, buildSizeChart, parseReviewText, CATEGORY_EMOJI } from '../src/lib/productCore.js'
 
 export { guessCategory, parseReviewText }
@@ -81,9 +82,15 @@ export function parseProductHtml(html, pageUrl) {
   const price = formatPrice(product?.offers) || (meta('product:price:amount') ? Number(meta('product:price:amount')).toLocaleString('ko-KR') + '원' : null)
   const mall = meta('og:site_name') || new URL(pageUrl).hostname.replace(/^www\./, '')
 
-  const preCategory = guessCategory(name)
+  // 같은 분류 함수(근거 점수 합산)를 확장·웹과 함께 써요.
+  const headers = []
+  $('table').each((_, t) => headers.push(...tableToRows($, t).slice(0, 1).flat().slice(0, 12)))
+  const classifyInput = { name, ...ldCategoryHints(ld), headers }
+  const auto = classifyCategory(classifyInput)
+  const preCategory = auto.category
   const sizeChart = parseSizeChart($, preCategory)
   const category = sizeChart?.category || preCategory
+  const cls = sizeChart && sizeChart.category !== auto.category ? classifyCategory({ ...classifyInput, chartCategory: sizeChart.category }) : auto
   if (!sizeChart) notes.push('페이지에서 사이즈표를 찾지 못했어요. 사이즈표가 이미지로 올라간 사이트가 많아요.')
 
   const sizeLabels = sizeChart ? sizeChart.rows.map((r) => r[0]) : []
@@ -120,6 +127,9 @@ export function parseProductHtml(html, pageUrl) {
     mall,
     name: name.slice(0, 120),
     category,
+    categoryConfidence: cls.category === category ? cls.confidence : 'low',
+    categoryEvidence: categoryInfo({ ...cls, category }).evidence,
+    categoryCandidates: cls.candidates,
     price,
     image: typeof image === 'string' ? new URL(image, pageUrl).toString() : null,
     emoji: CATEGORY_EMOJI[category],

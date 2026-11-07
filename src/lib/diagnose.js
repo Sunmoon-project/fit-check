@@ -3,6 +3,7 @@
 // 프로필, 리뷰 글, 상품명, 주소의 쿼리·해시는 보고서에 들어가지 않습니다. 네트워크 호출은 없어요.
 import { findGridCandidates, readTables, parsePage, MEASURE_RE, REVIEW_SELECTOR } from './pageParser.js'
 import { shapeOfCell } from './productCore.js'
+import { cleanCategoryInfo, categoryEvidenceLine } from './categoryClassifier.js'
 
 export const REPORT_MAX = 4000
 
@@ -97,7 +98,7 @@ export function collectDiagnostics(root, pageUrl = '', extVersion = '', extra = 
     }
   }
   const headerWords = [...tables, ...candidates.map((c) => c.rows)].some((rows) => rows.some((r) => r.some((c) => MEASURE_RE.test(c))))
-  const product = parsePage(root, '')
+  const product = parsePage(root, '', { categoryOverride: extra?.categoryOverride })
   const ogType = (root.querySelector?.('meta[property="og:type"]')?.getAttribute('content') || '').toLowerCase()
 
   // 구조 요약: 표 모양 후보 최대 3곳, 없으면 사이즈 제목 근처 영역
@@ -132,6 +133,7 @@ export function collectDiagnostics(root, pageUrl = '', extVersion = '', extra = 
     reviewsKept: product ? product.reviews.length : 0,
     reviewTotalOnPage: product?.reviewTotalOnPage ?? null,
     optionLabelCount: product ? product.optionLabels.length : 0,
+    category: product ? cleanCategoryInfo({ category: product.category, confidence: product.categoryConfidence, evidence: product.categoryEvidence }) : null,
     chart: chartJudgment(product?.sizeChartMeta),
     jsonLdProduct: hasLdProduct(root),
     ogType: /^[a-z][a-z._-]{0,20}$/.test(ogType) ? ogType : ogType ? 'other' : '',
@@ -215,6 +217,7 @@ export function diagnosticLines(d) {
     `사이즈 제목 근처 사이즈 글자: ${yn(d.sizeLabelNearHeading)}, 실측 항목 글자: ${yn(d.headerWordsFound)}`,
     `읽은 사이즈표 줄 ${d.chartRowCount}개, 리뷰 후보 ${d.reviewLikeCount}개, 인정한 리뷰 ${d.reviewsKept}개`,
     `사이즈 제목 근처에 이미지: ${yn(d.imageNearHeading)}`,
+    ...(categoryEvidenceLine(d.category) ? [categoryEvidenceLine(d.category)] : []),
     ...chartLines(d),
     ...reviewStatLines(d),
   ]

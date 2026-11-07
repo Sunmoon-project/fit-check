@@ -2,23 +2,12 @@
 // 입력은 이미 "텍스트 행 배열"로 바뀐 표이고, HTML을 읽는 방법은 각 파서가 맡아요.
 
 import { CATEGORY_PARTS } from '../data/measurements.js'
+import { classifyCategory } from './categoryClassifier.js'
 
 // ---------- 카테고리 판단 ----------
-const CATEGORY_RULES = [
-  ['shoes', /스니커|운동화|신발|슈즈|로퍼|부츠|샌들|슬리퍼|구두|러닝화|sneaker|shoe|boots|loafer|sandal/i],
-  ['dress', /원피스|드레스|dress/i],
-  ['outer', /자켓|재킷|코트|패딩|점퍼|블루종|아우터|파카|바람막이|무스탕|jacket|coat|parka/i],
-  ['bottom', /팬츠|바지|청바지|슬랙스|쇼츠|반바지|스커트|조거|치노|트라우저|jeans|pants|slacks|skirt|shorts/i],
-  ['top', /티셔츠|셔츠|니트|맨투맨|후드|스웨트|반팔|긴팔|블라우스|가디건|탑|베스트|조끼|t-shirt|tee|shirt|knit|hoodie|sweat|cardigan/i],
-]
-
+// 근거 점수 합산 분류는 categoryClassifier.js에 있어요. 예전 호출부를 위해 글자(상품명 등)와 머리글만 받는 형태를 남겨 둡니다.
 export function guessCategory(text, headers = []) {
-  const h = headers.join(' ')
-  if (/발\s*길이|발\s*볼|굽\s*높이|사이즈\s*\(\s*mm\s*\)/i.test(h)) return 'shoes'
-  for (const [cat, re] of CATEGORY_RULES) if (re.test(text || '')) return cat
-  if (/허벅지|밑위|허리/.test(h) && !/어깨/.test(h)) return 'bottom'
-  if (/어깨|가슴/.test(h)) return 'top'
-  return 'top'
+  return classifyCategory({ name: text, headers }).category
 }
 
 export const CATEGORY_EMOJI = { top: '👕', outer: '🧥', bottom: '👖', dress: '👗', shoes: '👟' }

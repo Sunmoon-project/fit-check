@@ -2,6 +2,7 @@
 // document 대신 querySelectorAll / textContent / getAttribute만 쓰는 최소 인터페이스를 받아서
 // 브라우저 DOM이 아니어도(테스트용 어댑터) 같은 코드로 읽을 수 있어요.
 // 표 해석과 리뷰 문장 해석은 서버 파서와 같은 productCore.js를 씁니다.
+import { classifyCategory, userChosen, categoryInfo, ldCategoryHints, CATEGORY_ORDER } from './categoryClassifier.js'
 import { guessCategory, analyzeSizeCharts, parseReviewText, CATEGORY_EMOJI, SIZE_LABEL_RE } from './productCore.js'
 
 const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim()
@@ -36,21 +37,6 @@ function collectJsonLd(root) {
 }
 
 const isType = (n, t) => (Array.isArray(n['@type']) ? n['@type'].includes(t) : n['@type'] === t)
-
-// 카테고리 힌트: JSON-LD Product.category, BreadcrumbList 항목 이름 (상품명 뒤에 붙여 guessCategory에 넘겨요)
-function categoryHints(ld) {
-  const out = []
-  for (const n of ld) {
-    if (isType(n, 'Product') && n.category) out.push(String(Array.isArray(n.category) ? n.category.join(' ') : n.category))
-    if (isType(n, 'BreadcrumbList') && Array.isArray(n.itemListElement)) {
-      for (const it of n.itemListElement) {
-        const nm = it?.name ?? it?.item?.name
-        if (nm) out.push(String(nm))
-      }
-    }
-  }
-  return clean(out.join(' ')).slice(0, 300)
-}
 
 export function readTables(root) {
   return all(root, 'table').map((table) => {
@@ -176,6 +162,20 @@ const TAIL_MM_STRICT_RE = /[\/·,|-]\s*(2[0-9]\d|3[01]\d)(?:\s*(?:mm|㎜))?\s*$/
 const TAIL_ALPHA_RE = /(?:^|[\/·,|-]\s*|\s+-\s+)(XXS|XS|S|M|L|XL|XXL|XXXL|[2-5]XL|FREE|F|프리|ONE ?SIZE)\s*$/i
 const TAIL_NUM_RE = /(?:^|[\/·,|-]\s*|\s+-\s+)(\d{1,3})\s*$/
 const TAIL_OPTION_RE = /(?:^|[\s\/·,|-])(\d{1,2})\s*\(\s*(XXS|XS|S|M|L|XL|XXL|[2-5]XL|FREE|F)\s*\)\s*$/i
+
+// 신발 옵션 '250 (250-255)' 모양(mm 범위 표기)을 읽어요. 분류 근거로만 쓰고 사이즈 이름으로는 쓰지 않습니다.
+const SHOE_RANGE_RE = /^(2[2-9]\d|3[01]\d)\s*\(\s*\d{3}\s*-\s*\d{3}\s*\)/
+export function readShoeRangeOptions(root) {
+  const out = []
+  for (const e of all(root, '*').filter((x) => childrenOf(x).length <= 4).slice(0, 6000)) {
+    const text = clean(e.textContent)
+    if (text.length > 80) continue
+    const m = text.match(SHOE_RANGE_RE)
+    if (m && !out.includes(m[0])) out.push(m[0])
+    if (out.length >= MAX_OPTIONS) break
+  }
+  return out
+}
 
 export function readOptionLabels(root) {
   const out = []
@@ -682,18 +682,32 @@ export function parsePage(root, pageUrl = '', opts = {}) {
   if (!name) return null
 
   const notes = []
-  const preCategory = guessCategory(`${name} ${categoryHints(ld)}`)
   const optionLabels = readOptionLabels(root)
   const extra = opts.extraRows || []
   const tables = readTables(root)
   const grids = findGridCandidates(root)
+  // 카테고리: 상품명·JSON-LD·이동경로·옵션·머리글 근거를 합산해 정해요. 사용자가 고른 값이 있으면 그걸 우선합니다.
+  const classifyInput = {
+    name,
+    ...ldCategoryHints(ld),
+    optionLabels: [...optionLabels, ...readShoeRangeOptions(root)],
+    headers: [...tables, ...grids.map((c) => c.rows)].flatMap((rows) => (rows[0] || []).slice(0, 12)),
+  }
+  const auto = classifyCategory(classifyInput)
+  const forced = CATEGORY_ORDER.includes(opts.categoryOverride) ? opts.categoryOverride : null
+  const preCategory = forced || auto.category
   const kinds = [...tables.map(() => 'table'), ...grids.map((c) => c.kind), ...extra.map(() => 'manual')]
   const { chart: sizeChart, meta: chartMeta } = analyzeSizeCharts(
     [...tables, ...grids.map((c) => c.rows), ...extra],
     preCategory,
     optionLabels,
   )
-  const category = sizeChart?.category || preCategory
+  const category = forced || sizeChart?.category || preCategory
+  const cls = forced
+    ? userChosen(forced, auto)
+    : sizeChart && sizeChart.category !== auto.category
+      ? classifyCategory({ ...classifyInput, chartCategory: sizeChart.category })
+      : auto
   if (!sizeChart) {
     if (chartMeta.rejectedNoOverlap > 0) notes.push('읽은 사이즈표의 사이즈 이름이 이 페이지의 구매 옵션과 맞지 않아 사용하지 않았어요.')
     else if (chartMeta.rejectedMeasureHeader > 0 && chartMeta.withHeader === chartMeta.rejectedMeasureHeader)
@@ -785,6 +799,10 @@ export function parsePage(root, pageUrl = '', opts = {}) {
     source: 'extension',
     name: name.slice(0, 120),
     category,
+    categoryConfidence: cls.category === category ? cls.confidence : 'low',
+    categoryEvidence: categoryInfo({ ...cls, category }).evidence,
+    categoryCandidates: cls.candidates,
+    categoryOverridden: cls.overridden === true,
     emoji: CATEGORY_EMOJI[category],
     sizeChart: sizeChart
       ? {

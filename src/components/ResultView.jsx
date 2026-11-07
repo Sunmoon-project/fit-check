@@ -2,6 +2,8 @@ import { useMemo, useRef, useState } from 'react'
 import { generateFitComment, bodyValuesForProfile } from '../lib/fitEngine.js'
 import { compareSizes } from '../lib/sizeCompare.js'
 import { CATEGORY_LABEL } from '../data/measurements.js'
+import { recategorizeProduct } from '../lib/recategorize.js'
+import CategoryPicker from './CategoryPicker.jsx'
 import { trimNote } from '../lib/storage.js'
 import { makeWardrobeItem } from '../lib/wardrobe.js'
 import FitComment from './FitComment.jsx'
@@ -14,7 +16,10 @@ import FeedbackForm from './FeedbackForm.jsx'
 import TryOnPanel from './TryOnPanel.jsx'
 import { SimilarInWardrobe } from './Wardrobe.jsx'
 
-export default function ResultView({ product, profile, calibration, feedbackCount, existingFeedback, onFeedback, onRestart, wardrobe = [], onSaveWardrobe }) {
+export default function ResultView({ product: parsedProduct, profile, calibration, feedbackCount, existingFeedback, onFeedback, onRestart, wardrobe = [], onSaveWardrobe }) {
+  // 분류 신뢰도가 낮을 때 사용자가 고른 카테고리로 다시 분석해요 (자동 분류보다 우선).
+  const [chosen, setChosen] = useState(null)
+  const product = useMemo(() => (chosen ? recategorizeProduct(parsedProduct, chosen) : parsedProduct), [parsedProduct, chosen])
   const result = useMemo(() => generateFitComment(profile, product, calibration), [profile, product, calibration])
   const compare = useMemo(
     () => compareSizes({ chart: product.sizeChart, bodyValues: bodyValuesForProfile(profile).values, measured: result.measured, category: product.category, calibration: calibration || {} }),
@@ -56,6 +61,7 @@ export default function ResultView({ product, profile, calibration, feedbackCoun
             <span className="muted small">{product.mall} · {CATEGORY_LABEL[product.category]}</span>
           </div>
           <h2>{product.name}</h2>
+          <CategoryPicker product={product} onPick={setChosen} />
           {product.price && <span className="price">{product.price}</span>}
           {isLive && (
             <a className="small source-link" href={product.url} target="_blank" rel="noopener noreferrer">원본 페이지 보기</a>

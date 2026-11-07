@@ -30,6 +30,10 @@ const CSS = `
 .tiny{margin:2px 0 0;font-size:11px;color:#6b6b70}
 .row{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .eyebrow{font-size:11px;color:#6b6b70}
+.cats{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:6px}
+.cats .tiny{margin:0 4px 0 0}
+.cat{border:1px solid #d4d4d4;border-radius:999px;background:#fff;color:#111;padding:2px 9px;font-size:11px;cursor:pointer}
+.cat.on{background:#111;color:#fff;border-color:#111}
 .close{border:0;background:none;font-size:18px;line-height:1;cursor:pointer;color:#555}
 .badge{font-size:12px;font-weight:600}
 .size{font-size:28px;font-weight:700;margin:2px 0 0}
@@ -287,7 +291,7 @@ function manualForm(r) {
           msg.textContent = '먼저 확장 프로그램 아이콘을 눌러 체형 정보를 저장해주세요.'
           return
         }
-        renderResult({ ...analyzePage(document, location.href, profile, EXT_VERSION, { extraRows }), manual: true })
+        renderResult({ ...analyzePage(document, location.href, profile, EXT_VERSION, { extraRows, categoryOverride: chosenCategory }), manual: true })
       } catch {
         msg.textContent = '직접 입력한 표로 분석하지 못했어요. 입력 형식을 확인하고 다시 눌러주세요.'
       }
@@ -971,7 +975,7 @@ function loadMoreBlock(r) {
       })
       const profile = await readProfile()
       if (!isUsableProfile(profile)) throw new Error('no-profile')
-      const next = analyzePage(document, location.href, profile, EXT_VERSION)
+      const next = analyzePage(document, location.href, profile, EXT_VERSION, { categoryOverride: chosenCategory })
       const scroll = { before: r.reviewsLoaded ?? 0, after: next.reviewsLoaded ?? 0, stop: toReportStop(reason) }
       if (next.status === 'ok') {
         next.diagnostics = collectDiagnostics(document, location.href, EXT_VERSION, { scroll })
@@ -994,6 +998,38 @@ function loadMoreBlock(r) {
   btns.append(btn, stop)
   box.append(btns, prog)
   return box
+}
+
+// 사용자가 고른 옷 종류 (이 페이지에서만 기억하고 저장하지 않아요). 자동 분류보다 우선합니다.
+let chosenCategory = null
+let chosenFor = ''
+
+// 분류 신뢰도가 높지 않을 때 보이는 종류 선택 칩. 누르면 그 종류로 다시 분석해요.
+function categoryChips(r) {
+  if (!r.categoryConfidence || (r.categoryConfidence === 'high' && !r.categoryOverridden)) return null
+  const box = el('div', 'cats')
+  box.append(el('span', 'tiny', r.categoryOverridden ? '종류(직접 선택)' : '종류가 확실하지 않아요'))
+  for (const c of r.categoryCandidates || []) {
+    const b = el('button', c.key === r.category ? 'cat on' : 'cat', c.label)
+    b.type = 'button'
+    b.setAttribute('aria-pressed', c.key === r.category ? 'true' : 'false')
+    b.addEventListener('click', () => reanalyzeWithCategory(c.key))
+    box.append(b)
+  }
+  return box
+}
+
+async function reanalyzeWithCategory(key) {
+  if (busy) return
+  chosenCategory = key
+  chosenFor = location.href
+  try {
+    const profile = await readProfile()
+    if (!isUsableProfile(profile)) throw new Error('no-profile')
+    renderResult(analyzePage(document, location.href, profile, EXT_VERSION, { categoryOverride: key }))
+  } catch {
+    renderResult({ status: 'error', message: '종류를 바꿔 다시 분석하다 문제가 생겼어요. 다시 눌러주세요.', diagnostics: null })
+  }
 }
 
 function renderResult(r) {
@@ -1019,6 +1055,8 @@ function renderResult(r) {
     const row = el('div', 'row')
     row.append(el('span', 'eyebrow', r.categoryLabel), conf)
     card.append(row)
+    const chips = categoryChips(r)
+    if (chips) card.append(chips)
     if (r.recommendedSize) card.append(el('div', 'size', r.recommendedLabel || r.recommendedSize))
     card.append(el('p', 'sum', r.manual ? `${r.summary} · 직접 입력한 사이즈표` : r.summary))
     card.append(el('p', 'tiny', '참고용이에요. 확신도는 정확도를 측정한 값이 아니에요.'))
@@ -1103,15 +1141,16 @@ async function run() {
       renderResult({ status: 'no-profile', message: '먼저 확장 프로그램 아이콘을 눌러 키·몸무게 등 체형 정보를 저장해주세요.' })
       return
     }
+    if (chosenFor !== location.href) chosenCategory = null // 다른 상품 페이지로 옮겼으면 이전 선택은 쓰지 않아요
     stage = 'wait'
     await waitForRender()
     stage = 'analyze'
     // 사이즈표를 못 찾으면 짧게 기다렸다가 다시 읽어요. 클릭·스크롤은 하지 않고 화면 글만 읽습니다.
-    let result = analyzePage(document, location.href, profile, EXT_VERSION)
+    let result = analyzePage(document, location.href, profile, EXT_VERSION, { categoryOverride: chosenCategory })
     for (const delay of RETRY_DELAYS) {
       if (result.status !== 'no-data' && result.status !== 'no-product') break
       await new Promise((r) => setTimeout(r, delay))
-      result = analyzePage(document, location.href, profile, EXT_VERSION)
+      result = analyzePage(document, location.href, profile, EXT_VERSION, { categoryOverride: chosenCategory })
     }
     stage = 'render'
     renderResult(result)

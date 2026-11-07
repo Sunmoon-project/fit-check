@@ -3407,4 +3407,123 @@ await atest('content.js(가짜 DOM, vm): 가짜 HTML(무신사 스크린샷 구�
   assert.ok(!texts.includes(NO_CHART_MESSAGE))
 })
 
+// ---- 자동 카테고리 분류 (전부 직접 만든 가짜 HTML·가짜 데이터예요. 실제 무신사·크롬에서 확인한 것이 아니에요) ----
+import { classifyCategory, categoryEvidenceLine } from '../src/lib/categoryClassifier.js'
+import { recategorizeProduct } from '../src/lib/recategorize.js'
+
+const catHtml = ({ title = '', ld = null, options = [], table = null, reviews = true } = {}) => {
+  const rv = reviews ? Array.from({ length: 3 }, (_, i) => ({ '@type': 'Review', reviewBody: `키 17${i} 몸무게 7${i} M 사이즈 구매 정사이즈로 잘 맞아요` })) : []
+  const product = ld ? { '@type': 'Product', name: title, ...ld, review: rv } : { '@type': 'Product', name: title, review: rv }
+  const graph = [product, ...(ld?.crumbs ? [{ '@type': 'BreadcrumbList', itemListElement: ld.crumbs.map((n, i) => ({ '@type': 'ListItem', position: i + 1, name: n })) }] : [])]
+  delete product.crumbs
+  const opt = options.length ? `<ul>${options.map((o) => `<li><span>${o}</span><span>11.11(수) 이내 발송 예정</span></li>`).join('')}</ul>` : ''
+  return `<html><head><script type="application/ld+json">${JSON.stringify({ '@graph': graph })}</script></head><body><h1>${title}</h1>${opt}${table || ''}</body></html>`
+}
+
+test('가짜 데이터: 분류 매트릭스 - 상품명·breadcrumb·JSON-LD·옵션·머리글 조합', () => {
+  const c = (input) => classifyCategory(input)
+  const boots = c({ name: '[xYASE] braided moc boots (grunge taupe)', optionLabels: ['250 (250-255)', '240 (240-245)', '230 (230-235)'] })
+  assert.equal(boots.category, 'shoes')
+  assert.equal(boots.confidence, 'high')
+  assert.equal(c({ name: '[xYASE] braided moc boots (grunge taupe)' }).category, 'shoes', '상품명만으로도 신발')
+  assert.equal(c({ name: '와이드 데님 팬츠' }).category, 'bottom')
+  assert.equal(c({ name: '오버사이즈 패딩 점퍼' }).category, 'outer')
+  assert.equal(c({ name: '리넨 원피스' }).category, 'dress')
+  assert.equal(c({ name: '베이직 맨투맨' }).category, 'top')
+  assert.equal(c({ name: '', jsonLdCategory: '신발 > 스니커즈' }).category, 'shoes')
+  assert.equal(c({ name: 'Daily', breadcrumb: '홈 하의 데님팬츠' }).category, 'bottom')
+  assert.equal(c({ name: 'Daily', optionLabels: ['230', '240', '250', '260'] }).category, 'shoes')
+  assert.equal(c({ name: 'Daily', optionLabels: ['28', '30', '32', '34'] }).category, 'bottom')
+  assert.equal(c({ name: 'Daily', headers: ['사이즈', '발길이', '발볼'] }).category, 'shoes')
+  assert.equal(c({ name: 'Daily', headers: ['사이즈', '허리', '허벅지', '밑위'] }).category, 'bottom')
+  assert.equal(c({ name: 'Daily', headers: ['사이즈', '어깨', '가슴단면', '총장'] }).category, 'top')
+  // 충돌·부족한 근거는 신뢰도 낮음
+  assert.equal(c({ name: '슬랙스 팬츠 자켓 세트' }).confidence, 'low')
+  assert.equal(c({ name: 'Daily item' }).confidence, 'low')
+  assert.equal(c({ name: 'Daily item' }).category, 'top')
+  assert.equal(c({ name: 'boots', headers: ['사이즈', '어깨'] }).confidence !== 'high', true)
+  // 반환값에는 원문(상품명)이 없다
+  assert.ok(!JSON.stringify(boots).includes('xYASE'))
+  assert.ok(boots.evidences.every((e) => ['kind', 'category', 'score'].every((k) => k in e) && Object.keys(e).length === 3))
+})
+
+test('가짜 HTML: braided moc boots + 옵션 250 (250-255) 페이지는 신발로 분류된다', () => {
+  const html = catHtml({ title: '[xYASE] braided moc boots (grunge taupe)', options: ['230 (230-235)', '240 (240-245)', '250 (250-255)'] })
+  const p = parsePage(fakeDocument(html), '')
+  assert.equal(p.category, 'shoes')
+  assert.equal(p.categoryConfidence, 'high')
+  assert.ok(p.categoryEvidence.some((e) => e.kind === 'option'))
+  assert.ok(!JSON.stringify(p.categoryEvidence).includes('xYASE'))
+})
+
+test('가짜 HTML: JSON-LD category와 breadcrumb이 분류 근거로 쓰인다', () => {
+  const p = parsePage(fakeDocument(catHtml({ title: 'Daily', ld: { category: '아우터', crumbs: ['홈', '아우터', '코트'] } })), '')
+  assert.equal(p.category, 'outer')
+  assert.ok(p.categoryEvidence.some((e) => e.kind === 'jsonld') && p.categoryEvidence.some((e) => e.kind === 'breadcrumb'))
+  const srv = parseProductHtml(catHtml({ title: 'Daily', ld: { category: '신발' } }), 'https://shop.example/p/1')
+  assert.equal(srv.category, 'shoes', '서버 파서도 같은 분류 함수를 쓴다')
+  assert.ok(srv.categoryConfidence && srv.categoryEvidence.some((e) => e.kind === 'jsonld'))
+})
+
+test('가짜 HTML: 근거가 부족하면 confidence가 low이고 후보 목록과 override 재분석이 동작한다', () => {
+  const profile = buildProfile({ gender: 'male', height: '175', weight: '70' }).profile
+  const html = catHtml({ title: 'Daily piece' })
+  const auto = analyzePage(fakeDocument(html), '', profile)
+  assert.equal(auto.status, 'ok')
+  assert.equal(auto.categoryConfidence, 'low')
+  assert.equal(auto.categoryCandidates.length, 5)
+  const forced = analyzePage(fakeDocument(html), '', profile, '', { categoryOverride: 'bottom' })
+  assert.equal(forced.category, 'bottom')
+  assert.equal(forced.categoryLabel, '하의')
+  assert.equal(forced.categoryOverridden, true)
+  assert.equal(forced.categoryConfidence, 'high')
+  // 높은 신뢰도 분류도 사용자가 고른 값이 우선
+  const boots = catHtml({ title: 'braided moc boots', options: ['230 (230-235)', '240 (240-245)'] })
+  assert.equal(analyzePage(fakeDocument(boots), '', profile).category, 'shoes')
+  assert.equal(analyzePage(fakeDocument(boots), '', profile, '', { categoryOverride: 'top' }).category, 'top')
+})
+
+test('가짜 데이터: 웹 결과 화면용 recategorizeProduct는 사이즈표를 새 카테고리로 다시 읽는다', () => {
+  const base = parseProductHtml(`<html><head><title>Daily</title></head><body><table><tr><th>사이즈</th><th>총장</th><th>어깨</th></tr><tr><td>S</td><td>67</td><td>45</td></tr><tr><td>M</td><td>69</td><td>47</td></tr></table></body></html>`, 'https://shop.example/p/2')
+  assert.equal(base.category, 'top')
+  assert.equal(base.sizeChart.measures.S.topLength, 67)
+  const re = recategorizeProduct(base, 'outer')
+  assert.equal(re.category, 'outer')
+  assert.equal(re.sizeChart.measures.S.outerLength, 67)
+  assert.equal(re.categoryOverridden, true)
+  assert.equal(base.category, 'top', '원본은 바꾸지 않는다')
+})
+
+test('가짜 HTML: 진단 리포트에 분류 근거 한 줄이 있고 상품명 원문은 없다', () => {
+  const d = collectDiagnostics(fakeDocument(catHtml({ title: '[xYASE] braided moc boots (grunge taupe)', options: ['230 (230-235)', '240 (240-245)', '250 (250-255)'] })), '')
+  const line = diagnosticLines(d).find((l) => l.startsWith('분류 근거:'))
+  assert.ok(line, '분류 근거 줄')
+  assert.ok(line.includes('상품명 +3') && line.includes('옵션 +3') && line.includes('신발'))
+  assert.ok(!formatReport(d).includes('xYASE') && !formatReport(d).includes('braided'))
+  assert.equal(categoryEvidenceLine({ category: 'evil', evidence: [] }), '')
+  const forced = collectDiagnostics(fakeDocument(catHtml({ title: 'Daily' })), '', '', { categoryOverride: 'dress' })
+  assert.ok(diagnosticLines(forced).some((l) => l.includes('직접 선택') && l.includes('원피스')))
+})
+
+await atest('content.js(가짜 DOM, vm): 가짜 HTML에서 분류 신뢰도가 낮으면 종류 칩이 나오고, 누르면 그 종류로 다시 분석한다', async () => {
+  const { texts, created } = await runContentInFakeDom(catHtml({ title: 'Daily piece' }))
+  assert.ok(texts.includes('종류가 확실하지 않아요'))
+  const chips = created.filter((e) => /^cat( on)?$/.test(e.className))
+  assert.deepEqual(chips.map((e) => e._text), ['상의', '신발', '원피스', '아우터', '하의'])
+  assert.equal(chips.length, 5)
+  const shoes = chips.find((e) => e._text === '신발')
+  const before = texts.length
+  shoes.click()
+  for (let i = 0; i < 50 && !texts.slice(before).includes('종류(직접 선택)'); i++) await new Promise((r) => setTimeout(r, 10))
+  assert.ok(texts.slice(before).includes('종류(직접 선택)'), '다시 분석한 카드에 직접 선택 표시')
+  assert.ok(texts.slice(before).includes('신발'))
+})
+
+await atest('content.js(가짜 DOM, vm): 가짜 HTML에서 분류 신뢰도가 높으면 종류 칩이 나오지 않는다', async () => {
+  const { texts, created } = await runContentInFakeDom(catHtml({ title: 'braided moc boots', options: ['230 (230-235)', '240 (240-245)', '250 (250-255)'] }))
+  assert.ok(!texts.includes('종류가 확실하지 않아요'))
+  assert.equal(created.filter((e) => /^cat( on)?$/.test(e.className)).length, 0)
+})
+
+
 console.log(`\n${passed}개 통과`)
