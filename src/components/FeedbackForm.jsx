@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { calibrationSummary } from '../lib/fitEngine.js'
-import { toContribution, contributionKey } from '../lib/contribution.js'
+import { toContribution, contributionKey, toDomain } from '../lib/contribution.js'
 import { loadConsent, purgeStaleConsent, saveConsent, enqueueContribution } from '../lib/storage.js'
 import { CONSENT_VERSION, CONSENT_LABEL, CONSENT_SUMMARY, CONSENT_STATUS_NOTE } from '../data/consent.js'
 
@@ -99,6 +99,9 @@ export default function FeedbackForm({ product, perSize, defaultSize, existing, 
         </ul>
       </details>
       {consent && <p className="muted small" role="status">{CONSENT_STATUS_NOTE}</p>}
+      {consent && !toDomain(product.url) && (
+        <p className="muted small" role="status">이 쇼핑몰은 통계 기여 대상이 아니라서 기록은 내 기기에만 남고 기여 대기열에는 담기지 않아요.</p>
+      )}
 
       <button type="submit" className="btn primary block" disabled={!result}>
         기록 저장

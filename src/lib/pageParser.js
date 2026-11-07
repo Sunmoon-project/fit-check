@@ -71,6 +71,14 @@ export function readReviewElements(root) {
   return [...new Set(texts)]
 }
 
+// 상품 페이지로 보이는지: JSON-LD Product, og:type=product, 또는 사이즈표가 있는 경우.
+// 주문·목록 같은 다른 페이지에 버튼이 뜨지 않게 하는 용도이며, 완벽한 판별은 아니에요.
+export function isProductPage(root) {
+  if (collectJsonLd(root).some((n) => isType(n, 'Product'))) return true
+  if (/product/i.test(metaContent(root, 'og:type') || '')) return true
+  return buildSizeChart(readTables(root), guessCategory(clean(all(root, 'h1')[0]?.textContent))) != null
+}
+
 /**
  * @param root document 또는 같은 메서드를 가진 객체
  * @param pageUrl 현재 주소 (표시용)
@@ -96,7 +104,12 @@ export function parsePage(root, pageUrl = '') {
     const list = isType(n, 'Review') ? [n] : Array.isArray(n.review) ? n.review : n.review ? [n.review] : []
     for (const r of list) texts.push(clean(r.reviewBody || r.description).slice(0, 500))
   }
-  texts.push(...readReviewElements(root).map((t) => t.slice(0, 500)))
+  // 화면 요소에서 찾은 글은 키·몸무게·사이즈·핏 단서가 하나라도 있어야 리뷰로 셉니다
+  // ("리뷰 작성하고 적립금 받기" 같은 안내 문구가 건수를 부풀리지 않게).
+  for (const t of readReviewElements(root)) {
+    const parsed = parseReviewText(t.slice(0, 500), sizeLabels)
+    if (parsed.height || parsed.weight || parsed.size || parsed.fit) texts.push(t.slice(0, 500))
+  }
 
   const seen = new Set()
   const reviews = []

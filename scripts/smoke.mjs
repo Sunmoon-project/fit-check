@@ -24,7 +24,7 @@ import {
 } from './lib/bodyMetrics.mjs'
 import { PRODUCTS } from '../src/data/mockData.js'
 import { parseProductHtml } from '../server/productParser.js'
-import { parsePage } from '../src/lib/pageParser.js'
+import { parsePage, isProductPage } from '../src/lib/pageParser.js'
 import { analyzePage } from '../src/lib/extAnalyze.js'
 import { buildProfile, isUsableProfile } from '../src/lib/extProfile.js'
 import { fakeDocument } from './lib/cheerioDom.mjs'
@@ -926,6 +926,17 @@ test('DOM 파서: JSON-LD 리뷰도 읽고 같은 문장은 한 번만 센다', 
   assert.equal(p.reviews.length, 1)
   assert.equal(p.sizeChart, null)
   assert.ok(p.notes.some((n) => n.includes('사이즈표')))
+})
+
+test('DOM 파서: 단서 없는 안내 문구는 리뷰 건수에 넣지 않는다', () => {
+  const html = '<html><body><h1>니트</h1><div class="review-guide">리뷰 작성하고 적립금 받아가세요 지금 바로</div><div class="review-item">키 170 몸무게 60 M 사이즈로 구매 정사이즈예요</div></body></html>'
+  assert.equal(parsePage(fakeDocument(html), '').reviews.length, 1)
+})
+
+test('상품 페이지 판별: JSON-LD Product·og:type·사이즈표만 true', () => {
+  assert.equal(isProductPage(fakeDocument('<html><body><h1>주문 내역</h1></body></html>')), false)
+  assert.equal(isProductPage(fakeDocument('<html><head><meta property="og:type" content="product"></head><body></body></html>')), true)
+  assert.equal(isProductPage(fakeDocument(EXT_HTML)), true)
 })
 
 test('DOM 파서: 이름을 못 읽으면 null, 깨진 JSON-LD는 무시', () => {

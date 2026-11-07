@@ -35,6 +35,7 @@ export default function FitComment({ result }) {
 
       <h3 className="fit-headline">{result.headline}</h3>
       <p className="fit-body">{result.body}</p>
+      <p className="muted small disclaimer">확신도는 후기·사이즈표 근거가 얼마나 있는지로 나눈 참고 단계예요. 정확도를 측정한 값이 아니에요.</p>
       <p className="muted small disclaimer">{result.note}</p>
     </div>
   )
