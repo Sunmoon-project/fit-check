@@ -345,6 +345,11 @@ const MAX_PHOTOS = 5
 const MAX_SENTENCES = 40
 const HARD_SKIP_TAG = /^(?:BUTTON|SELECT|SCRIPT|STYLE)$/
 const SOFT_SKIP_TAG = /^A$/
+const INLINE_TAG = /^(?:B|I|U|EM|STRONG|SPAN|MARK|SMALL|SUB|SUP|S|DEL|FONT|A|IMG|BR|WBR)$/
+// 닉네임 앞에 붙는 배지·등급 글자는 닉네임으로 보지 않아요.
+const BADGE_RE = /^(?:베스트|BEST|포토|사진|동영상|신규|NEW|구매\s*확정|한\s*달\s*사용|스토어|(?:LV|Lv|lv)\.?\s*\d+|등급\s*\S*|.{0,6}리뷰어?|.{0,6}등급)$/i
+const PLACEHOLDER_RE = /(?:blank|spacer|placeholder|transparent|pixel|loading|dummy|1x1|noimage|no_image)[^/]*\.(?:gif|png|jpe?g|svg|webp)(?:[?#]|$)|\.gif(?:[?#]|$)/i
+const LAZY_ATTRS = ['data-src', 'data-original', 'data-lazy-src', 'data-lazy', 'src']
 
 const cleanLines = (s) =>
   String(s || '')
@@ -360,7 +365,7 @@ function blockText(e) {
   if (kids.length && e.childNodes) {
     return cleanLines(
       Array.from(e.childNodes)
-        .map((n) => (n.nodeType === 3 ? n.nodeValue : String(n.tagName).toUpperCase() === 'BR' ? '\n' : ''))
+        .map((n) => (n.nodeType === 3 ? n.nodeValue : String(n.tagName).toUpperCase() === 'BR' ? '\n' : n.nodeType === 1 ? n.textContent : ''))
         .join(''),
     )
   }
@@ -418,21 +423,33 @@ export function extractCardView(card) {
   const order = all(card, '*')
   const idx = new Map(order.map((e, i) => [e, i]))
   const within = (e, tagRe, roleRe) => {
-    for (let cur = e; cur; cur = cur.parentElement) {
+    // 카드 요소 자신이 <a>로 감싸인 경우에도 안쪽 글을 읽도록 카드는 검사하지 않아요.
+    for (let cur = e; cur && cur !== card; cur = cur.parentElement) {
       if (tagRe.test(String(cur.tagName).toUpperCase())) return true
       if (roleRe.test(cur.getAttribute?.('role') || '')) return true
-      if (cur === card) break
     }
     return false
   }
   const blocks = []
+  const covered = new Set() // 글과 인라인 태그가 섞인 블록 안쪽 요소는 따로 블록으로 세지 않아요
+  // 직접 글 노드가 있고 안쪽이 전부 인라인 태그인 요소(<p>가볍고 <b>정말</b> 따뜻해요</p>)는 한 블록
+  const mixedInline = (e) =>
+    !!e.childNodes &&
+    Array.from(e.childNodes).some((n) => n.nodeType === 3 && clean(n.nodeValue)) &&
+    all(e, '*').every((d) => INLINE_TAG.test(String(d.tagName).toUpperCase()))
   for (const e of order) {
     const tag = String(e.tagName).toUpperCase()
-    if (tag === 'IMG' || tag === 'BR' || !childrenOf(e).every((k) => String(k.tagName).toUpperCase() === 'BR')) continue
+    if (covered.has(e.parentElement)) {
+      covered.add(e)
+      continue
+    }
+    const mixed = tag !== 'IMG' && tag !== 'BR' && childrenOf(e).length > 0 && mixedInline(e)
+    if (mixed) covered.add(e)
+    if (tag === 'IMG' || tag === 'BR' || (!mixed && !childrenOf(e).every((k) => String(k.tagName).toUpperCase() === 'BR'))) continue
     const text = blockText(e)
     if (!text) continue
     if (within(e, HARD_SKIP_TAG, /^button$/i)) continue
-    blocks.push({ el: e, text, soft: within(e, SOFT_SKIP_TAG, /^link$/i), kind: LABEL_KIND[text.replace(/\s/g, '')] || null })
+    blocks.push({ el: e, text, at: blocks.length, soft: within(e, SOFT_SKIP_TAG, /^link$/i), kind: LABEL_KIND[text.replace(/\s/g, '')] || null })
   }
   const uiOnly = (t) => UI_ONLY_RE.test(t) || DATE_RE.test(t) || RATING_RE.test(t)
   const plain = (b) => !b.soft && !b.kind && !uiOnly(b.text)
@@ -463,31 +480,38 @@ export function extractCardView(card) {
   const structured = Object.keys(found).length > 0
   let nickBlock = null
   if (structured) {
-    nickBlock = blocks.slice(0, firstLabel).find((b) => plain(b) && b.text.length <= 20 && !/^\d+$/.test(b.text) && !used.has(b)) || null
+    nickBlock = blocks.slice(0, firstLabel).find((b) => plain(b) && b.text.length <= 20 && !/^\d+$/.test(b.text) && !BADGE_RE.test(b.text) && !used.has(b)) || null
   }
 
   let body = ''
   let deduped = false
   const pool = blocks.filter((b) => plain(b) && !used.has(b) && b !== nickBlock && b.kind == null)
   if (structured) {
-    const prose = pool.filter((b) => hasProse(b.text))
-    let best = null
-    for (const b of prose) {
-      const key = looseKey(collapseRepeat(b.text))
-      if (!best || key.length > best.key.length || (key.length === best.key.length && !/(?:\.{3}|…|더보기)\s*$/.test(b.text) && /(?:\.{3}|…|더보기)\s*$/.test(best.b.text))) best = { b, key }
-    }
-    if (best) {
-      const chosen = collapseRepeat(best.b.text)
-      deduped = chosen !== stripTail(best.b.text) || prose.some((b) => b !== best.b && best.key.startsWith(looseKey(b.text)))
-      body = stripTail(chosen)
-    }
+    // 라벨 뒤의 글 덩어리를 모두 이어 붙이되, 접힌 미리보기·펼친 전체처럼 같은 글이 겹친 것은 긴 쪽 하나만 남겨요.
+    let prose = pool.filter((b) => hasProse(b.text))
+    const afterLabel = prose.filter((b) => b.at > firstLabel)
+    if (afterLabel.length) prose = afterLabel
+    const items = prose.map((b, i) => ({ b, i, text: collapseRepeat(b.text), key: looseKey(collapseRepeat(b.text)), cut: /(?:\.{3}|…|더보기)\s*$/.test(b.text) }))
+    const kept = items.filter((x) =>
+      !items.some((y) => y !== x && y.key.includes(x.key) && (y.key.length > x.key.length || (x.cut && !y.cut) || (x.cut === y.cut && y.i < x.i))),
+    )
+    deduped = kept.length < items.length || items.some((x) => x.text !== stripTail(x.b.text))
+    body = kept.map((x) => stripTail(x.text)).join('\n')
   } else {
     body = stripTail(cleanLines(pool.map((b) => b.text).join('\n')))
   }
 
   const photos = []
   for (const img of all(card, 'img')) {
-    const url = photoUrl(img.getAttribute('src') || img.getAttribute('data-src'))
+    // 지연 로딩 사진은 src가 빈 그림이라, data-src 같은 진짜 주소를 먼저 보고 빈 그림 주소는 버려요.
+    let url = null
+    for (const a of LAZY_ATTRS) {
+      const u = photoUrl(img.getAttribute(a))
+      if (u && !PLACEHOLDER_RE.test(u)) {
+        url = u
+        break
+      }
+    }
     if (!url || photos.includes(url)) continue
     const w = parseInt(img.getAttribute('width') || '', 10)
     const h = parseInt(img.getAttribute('height') || '', 10)
@@ -518,7 +542,7 @@ export function extractCardView(card) {
  * 리뷰 본문을 문장 단위로 나눕니다. 줄바꿈과 문장 끝 기호(. ! ? 。 …, 연속 포함) 뒤 공백에서 자르고,
  * 2.5 나 ver.2 처럼 기호 바로 뒤에 글자가 붙은 곳은 자르지 않아요. 끝 기호는 앞 문장에 남깁니다.
  */
-export function splitSentences(body) {
+export function splitSentences(body, limit = MAX_SENTENCES) {
   const out = []
   for (const line of String(body || '').split(/\n+/)) {
     const t = clean(line)
@@ -528,8 +552,10 @@ export function splitSentences(body) {
       if (s) out.push(s)
     }
   }
-  return out.slice(0, MAX_SENTENCES)
+  return out.slice(0, limit)
 }
+
+export const SENTENCE_LIMIT = MAX_SENTENCES
 
 // 상품 페이지로 보이는지: JSON-LD Product, og:type=product, 또는 사이즈표가 있는 경우.
 // 주문·목록 같은 다른 페이지에 버튼이 뜨지 않게 하는 용도이며, 완벽한 판별은 아니에요.

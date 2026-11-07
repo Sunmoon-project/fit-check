@@ -1952,4 +1952,56 @@ await atest('content.js(가짜 DOM, vm): 본문이 3문장보다 길면 더보�
   assert.ok(created.filter((e) => e.className === 'sent').length > before)
 })
 
+// ---- 리뷰 카드 읽기 보완 (직접 만든 가짜 HTML, 실제 무신사가 아님) ----
+const rbVariant = (edit) => {
+  const cards = [0, 1, 2].map((i) => edit(rbCard(i).replace('26.10.08', `26.10.0${i + 1}`)))
+  return fakeDocument(RB_HTML(cards.join('')))
+}
+const rbFirst = (doc) => extractCardView(doc.querySelectorAll('li')[0])
+
+test('가짜 HTML: <b> 같은 인라인 태그가 섞인 본문도 한 문장으로 읽는다', () => {
+  const doc = rbVariant((c) => c.replace(`<p class="t1">${RB_BODY}</p><p class="t2">${RB_BODY} ...</p>`, '<p class="t1">가볍고 <b>정말</b> 따뜻해요. 만족<span>!</span></p>'))
+  const v = rbFirst(doc)
+  assert.equal(v.body, '가볍고 정말 따뜻해요. 만족!')
+  assert.deepEqual(splitSentences(v.body), ['가볍고 정말 따뜻해요.', '만족!'])
+  const p = parsePage(doc, '')
+  assert.deepEqual([p.reviews[0].height, p.reviews[0].weight], [170, 70])
+})
+
+test('가짜 HTML: 문단이 여러 개인 본문은 모두 이어 붙이고 겹친 미리보기만 뺀다', () => {
+  const two = (c) => c.replace(`<p class="t1">${RB_BODY}</p><p class="t2">${RB_BODY} ...</p>`, '<p class="t1">첫 문단입니다 좋아요.</p><p class="t2">둘째 문단은 조금 더 길게 적었어요 만족.</p><p class="t3">둘째 문단은 조금 더 길게 적었어요 만족. ...</p>')
+  const v = rbFirst(rbVariant(two))
+  assert.equal(v.body, '첫 문단입니다 좋아요.\n둘째 문단은 조금 더 길게 적었어요 만족.')
+  assert.equal(rbFirst(fakeDocument(RB_FULL)).body, RB_BODY) // 기존 접힘 복사본 제거는 그대로
+})
+
+test('가짜 HTML: 지연 로딩 사진은 data-src를 쓰고 빈 그림 주소는 버린다', () => {
+  const lazy = (c) => c.replace(`<img src="${RB_PHOTO}" alt="" width="300">`, `<img src="https://img.example.com/blank.gif" data-src="${RB_PHOTO}" alt="" width="300"><img src="https://img.example.com/spacer.gif" alt="" width="300">`)
+  assert.deepEqual(rbFirst(rbVariant(lazy)).photos, [RB_PHOTO])
+})
+
+test('가짜 HTML: 닉네임 앞의 베스트·LV 배지는 닉네임이 아니다', () => {
+  const badge = (c) => c.replace('<span class="n1">지루한플럼반바지</span>', '<span class="bd">베스트</span><span class="lv">LV.3</span><span class="n1">지루한플럼반바지</span>')
+  assert.equal(rbFirst(rbVariant(badge)).nick, '지루한플럼반바지')
+})
+
+test('가짜 HTML: 본문이 없으면 빈 문장 목록을 주고 content.js는 빈 문단을 그리지 않는다', async () => {
+  const empty = (c) => c.replace(`<p class="t1">${RB_BODY}</p><p class="t2">${RB_BODY} ...</p>`, '')
+  const view = analyzePage(rbVariant(empty), 'https://shop.example/p/9', { height: 170, weight: 70 }, '').reviewViews
+  for (const rv of [...(view?.matched || []), ...(view?.others || [])]) assert.deepEqual(rv.sentences, [])
+  const { created } = await runContentInFakeDom(RB_FULL.replaceAll(RB_BODY, '').replaceAll(' ...', ''))
+  assert.equal(created.filter((e) => e.className === 'sent' && !e.textContent).length, 0)
+})
+
+test('가짜 HTML: 문장이 40개를 넘으면 잘렸다는 표시를 주고, 카드를 감싼 <a> 안의 본문도 읽는다', () => {
+  const longBody = Array.from({ length: 45 }, (_, i) => `문장 ${i + 1}번 좋아요.`).join(' ')
+  const doc = rbVariant((c) => c.replace(`<p class="t1">${RB_BODY}</p><p class="t2">${RB_BODY} ...</p>`, `<p class="t1">${longBody}</p>`))
+  const rv = analyzePage(doc, 'https://shop.example/p/9', { height: 170, weight: 70 }, '').reviewViews
+  const one = [...rv.matched, ...rv.others][0]
+  assert.equal(one.sentences.length, 40)
+  assert.equal(one.sentencesCut, true)
+  const wrapped = fakeDocument(`<html><body><a href="/r/1"><div class="card"><span>닉</span><span>상품명</span><span>${RB_PRODUCT}</span><span>구매옵션</span><span>그레이 · 2 (L)</span><p>따뜻하고 가벼워서 만족해요.</p></div></a></body></html>`)
+  assert.equal(extractCardView(wrapped.querySelectorAll('div')[0]).body, '따뜻하고 가벼워서 만족해요.')
+})
+
 console.log(`\n${passed}개 통과`)
