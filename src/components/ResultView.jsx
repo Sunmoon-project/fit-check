@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
-import { generateFitComment } from '../lib/fitEngine.js'
+import { generateFitComment, bodyValuesForProfile } from '../lib/fitEngine.js'
+import { compareSizes } from '../lib/sizeCompare.js'
 import { CATEGORY_LABEL } from '../data/measurements.js'
 import { trimNote } from '../lib/storage.js'
 import { makeWardrobeItem } from '../lib/wardrobe.js'
@@ -14,6 +15,10 @@ import { SimilarInWardrobe } from './Wardrobe.jsx'
 
 export default function ResultView({ product, profile, calibration, feedbackCount, existingFeedback, onFeedback, onRestart, wardrobe = [], onSaveWardrobe }) {
   const result = useMemo(() => generateFitComment(profile, product, calibration), [profile, product, calibration])
+  const compare = useMemo(
+    () => compareSizes({ chart: product.sizeChart, bodyValues: bodyValuesForProfile(profile).values, measured: result.measured, category: product.category, calibration: calibration || {} }),
+    [profile, product, calibration, result],
+  )
   const [picked, setPicked] = useState(null)
   const [saving, setSaving] = useState(false)
   const [saveNote, setSaveNote] = useState('')
@@ -69,7 +74,7 @@ export default function ResultView({ product, profile, calibration, feedbackCoun
         perSize={result.perSize}
         selectedSize={selectedSize}
         recommendedSize={result.recommendedSize}
-        measured={result.measured}
+        compare={compare}
         onSelect={setPicked}
       />
 
@@ -88,7 +93,7 @@ export default function ResultView({ product, profile, calibration, feedbackCoun
 
       <SimilarityCompare profile={profile} reviews={[...result.matched, ...result.otherReviews]} />
 
-      <SizeChart chart={product.sizeChart} recommendedSize={result.recommendedSize} selectedSize={selectedSize} />
+      <SizeChart chart={product.sizeChart} compare={compare} onSelect={setPicked} recommendedSize={result.recommendedSize} selectedSize={selectedSize} />
 
       <FeedbackForm
         key={product.url}

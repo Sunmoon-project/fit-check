@@ -2,7 +2,8 @@
 // 추천은 웹 앱과 같은 generateFitComment를 그대로 씁니다.
 import { parsePage, splitSentences, isProductPage, SENTENCE_LIMIT } from './pageParser.js'
 import { collectDiagnostics, diagnosticLines } from './diagnose.js'
-import { generateFitComment, describeEvidence, CONFIDENCE_LABEL, FIT_LABEL } from './fitEngine.js'
+import { generateFitComment, describeEvidence, bodyValuesForProfile, CONFIDENCE_LABEL, FIT_LABEL } from './fitEngine.js'
+import { compareSizes, compactCompare, MEASURE_ONLY_LABEL } from './sizeCompare.js'
 // 사용자가 직접 적은 사이즈표: 열 이름(예: 어깨 가슴 총장)과 줄(예: M 50 57 68) → buildSizeChart 입력 모양.
 // 저장하지 않고 이번 분석에만 씁니다. 잘못된 줄은 버려요.
 export function manualChartRows(columnsText, linesText) {
@@ -68,6 +69,18 @@ function exportData(product, pageUrl, result) {
   }
 }
 
+// 사이즈 탭별 비교 표용 값: 내 치수(직접 입력/추정) vs 옷 실측 vs 여유 → 판정. 실측만 있는 부위는 그대로 표시해요.
+function compareView(product, profile, result) {
+  if (!product.sizeChart) return null
+  try {
+    const { values } = bodyValuesForProfile(profile)
+    const cmp = compareSizes({ chart: product.sizeChart, bodyValues: values, measured: result.measured, category: product.category })
+    return cmp.sizes.length ? { ...compactCompare(cmp), measureOnlyLabel: MEASURE_ONLY_LABEL, recommended: result.recommendedSize ?? null } : null
+  } catch {
+    return null
+  }
+}
+
 export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) {
   const product = parsePage(root, pageUrl, opts)
   if (!product) return { status: 'no-product', message: NOT_PRODUCT_MESSAGE }
@@ -112,6 +125,7 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
       othersTotal: (result.otherReviews || []).length,
     },
     exportData: exportData(product, pageUrl, result),
+    compareView: compareView(product, profile, result),
     chartView: product.sizeChart?.view ? { ...product.sizeChart.view, recommended: result.recommendedSize ?? null } : null,
     confidence: result.confidence,
     confidenceLabel: CONFIDENCE_LABEL[result.confidence],
