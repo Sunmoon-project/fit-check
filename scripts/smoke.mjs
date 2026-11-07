@@ -1510,4 +1510,33 @@ test('formatReport: 오류 위치와 식별자 줄은 검증된 값만 보인다
   assert.ok(!formatReport(base).includes('오류 위치'))
 })
 
+// 클래스 이름이 해시처럼 보이는 가짜 리뷰 카드: 키·몸무게는 본문과 다른 span, 구매 옵션은 따로
+const CARD_BODIES = ['ZQCARD1 배송이 빨라요 만족합니다 감사해요', 'ZQCARD2 재질이 부드럽고 좋아요 추천해요', 'ZQCARD3 색상이 사진과 같아요 예뻐요', 'ZQCARD4 정사이즈로 잘 맞아요 편해요', 'ZQCARD5 길이가 적당하고 핏이 좋아요', 'ZQCARD6 겨울에 입기 딱 좋아요 따뜻해요', 'ZQCARD7 세탁해도 줄지 않았어요 좋아요', 'ZQCARD8 가격 대비 훌륭해요 재구매 의사 있어요']
+const cardsHtml = CARD_BODIES.map(
+  (b, i) =>
+    `<div class="sc-a1b2c3 xYz${i}"><div class="hd9"><span class="q7">${i % 2 ? '여성' : '남성'} · ${170 + i}cm · ${60 + i}kg</span></div><p class="bd3">${b}</p><div class="op5">구매 옵션: 1 (M)</div></div>`,
+).join('')
+const CARD_HTML = `<h1>코튼 재킷 아우터</h1>${optionsHtml}${chartTable(OPTION_LIST_LABELS())}<section class="lst0">${cardsHtml}</section><div class="zz1"><span>리뷰 작성하고 적립금 받기 안내 문구입니다</span><span>사진 후기를 남겨 주세요 감사합니다</span></div>`
+
+test('가짜 HTML: 반복되는 리뷰 카드에서 별도 요소의 키·몸무게와 구매 옵션 사이즈를 읽고 안내 문구는 세지 않는다', () => {
+  const p = parsePage(fakeDocument(wrapBody(CARD_HTML)), '')
+  assert.equal(p.reviews.length, 8)
+  assert.equal(p.reviews.filter((r) => r.height != null).length, 8)
+  assert.equal(p.reviews.filter((r) => r.weight != null).length, 8)
+  assert.equal(p.reviews.filter((r) => r.size === 'M').length, 8)
+  assert.ok(p.reviews.every((r) => !r.text.includes('적립금')))
+  assert.equal(p.reviewMeta.cards, 8)
+})
+
+test('가짜 HTML: 진단 리포트에 버린 후보 사유별 개수와 카드 개수가 있고 리뷰 글·값은 없다', () => {
+  const d = collectDiagnostics(fakeDocument(wrapBody(CARD_HTML)), 'https://shop.example/p/1')
+  assert.equal(d.reviewStats.withHeight, 8)
+  assert.equal(d.reviewStats.withWeight, 8)
+  const rep = formatReport(d)
+  assert.ok(/버린 리뷰 후보 사유: 너무 짧음 \d+, 너무 김 \d+, 안쪽 중복 \d+, 단서 없음 \d+, 중복 \d+/.test(rep))
+  assert.ok(rep.includes('리뷰 카드로 묶은 개수: 8'))
+  for (const secret of ['ZQCARD', '170cm', '177', '적립금']) assert.ok(!rep.includes(secret), secret)
+  assert.ok(rep.length <= REPORT_MAX)
+})
+
 console.log(`\n${passed}개 통과`)

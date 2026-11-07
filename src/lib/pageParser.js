@@ -215,21 +215,83 @@ export const REVIEW_SELECTOR = [
 const REVIEW_MIN = 15
 const REVIEW_MAX = 600
 
-export function readReviewElements(root) {
+/** 안쪽에 같은 조건의 요소가 있으면 안쪽을 쓰도록 건너뜁니다. dropped에 버린 사유별 개수를 더해요. */
+export function readReviewElements(root, dropped = {}) {
+  const bump = (k) => (dropped[k] = (dropped[k] || 0) + 1)
   const els = [...new Set(all(root, REVIEW_SELECTOR))]
   const texts = []
   for (const el of els) {
     const text = clean(el.textContent)
-    if (text.length < REVIEW_MIN || text.length > REVIEW_MAX) continue
-    // 안쪽에 같은 조건의 요소가 있으면 안쪽을 쓰도록 건너뜁니다.
+    if (text.length < REVIEW_MIN) {
+      bump('tooShort')
+      continue
+    }
+    if (text.length > REVIEW_MAX) {
+      bump('tooLong')
+      continue
+    }
     const hasInner = all(el, REVIEW_SELECTOR).some((c) => {
       const t = clean(c.textContent)
       return t.length >= REVIEW_MIN && t.length <= REVIEW_MAX && t !== text
     })
-    if (hasInner) continue
+    if (hasInner) {
+      bump('innerDuplicate')
+      continue
+    }
     texts.push(text)
   }
   return [...new Set(texts)]
+}
+
+// ---------- 리뷰 카드: 같은 구조로 반복되는 형제 요소 ----------
+// 키·몸무게가 본문과 다른 요소에 있어도 읽도록, 단서가 든 요소에서 위로 올라가며
+// '같은 tag+자식 구조'가 3개 이상 형제로 반복되는 가장 큰 요소(1200자 이하)를 리뷰 카드로 봐요.
+// 클래스 이름은 보지 않아요. 쇼핑몰마다 달라서 일반 규칙일 뿐이며, 실제 쇼핑몰에서 맞는지는 확인하지 않았어요.
+const CARD_MAX = 1200
+const CARD_MIN_REPEAT = 3
+const CARD_CLIMB = 8
+const CARD_SEED_LIMIT = 6000
+const CLUE_LEAF_RE = /(?<![\d.,])\d{3}(?:\.\d)?\s*(?:cm|㎝)|(?<![\d.,])\d{2,3}(?:\.\d)?\s*(?:kg|㎏)|구매\s*옵션|몸무게\s*[:：]?\s*\d/i
+
+function shape(el, depth = 2) {
+  const kids = childrenOf(el)
+  return `${el.tagName}${depth > 0 && kids.length ? `(${kids.slice(0, 8).map((k) => shape(k, depth - 1)).join(',')})` : ''}`
+}
+
+export function readReviewCardEls(root) {
+  const seeds = new Set(all(root, REVIEW_SELECTOR))
+  let scanned = 0
+  for (const e of all(root, '*')) {
+    if (++scanned > CARD_SEED_LIMIT) break
+    if (childrenOf(e).length > 1) continue
+    const t = clean(e.textContent)
+    if (t.length <= 80 && CLUE_LEAF_RE.test(t)) seeds.add(e)
+  }
+  const cards = new Set()
+  const shapes = new Map()
+  const sig = (el) => {
+    if (!shapes.has(el)) shapes.set(el, shape(el))
+    return shapes.get(el)
+  }
+  for (const seed of seeds) {
+    let best = null
+    let cur = seed
+    for (let up = 0; up < CARD_CLIMB && cur && cur.parentElement; up++, cur = cur.parentElement) {
+      if (clean(cur.textContent).length > CARD_MAX) break
+      if (childrenOf(cur).length < 2) continue
+      const mine = sig(cur)
+      const same = childrenOf(cur.parentElement).filter((c) => sig(c) === mine).length
+      if (same >= CARD_MIN_REPEAT) best = cur
+    }
+    if (best) cards.add(best)
+  }
+  // 카드 안에 다른 카드가 들어 있으면 바깥 것은 뺍니다
+  const list = [...cards]
+  return list.filter((c) => !list.some((o) => o !== c && c.contains?.(o)))
+}
+
+export function readReviewCards(root) {
+  return readReviewCardEls(root).map((c) => clean(c.textContent))
 }
 
 // 상품 페이지로 보이는지: JSON-LD Product, og:type=product, 또는 사이즈표가 있는 경우.
@@ -295,17 +357,37 @@ export function parsePage(root, pageUrl = '', opts = {}) {
   }
   // 화면 요소에서 찾은 글은 키·몸무게·사이즈·핏 단서가 하나라도 있어야 리뷰로 셉니다
   // ("리뷰 작성하고 적립금 받기" 같은 안내 문구가 건수를 부풀리지 않게).
-  for (const t of readReviewElements(root)) {
-    const parsed = parseReviewText(t.slice(0, 500), sizeLabels)
-    if (parsed.height || parsed.weight || parsed.size || parsed.fit) texts.push(t.slice(0, 500))
+  // 카드(반복되는 형제 요소) 단위를 먼저 읽고, 그 안에 든 글은 중복으로 버려요.
+  const reviewDropped = { tooShort: 0, tooLong: 0, innerDuplicate: 0, noClue: 0, duplicate: 0 }
+  const entries = []
+  const hasClue = (p) => p.height || p.weight || p.size || p.fit
+  const cardTexts = readReviewCards(root)
+  for (const t of cardTexts) {
+    const parsed = parseReviewText(t, sizeLabels)
+    if (hasClue(parsed)) entries.push({ text: t, parsed })
+    else reviewDropped.noClue += 1
   }
+  for (const t of readReviewElements(root, reviewDropped)) {
+    if (cardTexts.some((c) => c.includes(t))) {
+      reviewDropped.duplicate += 1
+      continue
+    }
+    const parsed = parseReviewText(t.slice(0, 500), sizeLabels)
+    if (hasClue(parsed)) entries.push({ text: t.slice(0, 500), parsed })
+    else reviewDropped.noClue += 1
+  }
+  for (const e of entries) texts.push(e)
 
   const seen = new Set()
   const reviews = []
-  for (const text of texts) {
-    if (!text || seen.has(text)) continue
+  for (const item of texts) {
+    const text = typeof item === 'string' ? item : item.text
+    if (!text || seen.has(text)) {
+      if (text) reviewDropped.duplicate += 1
+      continue
+    }
     seen.add(text)
-    reviews.push({ id: reviews.length + 1, nick: '구매자', text, ...parseReviewText(text, sizeLabels) })
+    reviews.push({ id: reviews.length + 1, nick: '구매자', text, ...(typeof item === 'string' ? parseReviewText(text, sizeLabels) : item.parsed) })
   }
   const reviewTotalOnPage = readReviewTotal(root)
   if (reviews.length === 0) notes.push('이 페이지에서 리뷰를 찾지 못했어요. 리뷰가 아직 불러와지지 않았을 수 있어요.')
@@ -327,6 +409,7 @@ export function parsePage(root, pageUrl = '', opts = {}) {
       : null,
     optionLabels,
     reviewTotalOnPage,
+    reviewMeta: { cards: cardTexts.length, dropped: reviewDropped },
     sizeChartMeta: { ...chartMeta, selectedKind: chartMeta.selectedIndex == null ? null : kinds[chartMeta.selectedIndex] || null },
     reviews,
     notes,
