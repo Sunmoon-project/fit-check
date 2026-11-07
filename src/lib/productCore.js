@@ -254,7 +254,7 @@ export function parseReviewText(text, sizeLabels = []) {
   let size = null
   const labels = sizeLabels.map((s) => String(s).toUpperCase())
   const sizeMatch =
-    t.match(/구매\s*옵션\s*[:：]?\s*(?:\d{1,2}\s*\(\s*)?(XXS|XS|S|M|L|XL|XXL|2XL|3XL|FREE|프리)(?![A-Za-z0-9])/i) ||
+    t.match(/구매\s*옵션[\s\S]{0,40}?(?<![A-Za-z0-9])(?:\d{1,2}\s*\(\s*)?(XXS|XS|S|M|L|XL|XXL|2XL|3XL|FREE|프리)(?![A-Za-z0-9])/i) ||
     t.match(/(?:^|[^A-Za-z0-9])(XXS|XS|S|M|L|XL|XXL|2XL|3XL|FREE|프리)\s*(?:사이즈|로|으로|구매|샀|입|주문|사)/i) ||
     t.match(/(?<![A-Za-z0-9])\d{1,2}\s*\(\s*(XXS|XS|S|M|L|XL|XXL|2XL|3XL|FREE)\s*\)/i) ||
     t.match(/(\d{2,3})\s*(?:사이즈|인치|로 구매|으로 구매|샀|구매)/)

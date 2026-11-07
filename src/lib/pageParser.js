@@ -253,6 +253,8 @@ const CARD_CLIMB = 8
 const CARD_SEED_LIMIT = 6000
 const CLUE_LEAF_RE = /(?<![\d.,])\d{3}(?:\.\d)?\s*(?:cm|㎝)|(?<![\d.,])\d{2,3}(?:\.\d)?\s*(?:kg|㎏)|구매\s*옵션|몸무게\s*[:：]?\s*\d/i
 
+const REVIEW_CUE_RE = /구매\s*옵션|\d{2,4}[.\-/]\d{1,2}[.\-/]\d{1,2}|구매|착용|입어|입었|샀|배송|추천|만족|아쉬|좋아|예뻐|편해|커요|작아|커서|작은|크게|딱/
+
 function shape(el, depth = 2) {
   const kids = childrenOf(el)
   return `${el.tagName}${depth > 0 && kids.length ? `(${kids.slice(0, 8).map((k) => shape(k, depth - 1)).join(',')})` : ''}`
@@ -293,7 +295,8 @@ export function readReviewCardEls(root) {
   }
   // 카드 안에 다른 카드가 들어 있으면 바깥 것은 뺍니다
   const list = [...cards]
-  return list.filter((c) => !list.some((o) => o !== c && c.contains?.(o)))
+  // 값만 반복되는 div 격자(사이즈표)를 걸러요: 카드 글에 리뷰 단서(구매 옵션·날짜·후기 말투) 하나는 있어야 해요.
+  return list.filter((c) => !list.some((o) => o !== c && c.contains?.(o))).filter((c) => REVIEW_CUE_RE.test(clean(c.textContent)))
 }
 
 export function readReviewCards(root) {
