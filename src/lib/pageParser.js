@@ -330,6 +330,207 @@ export function readReviewCards(root, regions) {
   return readReviewCardEls(root, regions).map((c) => clean(c.textContent))
 }
 
+// ---------- 리뷰 카드 한 장에서 필요한 항목만 읽기 ----------
+// 닉네임·상품명·구매 사이즈·체형 정보·리뷰 본문·사진만 골라요. 날짜·별점·'더보기'·'도움돼요'·'댓글' 같은 화면 글자는 버립니다.
+// 클래스 이름은 보지 않고 '상품명', '구매옵션', '체형정보' 라벨 글자와 요소 순서만 써요.
+// 실제 쇼핑몰 화면은 확인하지 못했고, 지어낸 HTML 구조로만 시험했어요.
+// 여기서 읽은 값은 화면에 그릴 때만 메모리에 두며 저장하거나 어디로도 보내지 않아요.
+const UI_ONLY_RE = /^(?:더보기|접기|도움\s*돼요(?:\s*\d+)?|댓글(?:\s*\d+)?|신고|공유|좋아요(?:\s*\d+)?|\d+명에게 도움이 됐어요)$/
+const DATE_RE = /^\d{2,4}[.\-/]\d{1,2}[.\-/]\d{1,2}\.?$/
+const RATING_RE = /^[1-5](?:\.\d)?$/
+const LABEL_KIND = { 상품명: 'product', 구매옵션: 'option', 체형정보: 'body' }
+const OPTION_SIZE_RE = /^(?:\d{1,2}\s*\(\s*(?:XXS|XS|S|M|L|XL|XXL|[2-5]XL|FREE|F)\s*\)|XXS|XS|S|M|L|XL|XXL|[2-5]XL|FREE|F|\d{2,3})$/i
+const AVATAR_ALT_RE = /프로필|profile|avatar|아이콘|icon|logo|badge/i
+const MAX_PHOTOS = 5
+const MAX_SENTENCES = 40
+const HARD_SKIP_TAG = /^(?:BUTTON|SELECT|SCRIPT|STYLE)$/
+const SOFT_SKIP_TAG = /^A$/
+
+const cleanLines = (s) =>
+  String(s || '')
+    .split('\n')
+    .map(clean)
+    .filter(Boolean)
+    .join('\n')
+
+// 줄바꿈: <br>만 든 요소는 childNodes가 있으면 <br>을 줄바꿈으로 바꿔요.
+// (테스트용 가짜 DOM의 textContent는 <br>을 버려서, childNodes를 쓸 수 있을 때만 줄바꿈이 살아요.)
+function blockText(e) {
+  const kids = childrenOf(e)
+  if (kids.length && e.childNodes) {
+    return cleanLines(
+      Array.from(e.childNodes)
+        .map((n) => (n.nodeType === 3 ? n.nodeValue : String(n.tagName).toUpperCase() === 'BR' ? '\n' : ''))
+        .join(''),
+    )
+  }
+  return clean(e.textContent)
+}
+
+// 끝에 붙은 '...더보기', '…', ' ...' 같은 잘림 표시를 걷어냅니다.
+function stripTail(s) {
+  let t = String(s)
+  for (let i = 0; i < 4; i++) {
+    const before = t
+    t = t.replace(/\s*(?:\.{3}|…)?\s*(?:더보기|접기)\s*$/, '').replace(/\s+(?:\.{3}|…)\s*$/, '').replace(/…\s*$/, '')
+    if (t === before) break
+  }
+  return t.trim()
+}
+const looseKey = (s) => stripTail(s).replace(/[.…\s]+$/, '')
+
+// 같은 글이 두 번 이어 붙은 경우(전체 + 잘린 미리보기)에는 앞의 한 번만 남겨요.
+function collapseRepeat(s) {
+  const t = stripTail(s)
+  const head = t.slice(0, 12)
+  if (head.length < 12) return t
+  const j = t.indexOf(head, 12)
+  if (j <= 0) return t
+  const first = t.slice(0, j).trim()
+  const rest = looseKey(t.slice(j))
+  return rest && looseKey(first).startsWith(rest) ? first : t
+}
+
+function sizePartOf(option) {
+  for (const seg of String(option || '').split(/[·/,]/)) {
+    const s = clean(seg)
+    if (OPTION_SIZE_RE.test(s)) return s
+  }
+  return ''
+}
+
+function photoUrl(raw) {
+  const s = String(raw || '').trim()
+  if (!s) return null
+  try {
+    const u = new URL(s.startsWith('//') ? `https:${s}` : s)
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.href : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 리뷰 카드 요소에서 화면에 보여줄 항목만 읽습니다.
+ * @returns {{ nick, productName, option, sizePart, bodyInfo, body, photos, structured, deduped }}
+ */
+export function extractCardView(card) {
+  const order = all(card, '*')
+  const idx = new Map(order.map((e, i) => [e, i]))
+  const within = (e, tagRe, roleRe) => {
+    for (let cur = e; cur; cur = cur.parentElement) {
+      if (tagRe.test(String(cur.tagName).toUpperCase())) return true
+      if (roleRe.test(cur.getAttribute?.('role') || '')) return true
+      if (cur === card) break
+    }
+    return false
+  }
+  const blocks = []
+  for (const e of order) {
+    const tag = String(e.tagName).toUpperCase()
+    if (tag === 'IMG' || tag === 'BR' || !childrenOf(e).every((k) => String(k.tagName).toUpperCase() === 'BR')) continue
+    const text = blockText(e)
+    if (!text) continue
+    if (within(e, HARD_SKIP_TAG, /^button$/i)) continue
+    blocks.push({ el: e, text, soft: within(e, SOFT_SKIP_TAG, /^link$/i), kind: LABEL_KIND[text.replace(/\s/g, '')] || null })
+  }
+  const uiOnly = (t) => UI_ONLY_RE.test(t) || DATE_RE.test(t) || RATING_RE.test(t)
+  const plain = (b) => !b.soft && !b.kind && !uiOnly(b.text)
+
+  const found = {}
+  const used = new Set()
+  blocks.forEach((b, i) => {
+    if (!b.kind || found[b.kind] != null) return
+    const parent = b.el.parentElement
+    const next = blocks[i + 1]
+    let value = ''
+    if (next && !next.kind && parent?.contains?.(next.el)) {
+      value = next.text
+      used.add(next)
+    } else {
+      const ptext = parent ? clean(parent.textContent) : ''
+      const rest = ptext.startsWith(b.text) ? clean(ptext.slice(b.text.length)) : ''
+      if (rest) value = rest
+      else if (next && !next.kind) {
+        value = next.text
+        used.add(next)
+      }
+    }
+    found[b.kind] = { index: i, value, el: b.el }
+  })
+
+  const firstLabel = Math.min(...Object.values(found).map((f) => f.index), Infinity)
+  const structured = Object.keys(found).length > 0
+  let nickBlock = null
+  if (structured) {
+    nickBlock = blocks.slice(0, firstLabel).find((b) => plain(b) && b.text.length <= 20 && !/^\d+$/.test(b.text) && !used.has(b)) || null
+  }
+
+  let body = ''
+  let deduped = false
+  const pool = blocks.filter((b) => plain(b) && !used.has(b) && b !== nickBlock && b.kind == null)
+  if (structured) {
+    const prose = pool.filter((b) => hasProse(b.text))
+    let best = null
+    for (const b of prose) {
+      const key = looseKey(collapseRepeat(b.text))
+      if (!best || key.length > best.key.length || (key.length === best.key.length && !/(?:\.{3}|…|더보기)\s*$/.test(b.text) && /(?:\.{3}|…|더보기)\s*$/.test(best.b.text))) best = { b, key }
+    }
+    if (best) {
+      const chosen = collapseRepeat(best.b.text)
+      deduped = chosen !== stripTail(best.b.text) || prose.some((b) => b !== best.b && best.key.startsWith(looseKey(b.text)))
+      body = stripTail(chosen)
+    }
+  } else {
+    body = stripTail(cleanLines(pool.map((b) => b.text).join('\n')))
+  }
+
+  const photos = []
+  for (const img of all(card, 'img')) {
+    const url = photoUrl(img.getAttribute('src') || img.getAttribute('data-src'))
+    if (!url || photos.includes(url)) continue
+    const w = parseInt(img.getAttribute('width') || '', 10)
+    const h = parseInt(img.getAttribute('height') || '', 10)
+    if ((Number.isFinite(w) && w <= 48) || (Number.isFinite(h) && h <= 48)) continue
+    if (AVATAR_ALT_RE.test(img.getAttribute('alt') || '')) continue
+    const at = idx.get(img)
+    if (nickBlock && (at < idx.get(nickBlock.el) || img.parentElement === nickBlock.el.parentElement)) continue
+    if (found.product && at < idx.get(found.product.el)) continue
+    photos.push(url)
+    if (photos.length >= MAX_PHOTOS) break
+  }
+
+  const option = found.option?.value || ''
+  return {
+    nick: nickBlock?.text || '',
+    productName: found.product?.value || '',
+    option,
+    sizePart: sizePartOf(option),
+    bodyInfo: found.body?.value || '',
+    body,
+    photos,
+    structured,
+    deduped,
+  }
+}
+
+/**
+ * 리뷰 본문을 문장 단위로 나눕니다. 줄바꿈과 문장 끝 기호(. ! ? 。 …, 연속 포함) 뒤 공백에서 자르고,
+ * 2.5 나 ver.2 처럼 기호 바로 뒤에 글자가 붙은 곳은 자르지 않아요. 끝 기호는 앞 문장에 남깁니다.
+ */
+export function splitSentences(body) {
+  const out = []
+  for (const line of String(body || '').split(/\n+/)) {
+    const t = clean(line)
+    if (!t) continue
+    for (const m of t.match(/[^]*?(?:[.!?。…]+(?=\s|$)|$)/g) || []) {
+      const s = m.trim()
+      if (s) out.push(s)
+    }
+  }
+  return out.slice(0, MAX_SENTENCES)
+}
+
 // 상품 페이지로 보이는지: JSON-LD Product, og:type=product, 또는 사이즈표가 있는 경우.
 // 주문·목록 같은 다른 페이지에 버튼이 뜨지 않게 하는 용도이며, 완벽한 판별은 아니에요.
 export function isProductPage(root) {
@@ -401,13 +602,23 @@ export function parsePage(root, pageUrl = '', opts = {}) {
   const entries = []
   const hasClue = (p) => p.height || p.weight || p.size || p.fit
   const regions = sizeChartRegions(root, grids)
-  const cardTexts = readReviewCards(root, regions)
+  const cardEls = readReviewCardEls(root, regions)
+  const cardTexts = cardEls.map((c) => clean(c.textContent))
   const cardJoined = cardTexts.join('\n')
-  for (const t of cardTexts) {
-    const parsed = parseReviewText(t, sizeLabels)
-    if (hasClue(parsed)) entries.push({ text: t, parsed })
-    else reviewDropped.noClue += 1
-  }
+  const bodyExtract = { structured: 0, fallback: 0, deduped: 0, withNick: 0, withPhoto: 0, withProductName: 0 }
+  cardEls.forEach((cardEl, i) => {
+    const t = cardTexts[i]
+    const v = extractCardView(cardEl)
+    // 구조를 찾았으면 상품명이 아닌 실제 본문·옵션·체형 정보로만 해석해요.
+    const synthesized = v.structured ? [v.sizePart ? `구매 옵션 ${v.sizePart}.` : '', v.bodyInfo, v.body].filter(Boolean).join(' ') : t
+    const parsed = parseReviewText(synthesized, sizeLabels)
+    if (!hasClue(parsed)) {
+      reviewDropped.noClue += 1
+      return
+    }
+    // 화면에 그릴 때만 메모리에 두는 값이에요. 저장하거나 보내지 않습니다.
+    entries.push({ text: t, parsed, view: { nick: v.nick, productName: v.productName, body: v.body, photos: v.photos }, stat: v })
+  })
   for (const t of readReviewElements(root, reviewDropped, regions)) {
     if (cardJoined.includes(t)) {
       reviewDropped.duplicate += 1
@@ -428,7 +639,23 @@ export function parsePage(root, pageUrl = '', opts = {}) {
       continue
     }
     seen.add(text)
-    reviews.push({ id: reviews.length + 1, nick: '구매자', text, ...(typeof item === 'string' ? parseReviewText(text, sizeLabels) : item.parsed) })
+    const isItem = typeof item !== 'string'
+    if (isItem && item.stat) {
+      const s = item.stat
+      if (s.structured) bodyExtract.structured += 1
+      else bodyExtract.fallback += 1
+      if (s.deduped) bodyExtract.deduped += 1
+      if (s.nick) bodyExtract.withNick += 1
+      if (s.photos.length) bodyExtract.withPhoto += 1
+      if (s.productName) bodyExtract.withProductName += 1
+    }
+    reviews.push({
+      id: reviews.length + 1,
+      nick: '구매자',
+      text,
+      ...(isItem ? item.parsed : parseReviewText(text, sizeLabels)),
+      ...(isItem && item.view ? { view: item.view } : {}),
+    })
   }
   const reviewTotalOnPage = readReviewTotal(root)
   if (reviews.length === 0) notes.push('이 페이지에서 리뷰를 찾지 못했어요. 리뷰가 아직 불러와지지 않았을 수 있어요.')
@@ -451,7 +678,7 @@ export function parsePage(root, pageUrl = '', opts = {}) {
       : null,
     optionLabels,
     reviewTotalOnPage,
-    reviewMeta: { cards: cardTexts.length, dropped: reviewDropped },
+    reviewMeta: { cards: cardTexts.length, dropped: reviewDropped, bodyExtract },
     sizeChartMeta: {
       ...chartMeta,
       selectedKind: chartMeta.selectedIndex == null ? null : kinds[chartMeta.selectedIndex] || null,

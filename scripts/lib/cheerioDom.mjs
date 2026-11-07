@@ -13,6 +13,13 @@ export function fakeDocument(html) {
   const build = (node) => ({
     contains: (other) => other === wrap(node) || $(other._node).parents().toArray().includes(node),
     _node: node,
+    nodeType: 1,
+    // <br> 줄바꿈을 읽을 수 있도록 글 노드와 요소를 순서대로 돌려줘요 (textContent는 <br>을 버립니다)
+    get childNodes() {
+      return (node.children || []).map((c) =>
+        c.type === 'text' ? { nodeType: 3, nodeValue: c.data, textContent: c.data } : c.type === 'tag' ? wrap(c) : { nodeType: 8, nodeValue: '', textContent: '' },
+      )
+    },
     get textContent() {
       return $(node).text()
     },
