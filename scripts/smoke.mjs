@@ -3528,7 +3528,7 @@ await atest('content.js(가짜 DOM, vm): 가짜 HTML에서 분류 신뢰도가 �
 
 
 // ---------- 신발 전용 사이즈 비교 ----------
-import { parseShoeOption, parseShoeOptions, parseShoeFeel, aggregateShoeReviews, reviewAggregateLine, recommendShoe, shoeViewFor, withShoeRecommendation, chartWidthsByMm, shoeSizeToMm, resolveShoeSizeMm, shoeWardrobeFields, SHOE_UNSUPPORTED_NOTE } from '../src/lib/shoeFit.js'
+import { parseShoeOption, parseShoeOptions, parseShoeFeel, aggregateShoeReviews, reviewAggregateLine, recommendShoe, shoeViewFor, withShoeRecommendation, chartWidthsByMm, shoeSizeToMm, resolveShoeSizeMm, shoeWardrobeFields, SHOE_UNSUPPORTED_NOTE, SHOE_NO_FOOT_NOTE } from '../src/lib/shoeFit.js'
 
 const SHOE_NAME = '[xYASE] braided moc boots (grunge taupe)'
 const shoeOpts = ['230 (230-235)', '240 (240-245)', '250 (250-255)']
@@ -4107,6 +4107,74 @@ test('웹 렌더: ResultView(신발) - 신발 비교와 발볼 근거, 옷 전�
   assert.ok(!txt.includes('사이즈표 요약') && !txt.includes('체형 비교'), '신발에는 옷 전용 카드가 없다')
   assert.ok(/옷장에 담기 \(\d{3}\)/.test(txt), '추천 mm가 담기 버튼에 들어간다')
   assert.ok(txt.includes('다른 옷 찾기'))
+})
+
+
+// ---- 신발 후속 리뷰 수정 (v1) ----
+test('리뷰 수정: 렌더 도우미는 가짜 window/localStorage를 남기지 않는다', () => {
+  assert.equal(typeof window, 'undefined')
+  assert.equal(typeof localStorage, 'undefined')
+})
+
+test('리뷰 수정: esbuild는 devDependencies에 고정되어 있다', () => {
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.match(pkg.devDependencies.esbuild, /^\d+\.\d+\.\d+$/)
+})
+
+test('리뷰 수정: 발볼로 내린 뒤 "작아요" 리뷰가 많아도 다시 올리지 않고 안내만 한다', () => {
+  const sizeWidths = mmWidths([[230, 90], [240, 92], [250, 104], [260, 106]])
+  const mkR = (size, fit) => ({ size, view: { shoeFeel: { size: fit, width: 'normal', extras: [] } } })
+  const reviews = [mkR('240', 'small'), mkR('240', 'small'), mkR('240', 'small')]
+  const r = recommendShoe({ options: widthOpts([230, 240, 250, 260]), footLength: 235, preferredFit: 'relaxed', footWidth: 'narrow', sizeWidths, reviews })
+  assert.equal(r.recommended.mm, 240)
+  assert.ok(r.widthLine.includes('한 단계 작은'))
+  assert.ok(r.notes.some((t) => t.includes('작다는 의견이 많지만') && t.includes('다시 올리지 않았어요')))
+  assert.ok(!r.reasons.some((t) => t.includes('한 단계 큰')))
+})
+
+test('리뷰 수정: 가져오기에서 mm 신발은 발길이 모름 이유, 읽을 수 없는 이름은 미지원 이유', () => {
+  const env = (item) => ({ app: 'fitcheck', kind: 'wardrobe-item', v: 1, item: { product: { name: '남성 러닝화', mall: 'shop', category: 'shoes', url: 'https://shop.example/s' }, verdicts: [], ...item } })
+  const mm = parseImportText(JSON.stringify(env({ size: '250' })))
+  assert.equal(mm.item.verdictStatus, 'unsupported')
+  assert.equal(mm.item.verdictNote, SHOE_NO_FOOT_NOTE)
+  const un = parseImportText(JSON.stringify(env({ size: 'FREE' })))
+  assert.equal(un.item.verdictNote, SHOE_UNSUPPORTED_NOTE)
+})
+
+const wardrobeShoe = (size, profile, extra = {}) => makeWardrobeItem({
+  product: { name: '러닝화', mall: 'shop', category: 'shoes', url: `https://shop.example/f-${size}`, sizeChart: { measures: { [size]: { length: 1 } } } },
+  size, profile, now: 1, ...extra,
+})
+
+test('웹 렌더: Wardrobe - 발길이를 모르는 mm 신발에는 "mm가 아니라서" 문구가 붙지 않는다', () => {
+  const item = { ...wardrobeShoe('250', null), id: 'n' }
+  assert.equal(item.verdictNote, SHOE_NO_FOOT_NOTE)
+  const txt = textOf(render(WEB.Wardrobe, { items: [item], onDelete: noop, onBack: noop }))
+  assert.ok(txt.includes(SHOE_NO_FOOT_NOTE))
+  assert.ok(!txt.includes('mm가 아니라서'))
+})
+
+test('웹 렌더: Wardrobe - 환산한 사이즈는 판정과 함께 환산 안내가 보인다', () => {
+  const item = { ...wardrobeShoe('US 9', { gender: 'male', height: 175, weight: 70, footLength: 265 }), id: 'c' }
+  assert.equal(item.verdictStatus, 'converted')
+  assert.ok(item.verdicts.length > 0)
+  const html = render(WEB.Wardrobe, { items: [item], onDelete: noop, onBack: noop })
+  const txt = textOf(html)
+  assert.ok(html.includes('wd-converted'))
+  assert.ok(txt.includes('발길이') && txt.includes(item.verdictNote) && txt.includes('휴리스틱'))
+})
+
+test('웹 렌더: TryOnPanel 신발 분기 - 미지원/발길이 모름/환산 안내를 구분해 보여준다', () => {
+  const shoe = { name: '러닝화', mall: 'shop', category: 'shoes', url: 'https://shop.example/t', sizeChart: { measures: {} } }
+  const tx = (selectedSize, profile) => textOf(render(WEB.TryOnPanel, { product: shoe, profile, verdicts: [], selectedSize, captureRef: { current: null } }))
+  const base = tx('270', null)
+  assert.ok(base.includes('신발은 사진 합성') && !base.includes('AI 합성하기'))
+  const un = tx('M', { gender: 'male', height: 175, weight: 70, footLength: 265 })
+  assert.ok(un.includes(SHOE_UNSUPPORTED_NOTE) && un.includes('mm로 읽거나 환산하지 못해'))
+  const nf = tx('270', null)
+  assert.ok(nf.includes(SHOE_NO_FOOT_NOTE) && nf.includes('발길이를 몰라') && !nf.includes('환산하지 못해'))
+  const cv = tx('US 9', { gender: 'male', height: 175, weight: 70, footLength: 265 })
+  assert.ok(cv.includes('약 270mm') && !cv.includes('환산하지 못해'))
 })
 
 console.log(`\n${passed}개 통과`)

@@ -261,7 +261,7 @@ export function recommendShoe({ options, footLength, footLengthEstimated = false
     if (agg && agg.felt >= MIN_REVIEWS_FOR_BUMP) {
       const smallMany = agg.size.small / agg.felt >= 0.5
       const largeMany = agg.size.large / agg.felt >= 0.5
-      if (smallMany && !bumped && idx < rows.length - 1) {
+      if (smallMany && !bumped && !lowered && idx < rows.length - 1) {
         idx += 1
         reasons.push(`${rows[idx - 1].mm} 구매 리뷰 ${agg.felt}건 중 ${agg.size.small}건이 작다고 해서 한 단계 큰 ${rows[idx].label}을(를) 권해요.`)
       } else if (largeMany && idx > 0 && !lowered) {
@@ -271,6 +271,8 @@ export function recommendShoe({ options, footLength, footLengthEstimated = false
         notes.push(`${rows[idx].mm} 구매 리뷰에서 크다는 의견이 많지만, 발볼 때문에 이미 한 단계 작은 사이즈로 골랐어요.`)
       } else if (smallMany && bumped) {
         notes.push(`${rows[idx].mm} 구매 리뷰에서 작다는 의견이 많지만, 발볼 때문에 이미 한 단계 큰 사이즈로 골랐어요.`)
+      } else if (smallMany && lowered) {
+        notes.push(`${rows[idx].mm} 구매 리뷰에서 작다는 의견이 많지만, 발볼 때문에 한 단계 작은 사이즈로 골랐고 다시 올리지 않았어요.`)
       } else if (smallMany) {
         notes.push(`${rows[idx].mm} 구매 리뷰에서 작다는 의견이 많아요. 한 단계 큰 사이즈가 없어 그대로 두었어요.`)
       }

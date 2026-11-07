@@ -3,6 +3,7 @@ import { CATEGORY_LABEL } from '../data/measurements.js'
 import { findSimilar, describeDiff } from '../lib/wardrobe.js'
 import { parseImportText, LIMITS } from '../lib/wardrobeImport.js'
 import { trimNote } from '../lib/storage.js'
+import { SHOE_UNSUPPORTED_NOTE } from '../lib/shoeFit.js'
 import ReviewTab from './ReviewTab.jsx'
 
 const MAX_COMPARE = 4
@@ -17,12 +18,15 @@ function VerdictLine({ verdicts, item }) {
   if (!verdicts?.length) {
     // 신발은 사이즈 이름을 mm로 읽지 못하면 이유를 같이 보여줘요 (S/M/L·FREE 등)
     const why = item?.verdictStatus === 'unsupported' ? (item.verdictNote || '판정 없음(사이즈 체계 미지원)') : item?.verdictNote
-    if (why) return <span className="muted small wd-unsupported">{why}{item.verdictStatus === 'unsupported' ? ' · 사이즈 이름이 mm가 아니라서 내 발길이와 비교하지 못했어요.' : ''}</span>
+    // 추가 설명은 사이즈 이름을 읽지 못한 경우에만 붙여요 (발길이를 모르는 mm 사이즈에는 붙이지 않아요).
+    const unreadable = item?.verdictStatus === 'unsupported' && (item.verdictNote || SHOE_UNSUPPORTED_NOTE) === SHOE_UNSUPPORTED_NOTE
+    if (why) return <span className="muted small wd-unsupported">{why}{unreadable ? ' · 사이즈 이름이 mm가 아니라서 내 발길이와 비교하지 못했어요.' : ''}</span>
     return <span className="muted small">부위별 판정 없음</span>
   }
   return (
     <span className="wd-verdicts">
       {verdicts.map((v) => <span key={v.part} className={`v-${v.key}`}>{v.label} {v.verdict}</span>)}
+      {item?.verdictStatus === 'converted' && item.verdictNote ? <span className="muted small wd-converted"> · {item.verdictNote}</span> : null}
     </span>
   )
 }
