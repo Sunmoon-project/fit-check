@@ -130,6 +130,9 @@ tr.rec .cv{color:#9fe0ba}
 .shl{font-weight:700}
 .shs{font-size:11px;color:#6b6b70}
 .shv{margin-left:auto;font-size:12px;font-weight:600}
+.shr li.unfit{opacity:.5}
+.shv.v-unfit{color:#d23b3b}.shv.v-iffy{color:#c67a1a}.shv.v-fit{color:#1a7f46}.shv.v-roomy{color:#3a6ea5}
+.nofit{margin:6px 0;padding:8px 10px;border:1px solid #d23b3b;border-radius:8px;color:#d23b3b;font-weight:700}
 .cdiff{margin:4px 0 0;font-size:11px;color:#6b6b70}
 .ctier{font-size:12px;font-weight:700}
 .cb.high .ctier,.cb.high .cpct{color:#0a7a3c}
@@ -988,12 +991,14 @@ function shoeBlock(sv) {
     ? `내 발길이 ${sv.footLength}mm${sv.footLengthEstimated ? ' (키로 추정)' : ''} · 발볼 ${sv.footWidthLabel || '입력 안 함'}`
     : '발길이를 알 수 없어요'
   box.append(el('p', null, foot))
+  if (sv.noFit) box.append(el('p', 'nofit', sv.noFit.message))
+  if (sv.windowText) box.append(el('p', 'tiny', sv.windowText))
   const ul = el('ul', 'shr')
   for (const row of sv.rows) {
-    const li = el('li', row.recommended ? 'on' : null)
+    const li = el('li', [row.recommended ? 'on' : '', row.unfit ? 'unfit' : ''].filter(Boolean).join(' ') || null)
     li.append(el('span', 'shl', row.recommended ? `${row.label} 추천` : row.label))
     if (row.ease != null) li.append(el('span', 'shs', `여유 ${row.ease > 0 ? '+' : ''}${row.ease}mm`))
-    if (row.verdict) li.append(el('span', 'shv', row.verdict))
+    if (row.verdict) li.append(el('span', `shv v-${row.verdictKey}`, row.verdict))
     if (row.widthText) li.append(el('span', 'shs', row.widthText))
     if (row.reviewLine) li.append(el('span', 'shs', row.reviewLine))
     ul.append(li)

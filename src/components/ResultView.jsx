@@ -37,7 +37,7 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
   const isShoes = !!shoe
   // 신발이면 추천 사이즈를 신발 추천으로 통일해요 (추천 카드, 선택 기본값, 옷장, 입어보기가 같은 사이즈를 가리킴).
   const shownResult = useMemo(() => withShoeRecommendation(result, shoe), [result, shoe])
-  const selectedSize = picked || shownResult.recommendedSize || result.perSize[0]?.size || null
+  const selectedSize = picked || shownResult.recommendedSize || (shoe?.noFit ? String(shoe.noFit.size) : null) || result.perSize[0]?.size || null
   const verdicts = result.perSize.find((p) => p.size === selectedSize)?.verdicts || []
   // 지금 보는 옷 (옷장 비교용)
   const currentTarget = useMemo(

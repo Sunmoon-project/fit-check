@@ -28,6 +28,11 @@
   --v-regular: #1a7f46;
   --v-relaxed: #3a6ea5;
   --v-oversize: #6a52a3;
+  /* 신발 판정 */
+  --v-unfit: #d23b3b;
+  --v-iffy: #c67a1a;
+  --v-fit: #1a7f46;
+  --v-roomy: #3a6ea5;
 }
 
 * { box-sizing: border-box; }
@@ -354,6 +359,16 @@ body {
 .v-regular { color: var(--v-regular); }
 .v-relaxed { color: var(--v-relaxed); }
 .v-oversize { color: var(--v-oversize); }
+.v-unfit { color: var(--v-unfit); }
+.v-iffy { color: var(--v-iffy); }
+.v-fit { color: var(--v-fit); }
+.v-roomy { color: var(--v-roomy); }
+.v-bg-unfit { background: var(--v-unfit) !important; }
+.v-bg-iffy { background: var(--v-iffy) !important; }
+.v-bg-fit { background: var(--v-fit) !important; }
+.v-bg-roomy { background: var(--v-roomy) !important; }
+.shoe-compare .row-unfit { opacity: 0.5; }
+.shoe-nofit { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--v-unfit); border-radius: 8px; color: var(--v-unfit); font-weight: 800; }
 .v-bg-tooTight { background: var(--v-tooTight) !important; }
 .v-bg-tight { background: var(--v-tight) !important; }
 .v-bg-regular { background: var(--v-regular) !important; }
