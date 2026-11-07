@@ -3,7 +3,7 @@
 
 // ---------- 카테고리 판단 ----------
 const CATEGORY_RULES = [
-  ['shoes', /스니커|운동화|신발|로퍼|부츠|샌들|슬리퍼|구두|러닝화|sneaker|shoe/i],
+  ['shoes', /스니커|운동화|신발|슈즈|로퍼|부츠|샌들|슬리퍼|구두|러닝화|sneaker|shoe|boots|loafer|sandal/i],
   ['dress', /원피스|드레스|dress/i],
   ['outer', /자켓|재킷|코트|패딩|점퍼|블루종|아우터|파카|바람막이|무스탕|jacket|coat|parka/i],
   ['bottom', /팬츠|바지|청바지|슬랙스|쇼츠|반바지|스커트|조거|치노|트라우저|jeans|pants|slacks|skirt|shorts/i],

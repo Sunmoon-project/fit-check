@@ -2901,6 +2901,79 @@ test('가짜 HTML: 신발 사이즈표 변형(사이즈(mm) 줄, 발길이 열, 
   assert.deepEqual(Object.keys(c.sizeChart?.measures || {}), ['250', '255', '260'])
 })
 
+const sysPage = (name, head, rows, opts = '') => parsePage(fakeDocument(`<html><body>${opts}<h1>${name}</h1><table>${[head, ...rows].map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</table></body></html>`), '')
+const SYS_HEAD = ['사이즈', '총장', '어깨너비', '가슴단면', '소매길이']
+const sysRows = (names) => names.map((n, i) => [n, 66 + i * 2, 48 + i * 2, 54 + i * 2, 60 + i])
+
+test('가짜 HTML: 숫자 0~3 사이즈와 S~XL 글자 사이즈 표가 같은 실측 항목(가슴단면·어깨너비·소매길이·총장)을 읽는다', () => {
+  for (const names of [['0', '1', '2', '3'], ['S', 'M', 'L', 'XL']]) {
+    const page = sysPage('오버핏 맨투맨', SYS_HEAD, sysRows(names))
+    assert.deepEqual(Object.keys(page.sizeChart.measures), names, names.join())
+    const m = page.sizeChart.measures[names[0]]
+    assert.equal(m.shoulder, 48)
+    assert.equal(m.chest, 108, '가슴단면 54 x 2')
+    assert.equal(m.arm, 60)
+    assert.equal(m.topLength, 66)
+  }
+})
+
+test('가짜 HTML: 2XL·XXL·3XL·FREE, 여성 44/55/66/77, 90~110 사이즈를 표와 옵션에서 읽는다', () => {
+  for (const names of [['L', 'XL', '2XL', '3XL'], ['M', 'L', 'XL', 'XXL'], ['FREE'], ['44', '55', '66', '77'], ['90', '95', '100', '105', '110']]) {
+    const page = sysPage('코튼 셔츠', SYS_HEAD, sysRows(names))
+    assert.deepEqual(Object.keys(page.sizeChart?.measures || {}), names.map((n) => n), names.join())
+  }
+  const opts = '<select><option>44</option><option>55</option><option>66</option><option>77</option></select>'
+  assert.deepEqual(parsePage(fakeDocument(`<html><body>${opts}<h1>x</h1></body></html>`), '').optionLabels, ['44', '55', '66', '77'])
+  const opts2 = '<select><option>3XL</option><option>FREE</option><option>XXL</option></select>'
+  assert.deepEqual(parsePage(fakeDocument(`<html><body>${opts2}<h1>x</h1></body></html>`), '').optionLabels, ['3XL', 'FREE', 'XXL'])
+})
+
+test('가짜 HTML: 바지 인치 28~34 허리·허벅지 표는 하의이고 신발로 읽지 않는다', () => {
+  const head = ['사이즈', '총장', '허리단면', '허벅지단면', '밑위']
+  const rows = [['28', 100, 37, 30, 28], ['30', 101, 39, 31, 28.5], ['32', 102, 41, 32, 29], ['34', 103, 43, 33, 29.5]]
+  const page = sysPage('와이드 팬츠', head, rows)
+  assert.deepEqual(Object.keys(page.sizeChart.measures), ['28', '30', '32', '34'])
+  assert.equal(page.category, 'bottom')
+  assert.equal(page.sizeChart.measures['28'].waist, 74)
+})
+
+test('가짜 HTML: 230부터 시작하는 신발 표와 옵션만 있는 신발은 shoes와 발길이로 읽는다', () => {
+  const sizes = ['230', '235', '240', '250', '260', '270', '280']
+  const table = sysPage('캔버스 운동화', ['사이즈(mm)', '발길이'], sizes.map((n) => [n, n]))
+  assert.equal(table.category, 'shoes')
+  assert.equal(table.sizeChart.measures['230'].footLength, 230)
+  assert.deepEqual(Object.keys(table.sizeChart.measures), sizes)
+  // 상품명에 신발 단어가 없어도 JSON-LD category/빵부스러기 또는 mm 줄로 알아본다
+  const ld = '<script type="application/ld+json">{"@type":"BreadcrumbList","itemListElement":[{"name":"신발"},{"name":"스니커즈"}]}</script>'
+  const optHtml = sizes.slice(0, 4).map((n) => `<option>화이트 / ${n}</option>`).join('')
+  for (const extra of ['', ld]) {
+    const p = parsePage(fakeDocument(`<html><body>${extra}<h1>모델 A</h1><select>${optHtml}</select></body></html>`), '')
+    assert.equal(p.category, 'shoes')
+    assert.deepEqual(Object.keys(p.sizeChart.measures), ['230', '235', '240', '250'])
+    assert.equal(p.sizeChart.measures['230'].footLength, 230)
+  }
+  const kr = parsePage(fakeDocument(`<html><body><h1>모델 B</h1><table><tr><td>KR</td><td>230</td><td>235</td><td>240</td></tr></table></body></html>`), '')
+  assert.equal(kr.category, 'shoes')
+  const cat = parsePage(fakeDocument('<html><body><script type="application/ld+json">{"@type":"Product","name":"모델 C","category":"신발 > 스니커즈"}</script><h1>모델 C</h1></body></html>'), '')
+  assert.equal(cat.category, 'shoes')
+})
+
+test('가짜 HTML: 의류 옵션(95/100/105, 28~34, S~XL)과 총장 67은 신발로 오인하지 않는다', () => {
+  for (const labels of [['95', '100', '105'], ['28', '30', '32', '34'], ['S', 'M', 'L', 'XL'], ['0', '1', '2', '3']]) {
+    const o = labels.map((n) => `<option>${n}</option>`).join('')
+    const p = parsePage(fakeDocument(`<html><body><h1>니트 가디건</h1><select>${o}</select></body></html>`), '')
+    assert.notEqual(p.category, 'shoes', labels.join())
+  }
+  assert.equal(analyzeSizeCharts([[['총장', '67', '69', '71'], ['어깨', '50', '52', '54']]], 'top', []).chart, null)
+})
+
+test('발길이 범위: 210~310mm만 유효하고 230부터 시작하는 신발 사이즈는 모두 범위 안이다', async () => {
+  const { inFieldRange, SHOE_SIZES } = await import('../src/data/measurements.js')
+  assert.ok(inFieldRange('footLength', 230) && inFieldRange('footLength', 210) && inFieldRange('footLength', 310))
+  assert.ok(!inFieldRange('footLength', 67) && !inFieldRange('footLength', 205) && !inFieldRange('footLength', 320))
+  assert.ok(SHOE_SIZES.every((n) => inFieldRange('footLength', n)))
+})
+
 test('확장 카드 CSS: 근거 요약은 배경 박스 없이 12px, 글꼴은 한글 폰트 우선', () => {
   const js = readFileSync(new URL('../extension/content.js', import.meta.url), 'utf8')
   assert.ok(js.includes('.sum{margin:8px 0 0;color:#555;font-size:12px}'))

@@ -37,6 +37,21 @@ function collectJsonLd(root) {
 
 const isType = (n, t) => (Array.isArray(n['@type']) ? n['@type'].includes(t) : n['@type'] === t)
 
+// 카테고리 힌트: JSON-LD Product.category, BreadcrumbList 항목 이름 (상품명 뒤에 붙여 guessCategory에 넘겨요)
+function categoryHints(ld) {
+  const out = []
+  for (const n of ld) {
+    if (isType(n, 'Product') && n.category) out.push(String(Array.isArray(n.category) ? n.category.join(' ') : n.category))
+    if (isType(n, 'BreadcrumbList') && Array.isArray(n.itemListElement)) {
+      for (const it of n.itemListElement) {
+        const nm = it?.name ?? it?.item?.name
+        if (nm) out.push(String(nm))
+      }
+    }
+  }
+  return clean(out.join(' ')).slice(0, 300)
+}
+
 export function readTables(root) {
   return all(root, 'table').map((table) => {
     const rows = []
@@ -157,6 +172,9 @@ const MAX_OPTIONS = 20
 const TAIL_MM_RE = /(?:^|[\s\/·,|-])(2[0-9]\d|3[01]\d)(?:\s*(?:mm|㎜))?\s*$/i
 // li/button/숨김 요소에서는 공백만 앞에 있는 숫자('리뷰 250')를 mm로 보지 않고, 구분자(/ · , | -)가 있을 때만 받아요.
 const TAIL_MM_STRICT_RE = /[\/·,|-]\s*(2[0-9]\d|3[01]\d)(?:\s*(?:mm|㎜))?\s*$/i
+// 글자 사이즈(M, 2XL, FREE)와 번호 사이즈(0~3, 44, 95, 28)는 구분자 뒤 끝부분이나 옵션 전체가 그 값일 때만 받아요.
+const TAIL_ALPHA_RE = /(?:^|[\/·,|-]\s*|\s+-\s+)(XXS|XS|S|M|L|XL|XXL|XXXL|[2-5]XL|FREE|F|프리|ONE ?SIZE)\s*$/i
+const TAIL_NUM_RE = /(?:^|[\/·,|-]\s*|\s+-\s+)(\d{1,3})\s*$/
 const TAIL_OPTION_RE = /(?:^|[\s\/·,|-])(\d{1,2})\s*\(\s*(XXS|XS|S|M|L|XL|XXL|[2-5]XL|FREE|F)\s*\)\s*$/i
 
 export function readOptionLabels(root) {
@@ -175,7 +193,8 @@ export function readOptionLabels(root) {
     if (out.length >= MAX_OPTIONS) break
   }
   // select/option, 버튼 목록, JSON-LD Product offers(name/sku)에서는 '블랙 / 0 (S)'처럼 색상 뒤에 붙은 끝부분도 읽어요.
-  const add = (text, strictMm = false) => {
+  const plain = []
+  const add = (text, strictMm = false, allowPlain = false) => {
     const t = clean(text)
     if (t.length > 80) return
     const mm = t.match(strictMm ? TAIL_MM_STRICT_RE : TAIL_MM_RE)
@@ -185,18 +204,40 @@ export function readOptionLabels(root) {
       return
     }
     const m = t.match(TAIL_OPTION_RE)
-    if (!m) return
+    if (!m) {
+      // 선택 목록(option)과 JSON-LD offers에서만 'M', '블랙 / 2XL', '44', '블랙 / 95' 같은 단순 사이즈를 읽어요.
+      if (!allowPlain) return
+      const a = t.match(TAIL_ALPHA_RE)
+      if (a) return void plain.push({ kind: 'alpha', v: a[1].toUpperCase().replace(/\s/g, '') })
+      const nm = t.match(TAIL_NUM_RE)
+      if (nm && !/(?:^|\s)\d{1,3}\s*(?:개|원|%|cm|kg)/i.test(t)) plain.push({ kind: 'num', v: nm[1] })
+      return
+    }
     const label = `${m[1]} (${m[2].toUpperCase()})`
     if (!out.includes(label) && out.length < MAX_OPTIONS) out.push(label)
   }
   for (const e of all(root, 'option,button,[role="option"],li,[hidden],[aria-hidden="true"]')) {
     if (childrenOf(e).length > 4) continue
     const loose = e.tagName && /^(option)$/i.test(e.tagName)
-    add(e.textContent, !loose)
+    add(e.textContent, !loose, loose)
   }
   for (const n of collectJsonLd(root)) {
     const offers = [].concat(n.offers || [], n.offers?.offers || [])
-    for (const o of offers) if (o && typeof o === 'object') for (const k of ['name', 'sku']) if (typeof o[k] === 'string') add(o[k])
+    for (const o of offers) if (o && typeof o === 'object') for (const k of ['name', 'sku']) if (typeof o[k] === 'string') add(o[k], false, true)
+  }
+  // 단순 글자·번호 사이즈: 같은 종류가 2개 이상이고, 수량 선택(1,2,3...10)처럼 1부터 5개 이상 이어진 번호는 제외해요.
+  // 'N (X)' 옵션이 이미 있으면 그쪽을 우선하고, 글자·번호는 더하지 않아요.
+  if (!out.some((x) => /\(/.test(x))) {
+    const uniq = (k) => [...new Set(plain.filter((p) => p.kind === k).map((p) => p.v))]
+    const alpha = uniq('alpha')
+    let num = uniq('num').filter((x) => !/^\d{3}$/.test(x) || !(Number(x) >= 220 && Number(x) <= 319))
+    const ns = num.map(Number)
+    if (ns.length >= 5 && ns.every((n, i) => n === i + 1)) num = []
+    const mmCount = out.filter((x) => /^\d{3}$/.test(x)).length
+    if (!mmCount) {
+      const best = alpha.length >= num.length ? alpha : num
+      if (best.length >= 2) for (const v of best) if (!out.includes(v) && out.length < MAX_OPTIONS) out.push(v)
+    }
   }
   // 'N (X)' 계열과 mm 숫자가 섞이면 더 많은 쪽 한 종류만 써요(같으면 'N (X)').
   const isMm = (x) => /^\d{3}$/.test(x)
@@ -641,7 +682,7 @@ export function parsePage(root, pageUrl = '', opts = {}) {
   if (!name) return null
 
   const notes = []
-  const preCategory = guessCategory(name)
+  const preCategory = guessCategory(`${name} ${categoryHints(ld)}`)
   const optionLabels = readOptionLabels(root)
   const extra = opts.extraRows || []
   const tables = readTables(root)
