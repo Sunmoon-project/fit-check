@@ -3,6 +3,7 @@ import { loadPhoto, savePhoto } from '../lib/storage.js'
 import { fileToDataUrl, removeBackground, composePreview } from '../lib/imageTools.js'
 import { CATEGORY_LABEL } from '../data/measurements.js'
 import { NO_SERVER, NO_SERVER_TEXT } from '../lib/runtime.js'
+import { shoeWardrobeFields } from '../lib/shoeFit.js'
 
 // 카테고리별 기본 위치 (사진 대비 %). 정면 전신 사진 기준의 대략값이에요.
 const BASE_LAYOUT = {
@@ -31,7 +32,7 @@ function previewLayout(category, verdicts, scalePct, offsetPct) {
   return { widthPct, leftPct: 50 - widthPct / 2, topPct: base.top + offsetPct }
 }
 
-export default function TryOnPanel({ product, verdicts, selectedSize, captureRef }) {
+export default function TryOnPanel({ product, profile, verdicts, selectedSize, captureRef }) {
   const canProductImage = Boolean(product.image)
   const [photo, setPhoto] = useState(() => loadPhoto())
   const [photoNote, setPhotoNote] = useState('')
@@ -169,10 +170,14 @@ export default function TryOnPanel({ product, verdicts, selectedSize, captureRef
   }
 
   if (product.category === 'shoes') {
+    // 사이즈 이름을 mm로 읽지 못하면 옷장·입어보기에 판정이 없다는 걸 알려줘요.
+    const sf = shoeWardrobeFields({ product, size: selectedSize, verdicts, profile })
     return (
       <div className="card tone-tryon">
         <div className="section-head"><h3>사진 합성</h3></div>
         <p className="muted small">신발은 사진 합성(미리보기·AI 합성)을 지원하지 않아요. 사이즈 추천과 리뷰를 참고해주세요.</p>
+        {sf.status === 'unsupported' && <p className="small wd-unsupported">{sf.note}: 선택한 사이즈 ‘{selectedSize || '-'}’를 mm로 읽거나 환산하지 못해 내 발길이와 비교하지 않았어요. 옷장에는 이 표시와 함께 담겨요.</p>}
+        {sf.status === 'converted' && <p className="muted small">{sf.note}</p>}
       </div>
     )
   }

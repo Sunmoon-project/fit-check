@@ -28,7 +28,7 @@ import { parseProductHtml } from '../server/productParser.js'
 import { readOptionLabels, parsePage, isProductPage, splitSentences, extractCardView, parseGender } from '../src/lib/pageParser.js'
 import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
 import { collectDiagnostics, diagnosticLines, formatReport, REPORT_MAX } from '../src/lib/diagnose.js'
-import { buildExportEnvelope, parseImportText, sanitizeItem, addImportedItem, LIMITS as IMPORT_LIMITS } from '../src/lib/wardrobeImport.js'
+import { buildExportEnvelope, parseEnvelopeData, parseImportText, sanitizeItem, addImportedItem, LIMITS as IMPORT_LIMITS } from '../src/lib/wardrobeImport.js'
 import {
   SYNC_QUEUE_KEY, WEB_APP_ORIGINS, BRIDGE_MATCHES, QUEUE_MAX, QUEUE_TTL_MS, isAllowedPage, postTargetOrigin, isTrustedMessage, enqueue, pruneQueue, removeAcked,
   makeDeliverMessage, makeAckMessage, makeReadyMessage, parseDeliverMessage, parseAckMessage, isReadyMessage, applyDelivery, newQueueId, syncNotice,
@@ -3527,7 +3527,7 @@ await atest('content.js(가짜 DOM, vm): 가짜 HTML에서 분류 신뢰도가 �
 
 
 // ---------- 신발 전용 사이즈 비교 ----------
-import { parseShoeOption, parseShoeOptions, parseShoeFeel, aggregateShoeReviews, reviewAggregateLine, recommendShoe, shoeViewFor, withShoeRecommendation, chartWidthsByMm } from '../src/lib/shoeFit.js'
+import { parseShoeOption, parseShoeOptions, parseShoeFeel, aggregateShoeReviews, reviewAggregateLine, recommendShoe, shoeViewFor, withShoeRecommendation, chartWidthsByMm, shoeSizeToMm, resolveShoeSizeMm, shoeWardrobeFields, SHOE_UNSUPPORTED_NOTE } from '../src/lib/shoeFit.js'
 
 const SHOE_NAME = '[xYASE] braided moc boots (grunge taupe)'
 const shoeOpts = ['230 (230-235)', '240 (240-245)', '250 (250-255)']
@@ -3810,6 +3810,68 @@ await atest('content.js(가짜 DOM, vm): 가짜 HTML에서 종류 칩으로 신�
   shoes.click()
   for (let i = 0; i < 50 && !texts.slice(before).includes('신발 사이즈 비교'); i++) await new Promise((r) => setTimeout(r, 10))
   assert.ok(texts.slice(before).includes('신발 사이즈 비교'))
+})
+
+test('신발: US/UK/EU 사이즈 이름을 대략적인 mm로 환산한다 (성별 필요, 휴리스틱)', () => {
+  assert.equal(shoeSizeToMm('US 9', { gender: 'male' }).mm, 270)
+  assert.equal(shoeSizeToMm('US 8', { gender: 'female' }).mm, 250)
+  assert.equal(shoeSizeToMm('UK 8.5', { gender: 'male' }).mm, 275)
+  assert.equal(shoeSizeToMm('EU 42').mm, 270)
+  assert.equal(shoeSizeToMm('42').system, 'EU')
+  assert.equal(shoeSizeToMm('9 US', { productName: "나이키 남성 에어맥스" }).mm, 270)
+  assert.equal(shoeSizeToMm('US 9'), null, '성별을 모르면 환산하지 않는다')
+  assert.equal(shoeSizeToMm('US 30', { gender: 'male' }), null)
+  for (const n of ['S', 'M', 'L', 'FREE', 'F', '', null]) assert.equal(shoeSizeToMm(n, { gender: 'male' }), null)
+  assert.equal(resolveShoeSizeMm('270 (270-275)').converted, false)
+  assert.equal(resolveShoeSizeMm('EU 42').converted, true)
+})
+
+test('신발 옷장 항목: 판정이 조용히 비지 않고 이유(verdictStatus)가 남는다. 예전 항목 모양은 그대로', () => {
+  const shoe = (size, extra = {}) => ({ name: '러닝화', mall: 'shop', category: 'shoes', url: 'https://shop.example/s', sizeChart: { measures: { [size]: { length: 1 } } }, ...extra })
+  const prof = { gender: 'male', height: 175, weight: 70, footLength: 265 }
+  const un = makeWardrobeItem({ product: shoe('M'), size: 'M', profile: prof })
+  assert.equal(un.verdictStatus, 'unsupported')
+  assert.equal(un.verdictNote, SHOE_UNSUPPORTED_NOTE)
+  assert.deepEqual(un.verdicts, [])
+  assert.equal(makeWardrobeItem({ product: shoe('FREE'), size: 'FREE' }).verdictStatus, 'unsupported')
+  const us = makeWardrobeItem({ product: shoe('US 9'), size: 'US 9', profile: prof })
+  assert.equal(us.verdictStatus, 'converted')
+  assert.equal(us.measures.footLength, 270)
+  assert.equal(us.verdicts[0].part, 'footLength')
+  assert.ok(us.verdictNote.includes('270mm'))
+  const mm = makeWardrobeItem({ product: shoe('270'), size: '270', profile: prof })
+  assert.equal(mm.verdicts.length, 1)
+  assert.equal(mm.verdictStatus, undefined)
+  const noFoot = shoeWardrobeFields({ product: shoe('270'), size: '270', profile: null })
+  assert.equal(noFoot.status, 'unsupported')
+  // 신발이 아니면 새 필드가 없다 (예전 모양)
+  const top = makeWardrobeItem({ product: { name: 't', mall: 'm', category: 'top', url: 'u' }, size: 'M' })
+  assert.ok(!('verdictStatus' in top) && !('verdictNote' in top))
+  // 예전에 저장된 항목(필드 없음)도 그대로 비교·표시에 쓰인다
+  assert.equal(findSimilar({ id: 'x', category: 'shoes', measures: { footLength: 270 } }, [{ id: 'old', product: { category: 'shoes' }, measures: { footLength: 265 }, verdicts: [] }]).diffs[0].diff, 5)
+})
+
+test('신발 옷장 가져오기·자동 전달: verdictStatus를 검사하고 위조하지 않는다', () => {
+  const env = (item) => ({ app: 'fitcheck', kind: 'wardrobe-item', v: 1, item: { product: { name: '남성 러닝화', mall: 'shop', category: 'shoes', url: 'https://shop.example/s' }, ...item } })
+  const a = parseImportText(JSON.stringify(env({ size: 'M', verdicts: [] })))
+  assert.equal(a.item.verdictStatus, 'unsupported')
+  assert.equal(a.item.verdictNote, SHOE_UNSUPPORTED_NOTE)
+  const b = parseImportText(JSON.stringify(env({ size: 'US 9', verdicts: [] })))
+  assert.equal(b.item.verdictStatus, 'converted')
+  assert.equal(b.item.measures.footLength, 270)
+  // 받은 설명 글·잘못된 상태 값은 믿지 않는다
+  const c = parseImportText(JSON.stringify(env({ size: 'M', verdicts: [], verdictStatus: 'unsupported', verdictNote: '<img src=x>' })))
+  assert.equal(c.item.verdictNote, SHOE_UNSUPPORTED_NOTE)
+  assert.equal(parseImportText(JSON.stringify(env({ size: 'M', verdicts: [], verdictStatus: 'hacked' }))).ok, false)
+  // 판정이 있으면 unsupported를 붙이지 않는다
+  const d = parseImportText(JSON.stringify(env({ size: '270', verdictStatus: 'unsupported', verdicts: [{ part: 'footLength', label: '발길이', verdict: '적당', key: 'regular', ease: 8 }] })))
+  assert.ok(!('verdictStatus' in d.item))
+  // 확장 → 웹 전달 봉투(왕복)에도 유지된다
+  const out = buildExportEnvelope({ status: 'ok', name: '러닝화', exportData: { mall: 's', category: 'shoes', url: 'https://shop.example/s', size: 'FREE', measures: null, verdicts: [] }, reviewViews: {} })
+  assert.equal(out.item.verdictStatus, 'unsupported')
+  assert.equal(parseEnvelopeData(out).item.verdictStatus, 'unsupported')
+  // 신발이 아닌 옷은 새 필드가 생기지 않는다
+  assert.ok(!('verdictStatus' in sanitizeItem(fakeEnvelope().item)))
 })
 
 
