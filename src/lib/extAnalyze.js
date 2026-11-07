@@ -2,7 +2,7 @@
 // 추천은 웹 앱과 같은 generateFitComment를 그대로 씁니다.
 import { parsePage } from './pageParser.js'
 import { collectDiagnostics, diagnosticLines } from './diagnose.js'
-import { generateFitComment, describeEvidence, CONFIDENCE_LABEL } from './fitEngine.js'
+import { generateFitComment, describeEvidence, CONFIDENCE_LABEL, FIT_LABEL } from './fitEngine.js'
 // 사용자가 직접 적은 사이즈표: 열 이름(예: 어깨 가슴 총장)과 줄(예: M 50 57 68) → buildSizeChart 입력 모양.
 // 저장하지 않고 이번 분석에만 씁니다. 잘못된 줄은 버려요.
 export function manualChartRows(columnsText, linesText) {
@@ -19,6 +19,21 @@ export function manualChartRows(columnsText, linesText) {
 import { CATEGORY_LABEL } from '../data/measurements.js'
 
 const MIN_REVIEWS_WITHOUT_CHART = 3
+const MAX_SHOWN = { matched: 50, others: 100 }
+
+// 카드에서 "페이지에서 읽은 그대로"를 보여주기 위한 값. 이 브라우저 화면에만 쓰고 저장·전송하지 않아요.
+// 읽지 못한 항목은 null로 남겨서 화면에서 '못 읽음'으로 표시합니다.
+function reviewView(r, disp = (x) => x) {
+  return {
+    text: String(r.text || ''),
+    height: r.height ?? null,
+    weight: r.weight ?? null,
+    size: r.size ? disp(r.size) : null,
+    fit: r.fit ?? null,
+    fitLabel: r.fit ? FIT_LABEL[r.fit] || null : null,
+    similarity: Number.isFinite(r.similarity) ? r.similarity : null,
+  }
+}
 
 export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) {
   const product = parsePage(root, pageUrl, opts)
@@ -38,6 +53,9 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
   }
 
   const result = generateFitComment(profile, product)
+  // 사이즈표의 표시 이름('1 (M)')이 있으면 그 이름으로 보여줍니다.
+  const disp = (x) => product.sizeChart?.display?.[String(x).replace(/\s/g, '').toUpperCase()] || x
+  const view = (r) => reviewView(r, disp)
   const evidence = result.evidence ? describeEvidence(result.evidence, result.confidence) : null
   return {
     status: 'ok',
@@ -49,6 +67,13 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     reviewTotalOnPage: product.reviewTotalOnPage ?? null,
     sizeChartMissing: !product.sizeChart,
     diagnostics: collectDiagnostics(root, pageUrl, extVersion),
+    reviewViews: {
+      matched: (result.matched || []).slice(0, MAX_SHOWN.matched).map(view),
+      others: (result.otherReviews || []).slice(0, MAX_SHOWN.others).map(view),
+      matchedTotal: (result.matched || []).length,
+      othersTotal: (result.otherReviews || []).length,
+    },
+    chartView: product.sizeChart?.view ? { ...product.sizeChart.view, recommended: result.recommendedSize ?? null } : null,
     confidence: result.confidence,
     confidenceLabel: CONFIDENCE_LABEL[result.confidence],
     summary: evidence?.summary || '',
