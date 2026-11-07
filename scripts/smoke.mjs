@@ -922,7 +922,9 @@ test('DOM 파서와 서버 파서가 같은 표에서 같은 사이즈표를 만
   const html = `<html><head><title>t</title><meta property="og:title" content="오버핏 후드 티셔츠"></head><body>${EXT_HTML.match(/<table>[\s\S]*<\/table>/)[0]}</body></html>`
   const server = parseProductHtml(html, 'https://shop.example/p/1')
   const dom = parsePage(fakeDocument(html), 'https://shop.example/p/1')
-  assert.deepEqual(dom.sizeChart, server.sizeChart)
+  const { view, ...domChart } = dom.sizeChart // view는 화면 표시용이라 서버 결과에는 없어요
+  assert.ok(view && Array.isArray(view.rows))
+  assert.deepEqual(domChart, server.sizeChart)
   assert.equal(dom.category, server.category)
 })
 
@@ -1630,6 +1632,70 @@ test('가짜 HTML: 실측 낱말이 든 일반 리뷰 목록은 사이즈표로 
   const p = parsePage(fakeDocument(wrapBody(`<div class="list">${cards}</div>`)), '')
   assert.equal(p.reviews.length, 3)
 })
+
+// ---- 사이즈표를 못 읽던 모양들 (전부 직접 만든 가짜 HTML이에요. 실제 무신사 DOM이 아니고, 실제 원인은 확정하지 못했어요) ----
+{
+  const MROWS = [['총장', 67, 69, 71, 73, 75], ['어깨너비', 44, 46, 48, 50, 52], ['가슴단면', 52, 54, 56, 58, 60], ['소매길이', 60, 61, 62, 63, 64]]
+  const tdRow = (r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`
+  const thRow = (r) => `<tr>${r.map((c) => `<th>${c}</th>`).join('')}</tr>`
+  const readChart = (html, withOptions = true) => parsePage(fakeDocument(wrapBody(`<h1>코튼 재킷 아우터</h1>${withOptions ? optionsHtml : ''}${html}`)), '')
+  const CASES = {
+    '머리글 첫 칸이 빈칸': `<table>${thRow(['', 0, 1, 2, 3, 4])}${MROWS.map(tdRow).join('')}</table>`,
+    '머리글 첫 칸이 cm': `<table>${thRow(['cm', 0, 1, 2, 3, 4])}${MROWS.map(tdRow).join('')}</table>`,
+    '사이즈 이름이 0(S) 붙여쓰기': `<table>${thRow(['사이즈', '0(S)', '1(M)', '2(L)', '3(XL)', '4(2XL)'])}${MROWS.map(tdRow).join('')}</table>`,
+    '항목명에 (cm) 단위': `<table>${thRow(['사이즈', 0, 1, 2, 3, 4])}${MROWS.map((r) => tdRow([`${r[0]}(cm)`, ...r.slice(1)])).join('')}</table>`,
+    '값에 - 와 빈칸': `<table>${thRow(['사이즈', 0, 1, 2, 3, 4])}${MROWS.map((r, i) => tdRow(i === 3 ? [r[0], '-', '-', 62, '', 64] : r)).join('')}</table>`,
+    '사이즈 이름 줄 위에 단위 안내 줄': `<table><tr><th colspan="6">단위: cm</th></tr>${thRow(['사이즈', 0, 1, 2, 3, 4])}${MROWS.map(tdRow).join('')}</table>`,
+    '실측 줄 끝에 단위 칸': `<table>${thRow(['사이즈', 0, 1, 2, 3, 4, '단위'])}${MROWS.map((r) => tdRow([...r, 'cm'])).join('')}</table>`,
+    '사이즈 이름 줄만 있는 표 + 실측 줄만 있는 표(table 2개)': `<table>${thRow(['사이즈', 0, 1, 2, 3, 4])}</table><table>${MROWS.map(tdRow).join('')}</table>`,
+    '실측 줄만 있는 표(이름 줄 없음, 구매 옵션 5개와 칸 수 일치)': `<table>${MROWS.map(tdRow).join('')}</table>`,
+    '머리글 제목 칸이 빠진 일반 표': `<table><tr><th>총장</th><th>어깨</th><th>가슴</th></tr>${[0, 1, 2].map((i) => tdRow([`${i} (${'SML'[i]})`, 67 + i, 44 + i, 52 + i])).join('')}</table>`,
+  }
+  for (const [name, html] of Object.entries(CASES)) {
+    test(`가짜 HTML(사이즈표 읽기): ${name}`, () => {
+      const p = readChart(html)
+      assert.ok(p.sizeChart, '사이즈표를 읽어야 해요')
+      assert.ok(p.sizeChart.rows.length >= 3)
+      assert.ok(!p.sizeChart.rows.some((r) => r[0] === '67'))
+      if (p.sizeChart.rows.length === 5) assert.deepEqual(p.sizeChart.rows.map((r) => r[0]), ['0(S)', '1(M)', '2(L)', '3(XL)', '4(2XL)'])
+    })
+  }
+
+  test('가짜 HTML(사이즈표 읽기): 이름 줄이 다른 표나 구매 옵션에서 왔다면 어디서 가져왔는지 남긴다', () => {
+    assert.equal(readChart(CASES['사이즈 이름 줄만 있는 표 + 실측 줄만 있는 표(table 2개)']).sizeChartMeta.namesFrom, 'other-table')
+    assert.equal(readChart(CASES['실측 줄만 있는 표(이름 줄 없음, 구매 옵션 5개와 칸 수 일치)']).sizeChartMeta.namesFrom, 'options')
+    assert.equal(readChart(CASES['머리글 첫 칸이 cm']).sizeChartMeta.namesFrom, 'table')
+    // 옵션이 없고 이름 줄도 없으면 이름을 지어내지 않는다
+    assert.equal(readChart(CASES['실측 줄만 있는 표(이름 줄 없음, 구매 옵션 5개와 칸 수 일치)'], false).sizeChart, null)
+    // 옵션 개수와 칸 수가 다르면 옵션 순서로 이름 붙이지 않는다
+    const four = `<table>${MROWS.map((r) => tdRow(r.slice(0, 5))).join('')}</table>`
+    assert.equal(readChart(four).sizeChart, null)
+  })
+
+  test('가짜 HTML(사이즈표 읽기): M(95) 같은 글자+치수 이름도 사이즈 이름으로 읽고 구매 옵션과 잇는다', () => {
+    const t = `<table>${thRow(['사이즈', '총장', '어깨'])}${['S', 'M', 'L'].map((s, i) => tdRow([`${s}(${95 + i * 5})`, 67 + i, 44 + i])).join('')}</table>`
+    const p = readChart(t)
+    assert.deepEqual(p.sizeChart.rows.map((r) => r[0]), ['S(95)', 'M(100)', 'L(105)'])
+    assert.equal(p.sizeChartMeta.overlap, 3)
+  })
+
+  test('가짜 HTML(진단): 리포트에 사이즈표 후보별 헤더 모양(L/N/T)과 버린 사유가 한 줄씩 있고 페이지 글은 없다', () => {
+    const secret = 'ZZ비밀항목명'
+    // 첫 열이 실측 항목인데 이름 줄도 다른 표도 없고, 구매 옵션도 없는 경우 -> 못 읽은 사유가 보여야 한다
+    const bad = `<table>${tdRow(['총장', 67, 69, 71])}${tdRow([`어깨${secret}`, 44, 46, 48])}</table>`
+    const doc = fakeDocument(wrapBody(bad))
+    const rep = formatReport(collectDiagnostics(doc, 'https://shop.example/p/1'))
+    const line = rep.split('\n').find((l) => l.startsWith('후보 1번'))
+    assert.ok(line, rep)
+    assert.match(line, /\(table, 2줄 x 4칸\) 머리글 \[T N N N\] 첫 열 \[T T\] -> 첫 열이 실측 항목인데 사이즈 이름 줄을 못 찾음/)
+    assert.ok(!rep.includes(secret))
+    // 읽은 표는 '선택함'과 이름 출처가 나온다
+    const ok = formatReport(collectDiagnostics(fakeDocument(wrapBody(`${optionsHtml}${CASES['사이즈 이름 줄만 있는 표 + 실측 줄만 있는 표(table 2개)']}`)), ''))
+    assert.match(ok, /-> 선택함/)
+    assert.match(ok, /사이즈 이름 출처: 다른 표/)
+    assert.ok(ok.length <= REPORT_MAX)
+  })
+}
 
 test('checkGlobals(가짜 코드 조각): 다른 함수의 지역 변수를 참조하는 직전 state 버그 모양을 잡는다', () => {
   const buggy = `(function(){

@@ -2,7 +2,7 @@
 // 숫자와 참/거짓만 모으고, 페이지 글은 모양 기호(L/N/T)로 바꿔서 담아요.
 // 프로필, 리뷰 글, 상품명, 주소의 쿼리·해시는 보고서에 들어가지 않습니다. 네트워크 호출은 없어요.
 import { findGridCandidates, readTables, parsePage, MEASURE_RE, REVIEW_SELECTOR } from './pageParser.js'
-import { SIZE_LABEL_RE } from './productCore.js'
+import { shapeOfCell } from './productCore.js'
 
 export const REPORT_MAX = 4000
 
@@ -12,13 +12,7 @@ const kids = (el) => Array.from(el.children || [])
 const HEADING = /사이즈|실측|size/i
 
 // 글 한 조각을 모양 기호로: 사이즈 글자 L, 숫자 N, 그 외 T, 빈 칸은 _
-function shapeOfText(t) {
-  const s = clean(t)
-  if (!s) return '_'
-  if (SIZE_LABEL_RE.test(s.replace(/\s/g, '')) && /\D/.test(s)) return 'L'
-  if (/^[\d.,\s]+(cm|mm)?$/i.test(s)) return 'N'
-  return 'T'
-}
+const shapeOfText = shapeOfCell
 
 const safeToken = (t) => /^[A-Za-z0-9_-]{1,24}$/.test(t)
 
@@ -163,7 +157,37 @@ function chartJudgment(m) {
     rejectedNoOverlap: meta.rejectedNoOverlap || 0,
     overlap: meta.overlap || 0,
     optionCount: meta.optionCount || 0,
+    namesFrom: ['table', 'other-table', 'options'].includes(meta.namesFrom) ? meta.namesFrom : null,
+    candidates: cleanCandidates(meta.candidates),
   }
+}
+
+const CAND_REASON_TEXT = {
+  'too-few-rows': '줄이 1개뿐',
+  'no-measure-header': '실측 항목 글자 없음',
+  'no-labeled-rows': '사이즈 이름으로 시작하는 줄 없음',
+  'flipped-no-names': '첫 열이 실측 항목인데 사이즈 이름 줄을 못 찾음',
+  'numeric-rule': '숫자 이름 규칙 위반(2줄 미만 또는 순서 증가 아님)',
+  'flipped-numeric-no-options': '뒤집은 숫자 이름인데 구매 옵션이 없음',
+  'no-overlap': '구매 옵션 이름과 안 겹침',
+  'not-best': '읽을 수는 있었으나 다른 후보가 더 적합',
+  selected: '선택함',
+}
+const NAMES_FROM_TEXT = { table: '같은 표', 'other-table': '다른 표', options: '구매 옵션 순서' }
+const SHAPE_RE = /^[LNT_ ]{0,40}$/
+const KINDS = ['table', 'grid', 'transposed', 'manual']
+const smallInt = (v) => (Number.isInteger(v) && v >= 0 && v <= 999 ? v : 0)
+function cleanCandidates(list) {
+  return (Array.isArray(list) ? list : []).slice(0, 6).map((c) => ({
+    index: smallInt(c.index),
+    kind: KINDS.includes(c.kind) ? c.kind : null,
+    rows: smallInt(c.rows),
+    cols: smallInt(c.cols),
+    head: SHAPE_RE.test(c.head || '') ? c.head : '',
+    firstCol: SHAPE_RE.test(c.firstCol || '') ? c.firstCol : '',
+    reason: Object.hasOwn(CAND_REASON_TEXT, c.reason) ? c.reason : 'not-best',
+    flipped: c.flipped === true,
+  }))
 }
 
 function hasLdProduct(root) {
@@ -200,6 +224,15 @@ function reviewStatLines(d) {
   return out
 }
 
+// 후보별 한 줄: 머리글 모양(L=사이즈 글자, N=숫자, T=그 외 글, _=빈칸)과 첫 열 모양, 선택/버린 사유. 페이지 글은 없어요.
+function candidateLines(c) {
+  const out = (c.candidates || []).map(
+    (x) => `후보 ${x.index + 1}번(${x.kind || '?'}, ${x.rows}줄 x ${x.cols}칸${x.flipped && ['selected', 'not-best'].includes(x.reason) ? ', 뒤집어 읽음' : ''}) 머리글 [${x.head}] 첫 열 [${x.firstCol}] -> ${CAND_REASON_TEXT[x.reason]}`,
+  )
+  if (c.namesFrom) out.push(`뒤집어 읽을 때 사이즈 이름 출처: ${NAMES_FROM_TEXT[c.namesFrom]}`)
+  return out
+}
+
 function chartLines(d) {
   const c = d.chart
   if (!c) return []
@@ -208,6 +241,7 @@ function chartLines(d) {
   return [
     `사이즈표 후보 ${c.considered}개 검토(실측 제목 있는 후보 ${c.withHeader}개), ${sel}`,
     `뒤집어 읽은 후보 ${c.flipped}개, 뒤집어도 못 쓴 후보 ${c.rejectedMeasureHeader}개, 숫자 이름 규칙 위반 ${c.rejectedNumeric}개, 구매 옵션과 안 겹쳐 버린 후보 ${c.rejectedNoOverlap}개`,
+    ...candidateLines(c),
     `사이즈 이름 ${c.labelCount}개, 모양 ${c.labelClass}, 숫자 이름 순서 증가: ${c.monotonic == null ? '해당 없음' : yn(c.monotonic)}`,
     `구매 옵션 이름 ${d.optionLabelCount ?? c.optionCount}개, 표와 겹침 ${c.overlap}개`,
     `불러온 리뷰 ${d.reviewsKept}건${total}`,
