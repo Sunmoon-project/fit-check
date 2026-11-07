@@ -1,6 +1,6 @@
 // 상품 페이지에 "내 사이즈 찾기" 버튼과 결과 카드를 띄웁니다.
 // 페이지 데이터는 이 브라우저 안에서만 읽고, 어디로도 보내지 않아요. 네트워크 호출이 없습니다.
-import { isProductPage, REVIEW_SELECTOR } from '../src/lib/pageParser.js'
+import { isProductPage, REVIEW_SELECTOR, readReviewTotal } from '../src/lib/pageParser.js'
 import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
 import { collectDiagnostics, formatReport } from '../src/lib/diagnose.js'
 import { shouldStop, isSafeMoreButton, toReportStop, STOP_LABEL } from '../src/lib/reviewLoader.js'
@@ -177,7 +177,7 @@ function reviewElements() {
 
 // 리뷰 영역 안의 '더보기' 버튼 중 허용 목록에 맞는 것 하나만 찾습니다.
 function findMoreButton() {
-  const cands = document.querySelectorAll('button, [role="button"], a:not([href]), a[href^="#"], a[href^="javascript:"]')
+  const cands = document.querySelectorAll('button, [role="button"]')
   for (const b of cands) {
     if (b.disabled || b.getAttribute('aria-disabled') === 'true') continue
     if (isSafeMoreButton(b.textContent, { inReviewContainer: !!b.closest(REVIEW_BOX) })) return b
@@ -185,7 +185,7 @@ function findMoreButton() {
   return null
 }
 
-function quietWait(quietMs, maxMs) {
+function quietWait(quietMs, maxMs, state) {
   return new Promise((resolve) => {
     let quiet = setTimeout(done, quietMs)
     const limit = setTimeout(done, maxMs)
@@ -194,7 +194,9 @@ function quietWait(quietMs, maxMs) {
       quiet = setTimeout(done, quietMs)
     })
     mo.observe(document.body || document.documentElement, { childList: true, subtree: true })
+    if (state) state.wake = done // 중단하면 기다리던 것을 바로 끝냅니다
     function done() {
+      if (state) state.wake = null
       mo.disconnect()
       clearTimeout(quiet)
       clearTimeout(limit)
@@ -207,21 +209,22 @@ function quietWait(quietMs, maxMs) {
 // 한도(횟수·시간·정체)나 중단 버튼으로 멈추고, 끝나면 항상 원래 스크롤 위치로 돌아옵니다.
 async function loadMoreReviews(onProgress) {
   const { scrollX, scrollY } = window
-  const state = { aborted: false }
+  const state = { aborted: false, wake: null }
   loader = state
   const startedAt = Date.now()
   let steps = 0
   let stalls = 0
   let count = reviewElements().length
   let reason = null
+  const total = readReviewTotal(document) // 못 찾으면 null
   try {
-    while (!(reason = shouldStop({ steps, elapsedMs: Date.now() - startedAt, stalls, aborted: state.aborted, count, total: null }))) {
+    while (!(reason = shouldStop({ steps, elapsedMs: Date.now() - startedAt, stalls, aborted: state.aborted, count, total }))) {
       const list = reviewElements()
       const target = list[list.length - 1]
       if (target) target.scrollIntoView({ block: 'center' })
       const btn = findMoreButton()
       if (btn) btn.click()
-      await quietWait(STEP_QUIET_MS, STEP_WAIT_MS)
+      await quietWait(STEP_QUIET_MS, STEP_WAIT_MS, state)
       steps += 1
       const next = reviewElements().length
       stalls = next > count ? 0 : stalls + 1
@@ -229,7 +232,7 @@ async function loadMoreReviews(onProgress) {
       onProgress(count)
     }
   } finally {
-    window.scrollTo(scrollX, scrollY)
+    window.scrollTo({ left: scrollX, top: scrollY, behavior: 'instant' }) // smooth 스크롤 설정을 무시
     loader = null
   }
   return reason
@@ -245,7 +248,10 @@ function loadMoreBlock(r) {
   const prog = el('p', 'prog')
   prog.setAttribute('role', 'status')
   stop.addEventListener('click', () => {
-    if (loader) loader.aborted = true
+    if (loader) {
+      loader.aborted = true
+      if (loader.wake) loader.wake()
+    }
   })
   btn.addEventListener('click', async () => {
     if (busy) return
@@ -340,7 +346,9 @@ function waitForRender() {
       quiet = setTimeout(done, QUIET_MS)
     })
     mo.observe(document.body || document.documentElement, { childList: true, subtree: true })
+    if (state) state.wake = done // 중단하면 기다리던 것을 바로 끝냅니다
     function done() {
+      if (state) state.wake = null
       mo.disconnect()
       clearTimeout(quiet)
       clearTimeout(limit)

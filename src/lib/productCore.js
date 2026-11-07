@@ -198,7 +198,12 @@ export function parseReviewText(text, sizeLabels = []) {
   const t = text || ''
   const H = '(1[4-9]\\d|20\\d|210)(?:\\.\\d)?'
   const pairM = t.match(new RegExp(`(?<![\\d.,/:-])${H}\\s*[/·]\\s*(\\d{2,3})(?:\\.\\d)?(?![\\d.,%:/-]|\\s*(?:원|%|[-/]\\s*\\d))`))
-  const pair = pairM && Number(pairM[2]) >= 35 && Number(pairM[2]) <= 150 ? pairM : null
+  // '175/100 사이즈', '사이즈 175/100' 같은 의류 사이즈 표기는 키·몸무게가 아님
+  const pairEnd = pairM ? pairM.index + pairM[0].length : 0
+  const sizeName =
+    pairM &&
+    (/^\s*(?:사이즈|size|호|구매|샀|주문|선택|입었|추천)/i.test(t.slice(pairEnd)) || /(?:사이즈|size|옵션|option)\s*[:：]?\s*$/i.test(t.slice(0, pairM.index)))
+  const pair = pairM && !sizeName && Number(pairM[2]) >= 35 && Number(pairM[2]) <= 150 ? pairM : null
   const height =
     toNumber((t.match(/키\s*[:：]?\s*(1[4-9]\d(?:\.\d)?|20\d(?:\.\d)?|210)(?![\d.]*\d)/) || [])[1] ?? '') ??
     toNumber((t.match(/(?<![\d.,])(1[4-9]\d(?:\.\d)?|20\d(?:\.\d)?)\s*(?:cm|센치|㎝|씨엠)/i) || [])[1] ?? '') ??
