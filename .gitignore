@@ -5,3 +5,8 @@ dist-ssr
 .env
 .DS_Store
 .vite
+
+# 검증용 원본 데이터와 결과 (커밋 금지: 용량·라이선스)
+data/
+.cache/
+validation-output/

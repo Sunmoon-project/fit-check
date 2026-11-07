@@ -14,6 +14,11 @@ import { parseProductHtml } from '../server/productParser.js'
 import { findSimilar, describeDiff, categoryGroup, makeWardrobeItem } from '../src/lib/wardrobe.js'
 import { isPrivateIp, decodeHtml } from '../server/safeFetch.js'
 import { checkPostRequest } from '../server/api.js'
+import {
+  parseHeightCm, parseWeightKg, normalizeFit, normalizeRow, normalizeLines,
+  confusionMatrix, accuracy, precisionRecall, neighborVotePredictions, trueRateByBucket,
+} from './lib/fitMetrics.mjs'
+import { bodySimilarity } from '../src/lib/fitEngine.js'
 import { runHfTryOn, parseSse, spaceBaseUrl, isValidSpaceId, clearTryOnCache, garmentDescription, isTryOnSupported, DEFAULT_SPACE } from '../server/hfTryOn.js'
 
 let passed = 0
@@ -506,6 +511,90 @@ await atest('hfTryOn: 토큰이 있는데 401이면 BAD_TOKEN', async () => {
       (e) => e.status === 502 && e.code === 'BAD_TOKEN',
     )
   })
+})
+
+test('fitMetrics: 키 ft/in -> cm, 몸무게 lbs -> kg 변환', () => {
+  assert.equal(parseHeightCm('5\' 8"'), 172.7)
+  assert.equal(parseHeightCm('5ft 0in'), 152.4)
+  assert.equal(parseHeightCm('170cm'), 170)
+  assert.equal(parseHeightCm('abc'), null)
+  assert.equal(parseHeightCm(null), null)
+  assert.equal(parseWeightKg('137lbs'), 62.1)
+  assert.equal(parseWeightKg('60kg'), 60)
+  assert.equal(parseWeightKg('많이'), null)
+})
+
+test('fitMetrics: 핏 라벨 small/fit/large -> small/true/large', () => {
+  assert.equal(normalizeFit('fit'), 'true')
+  assert.equal(normalizeFit('Small'), 'small')
+  assert.equal(normalizeFit('large'), 'large')
+  assert.equal(normalizeFit('weird'), null)
+})
+
+test('fitMetrics: 행 정규화와 제외 사유 집계', () => {
+  const ok = normalizeRow({ item_id: 'a', size: '8', fit: 'fit', height: '5\' 6"', weight: '130lbs' })
+  assert.deepEqual(ok, { item: 'a', size: '8', fit: 'true', height: 167.6, weight: 59 })
+  assert.ok(normalizeRow({ item_id: 'a', size: '8', fit: 'fit', weight: '130lbs' }).excluded)
+  const text = [
+    JSON.stringify({ item_id: 'a', size: 'm', fit: 'small', height: '5\' 6"', weight: '130lbs' }),
+    '',
+    '{깨짐',
+    JSON.stringify({ item_id: 'a', size: 'm', fit: '??', height: '5\' 6"', weight: '130lbs' }),
+  ].join('\n')
+  const n = normalizeLines(text)
+  assert.equal(n.total, 3)
+  assert.equal(n.rows.length, 1)
+  assert.equal(n.rows[0].size, 'M')
+  assert.equal(n.excluded['JSON 해석 실패'], 1)
+})
+
+test('fitMetrics: 혼동행렬, 정확도, precision/recall', () => {
+  const pairs = [
+    { actual: 'true', predicted: 'true' },
+    { actual: 'true', predicted: 'true' },
+    { actual: 'true', predicted: 'small' },
+    { actual: 'small', predicted: 'small' },
+    { actual: 'large', predicted: 'true' },
+  ]
+  const m = confusionMatrix(pairs)
+  assert.equal(m.true.true, 2)
+  assert.equal(m.true.small, 1)
+  assert.equal(m.large.true, 1)
+  assert.equal(accuracy(m), 3 / 5)
+  const pr = precisionRecall(m)
+  assert.equal(pr.true.precision, 2 / 3)
+  assert.equal(pr.true.recall, 2 / 3)
+  assert.equal(pr.small.precision, 1 / 2)
+  assert.equal(pr.small.recall, 1)
+  assert.equal(pr.large.precision, null)
+  assert.equal(pr.large.recall, 0)
+  assert.equal(accuracy(confusionMatrix([])), null)
+})
+
+test('fitMetrics: 이웃 투표는 자기 자신과 다른 사이즈를 제외하고, 이웃이 없으면 예측 불가', () => {
+  const rows = [
+    { item: 'a', size: 'M', fit: 'small', height: 165, weight: 55 },
+    { item: 'a', size: 'M', fit: 'small', height: 165, weight: 56 },
+    { item: 'a', size: 'M', fit: 'large', height: 190, weight: 100 },
+    { item: 'a', size: 'L', fit: 'true', height: 165, weight: 55 },
+  ]
+  const p = neighborVotePredictions(rows, bodySimilarity)
+  assert.equal(p.length, 4)
+  assert.equal(p.find((x) => x.index === 0).predicted, 'small')
+  assert.equal(p.find((x) => x.index === 2).predicted, null)
+  assert.equal(p.find((x) => x.index === 3).predicted, null)
+})
+
+test('fitMetrics: 구간별 정사이즈 비율', () => {
+  const rows = [
+    { height: 150, fit: 'true' },
+    { height: 152, fit: 'small' },
+    { height: 170, fit: 'true' },
+  ]
+  const b = trueRateByBucket(rows, 'height', [160])
+  assert.equal(b[0].n, 2)
+  assert.equal(b[0].rate, 0.5)
+  assert.equal(b[1].rate, 1)
 })
 
 console.log(`\n${passed}개 통과`)
