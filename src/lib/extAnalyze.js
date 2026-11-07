@@ -47,6 +47,8 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     recommendedLabel: result.recommendedLabel,
     reviewsLoaded: product.reviews.length,
     reviewTotalOnPage: product.reviewTotalOnPage ?? null,
+    sizeChartMissing: !product.sizeChart,
+    diagnostics: collectDiagnostics(root, pageUrl, extVersion),
     confidence: result.confidence,
     confidenceLabel: CONFIDENCE_LABEL[result.confidence],
     summary: evidence?.summary || '',
