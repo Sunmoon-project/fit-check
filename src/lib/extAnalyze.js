@@ -1,6 +1,6 @@
 // 확장에서 쓰는 분석 한 번: 페이지 DOM + 프로필 → 화면에 보여줄 값.
 // 추천은 웹 앱과 같은 generateFitComment를 그대로 씁니다.
-import { parsePage, splitSentences, SENTENCE_LIMIT } from './pageParser.js'
+import { parsePage, splitSentences, isProductPage, SENTENCE_LIMIT } from './pageParser.js'
 import { collectDiagnostics, diagnosticLines } from './diagnose.js'
 import { generateFitComment, describeEvidence, CONFIDENCE_LABEL, FIT_LABEL } from './fitEngine.js'
 // 사용자가 직접 적은 사이즈표: 열 이름(예: 어깨 가슴 총장)과 줄(예: M 50 57 68) → buildSizeChart 입력 모양.
@@ -18,6 +18,7 @@ export function manualChartRows(columnsText, linesText) {
 
 import { CATEGORY_LABEL } from '../data/measurements.js'
 
+export const NOT_PRODUCT_MESSAGE = '상품 상세 페이지가 아니에요. 무신사·29CM·W컨셉 같은 쇼핑몰에서 옷 한 벌의 상세 페이지를 열고 다시 눌러주세요. (목록·장바구니·검색 화면에서는 사이즈를 찾을 수 없어요.)'
 const MIN_REVIEWS_WITHOUT_CHART = 3
 const MAX_SHOWN = { matched: 50, others: 100 }
 
@@ -69,7 +70,7 @@ function exportData(product, pageUrl, result) {
 
 export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) {
   const product = parsePage(root, pageUrl, opts)
-  if (!product) return { status: 'no-product', message: '상품 정보를 읽지 못했어요. 상품 상세 페이지에서 눌러주세요.' }
+  if (!product) return { status: 'no-product', message: NOT_PRODUCT_MESSAGE }
 
   // 사이즈표도 없고 참고할 리뷰도 거의 없으면 추천하지 않고 솔직하게 알립니다.
   if (!product.sizeChart && product.reviews.length < MIN_REVIEWS_WITHOUT_CHART) {
@@ -77,7 +78,11 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     return {
       status: 'no-data',
       name: product.name,
-      message: '이 페이지에서 사이즈표와 충분한 리뷰를 찾지 못해 추천하지 않아요. 사이즈표가 이미지로 올라간 경우일 수 있어요. 사이즈표나 리뷰를 펼친 뒤 다시 눌러보세요.',
+      // 상품 페이지로 보이지 않으면(구조화된 상품 정보도, 읽을 사이즈표도 없음) 먼저 그 점을 알려요. 상품 페이지가 맞는데 못 읽은 경우를 위해 직접 입력 양식은 그대로 둡니다.
+      notProductPage: !isProductPage(root),
+      message: isProductPage(root)
+        ? '이 페이지에서 사이즈표와 충분한 리뷰를 찾지 못해 추천하지 않아요. 사이즈표가 이미지로 올라간 경우일 수 있어요. 사이즈표나 리뷰를 펼친 뒤 다시 눌러보세요.'
+        : `${NOT_PRODUCT_MESSAGE} 상품 상세 페이지가 맞다면 사이즈표가 이미지로 올라간 경우일 수 있어요. 사이즈표를 펼친 뒤 다시 누르거나 아래에서 직접 입력해주세요.`,
       details: diagnosticLines(diagnostics),
       diagnostics,
       notes: product.notes,

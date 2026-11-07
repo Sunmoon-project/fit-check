@@ -12,7 +12,7 @@ const CATEGORY_RULES = [
 
 export function guessCategory(text, headers = []) {
   const h = headers.join(' ')
-  if (/발길이|발볼/.test(h)) return 'shoes'
+  if (/발\s*길이|발\s*볼|사이즈\s*\(\s*mm\s*\)/i.test(h)) return 'shoes'
   for (const [cat, re] of CATEGORY_RULES) if (re.test(text || '')) return cat
   if (/허벅지|밑위|허리/.test(h) && !/어깨/.test(h)) return 'bottom'
   if (/어깨|가슴/.test(h)) return 'top'
@@ -33,7 +33,7 @@ function mapHeader(header, category) {
   if (/엉덩이|힙|hip/i.test(h)) return { key: 'hip', flat, flatBelow: 70 }
   if (/허리|waist/i.test(h)) return { key: 'waist', flat, flatBelow: 55 }
   if (/소매|팔|sleeve/i.test(h)) return { key: 'arm', minValue: 40 }
-  if (/발길이|발사이즈/.test(h)) return { key: 'footLength' }
+  if (/발길이|발사이즈|footlength|footsize/i.test(h)) return { key: 'footLength' }
   if (/총장|기장|총기장|length/i.test(h)) return LENGTH_KEY[category] ? { key: LENGTH_KEY[category] } : null
   return null
 }
@@ -49,7 +49,8 @@ export const SIZE_LABEL_RE = new RegExp(
   `^(?:${ALPHA_SIZES}|\\d{1,2}\\(?(?:${ALPHA_SIZES})\\)|(?:${ALPHA_SIZES})\\(\\d{1,3}\\)|\\d{1,3}(?:\\.\\d)?|[0-9]{2,3}\\(?[A-Z]*\\)?)$`,
   'i',
 )
-const MEASURE_HEADER_RE = /어깨|가슴|총장|기장|허리|허벅지|엉덩이|소매|발길이|단면|품|밑위|밑단|암홀/
+// 영문 헤더(Length, Chest 등)도 읽어요. 공백은 지우고 비교합니다('발 길이' → '발길이').
+const MEASURE_HEADER_RE = /어깨|가슴|총장|기장|허리|허벅지|엉덩이|소매|발길이|단면|품|밑위|밑단|암홀|길이|\b(?:length|chest|shoulder|waist|hip|thigh|sleeve)\b/i
 const ALPHA_ONLY_RE = new RegExp(`^(?:${ALPHA_SIZES})$`, 'i')
 const PAREN_RE = new RegExp(`^\\d{1,2}\\((?:${ALPHA_SIZES})\\)$`, 'i')
 
@@ -71,10 +72,15 @@ const isIncreasing = (labels) => labels.every((l, i) => i === 0 || numOf(l) > nu
 // 구매 옵션 이름과 표 라벨이 겹치는지: 이름이 같거나, 표 라벨이 옵션 안의 글자('S' vs '0 (S)')와 같으면 겹쳐요.
 // 숫자만 있는 표 라벨('0')은 옵션 '0 (S)'의 번호 부분과 비교해요. 옵션이 있을 때만 호출되므로 옵션 없이 숫자를 사이즈로 읽지 않아요.
 const outerNumber = (n) => (n.match(/^(\d{1,2})\(/) || [])[1] || null
+// 옵션이 '블랙 / M', '블랙, 2(M)' 처럼 색상과 함께 읽히면 구분자로 나눈 조각도 후보로 써요 (조각 전체가 같을 때만 겹침).
 function optionKeys(opt) {
   const n = normLabel(opt)
+  const keys = new Set([n])
   const t = innerToken(n)
-  return t ? [n, t] : [n]
+  if (t) keys.add(t)
+  const parts = String(opt).split(/\s*[\/|,·]\s*|\s+-\s+/).map(normLabel).filter(Boolean)
+  if (parts.length > 1) for (const p of parts) { keys.add(p); const pt = innerToken(p); if (pt) keys.add(pt) }
+  return [...keys]
 }
 // 'M(95)' 처럼 글자 뒤에 치수 숫자가 붙은 표기의 글자 부분
 const headToken = (n) => (n.match(/^([A-Z]{1,4})\(\d{1,3}\)$/) || [])[1] || null
@@ -85,7 +91,7 @@ function matchOption(label, optionList) {
   for (const o of optionList) {
     const keys = optionKeys(o)
     if (keys.includes(n) || (t && keys.includes(t))) return o
-    if (numeric && outerNumber(normLabel(o)) === n) return o
+    if (numeric && keys.some((k) => outerNumber(k) === n)) return o
   }
   return null
 }
@@ -102,11 +108,12 @@ const shapeLine = (cells, max = 8) => cells.slice(0, max).map(shapeOfCell).join(
 
 const isLabelCell = (c) => SIZE_LABEL_RE.test(String(c).replace(/\s/g, ''))
 const isMeasureRow = (r) => r.length >= 2 && MEASURE_HEADER_RE.test(r[0].replace(/\s/g, ''))
-const MEASURE_WORD_RE = /어깨|가슴|허리|총장|기장|허벅지|엉덩이|소매|발길이|단면/
+const MEASURE_WORD_RE = /어깨|가슴|허리|총장|기장|허벅지|엉덩이|소매|발길이|단면|길이|\b(?:length|chest|shoulder|waist|hip|thigh|sleeve)\b/i
+const hasMeasureWord = (c) => MEASURE_WORD_RE.test(String(c).replace(/\s/g, ''))
 
 // 사이즈 이름 줄 후보: 맨 앞 칸이 사이즈 이름이 아니면('사이즈', 'cm', 빈칸) 제목 칸이라 떼고 나머지가 모두 사이즈 이름이어야 해요.
 function namesFromRow(row) {
-  if (row.some((c) => MEASURE_WORD_RE.test(c))) return null
+  if (row.some(hasMeasureWord)) return null
   const n = row.length >= 2 && !isLabelCell(row[0]) ? row.slice(1) : row
   return n.length >= 1 && n.every(isLabelCell) ? n : null
 }
@@ -158,6 +165,69 @@ function flipRows(rows, headerIdx, ctx) {
 
 const REASON_KEYS = ['too-few-rows', 'no-measure-header', 'no-labeled-rows', 'flipped-no-names', 'numeric-rule', 'flipped-numeric-no-options', 'no-overlap', 'not-best', 'selected']
 
+// ---------- 신발: 사이즈 이름 자체가 발길이(mm)인 표 ----------
+// '사이즈(mm) 230 240 250' 또는 'KR 230 240', 'US 5 6 7' 아래 mm 줄처럼 실측 제목이 없어도, 신발은 220~310 사이로 커지는 숫자가 곧 발길이예요.
+const MM_CELL_RE = /^(2[0-9]\d|3[01]\d)(?:\.\d)?\s*(?:mm|㎜)?$/i
+const mmOf = (c) => {
+  const m = String(c).trim().match(MM_CELL_RE)
+  return m ? Number(m[0].replace(/[^\d.]/g, '')) : null
+}
+function mmSequence(cells) {
+  const nums = cells.map(mmOf).filter((n) => n != null)
+  if (nums.length < 3 || nums.length < cells.length / 2) return null
+  return nums.every((n, i) => i === 0 || n > nums[i - 1]) ? nums : null
+}
+function shoeEvidence(rowsList, options, category) {
+  if (category === 'shoes') return true
+  if (mmOptionLabels(options).length >= 2) return true
+  return rowsList.some((rows) => rows.some((r) => r.some((c) => /^(?:사이즈|size|kr|mm)?\s*\(?\s*mm\s*\)?$/i.test(String(c).trim()) && /mm/i.test(c))))
+}
+const mmOptionLabels = (options) => options.map((o) => (String(o).match(/(?<![\d.])(2[0-9]\d|3[01]\d)(?:\.\d)?\s*(?:mm|㎜)?(?![\d.])/) || [])[1]).filter(Boolean)
+function shoeMmChart(rowsList, options, category) {
+  if (!shoeEvidence(rowsList, options, category)) return null
+  let best = null
+  rowsList.forEach((rows, index) => {
+    const seqs = []
+    for (const r of rows) seqs.push(mmSequence(r.length >= 2 && mmOf(r[0]) == null ? r.slice(1) : r))
+    const width = Math.max(0, ...rows.map((r) => r.length))
+    for (let c = 0; c < width; c++) seqs.push(mmSequence(rows.map((r) => r[c] ?? '').filter((x, i) => i > 0 || mmOf(x) != null || true).slice(rows.length > 1 && mmOf(rows[0][c] ?? '') == null ? 1 : 0)))
+    for (const nums of seqs) if (nums && (!best || nums.length > best.nums.length)) best = { nums, index }
+  })
+  let nums = best?.nums
+  let from = 'shoe-mm'
+  if (nums && options.length) {
+    const optNums = mmOptionLabels(options).map(Number)
+    if (optNums.length && !nums.some((n) => optNums.includes(n))) nums = null
+  }
+  if (!nums) {
+    const o = [...new Set(mmOptionLabels(options).map(Number))].sort((a, b) => a - b)
+    if (o.length < 2) return null
+    nums = o
+    from = 'shoe-options'
+  }
+  const rows = nums.map((n) => [String(n), String(n)])
+  const measures = Object.fromEntries(nums.map((n) => [String(n), { footLength: n }]))
+  return {
+    index: best?.index ?? null,
+    source: from,
+    nums,
+    chart: {
+      unit: 'mm',
+      headers: ['사이즈', '발길이'],
+      rows,
+      measures,
+      category: 'shoes',
+      view: {
+        flipped: false,
+        namesFrom: from,
+        headers: ['발길이'],
+        used: [true],
+        rows: nums.slice(0, 20).map((n) => ({ label: String(n), shown: String(n), cells: [{ raw: `${n}mm`, value: n, converted: false }] })),
+      },
+    },
+  }
+}
+
 /**
  * 사이즈표 후보 중에서 쓸 표를 고르고, 판단 과정을 meta로 돌려줘요.
  * rowsList: 표마다 [[셀 텍스트,...],...]. optionLabels: 페이지에서 읽은 구매 옵션 이름(없으면 []).
@@ -199,7 +269,7 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
   let best = null
   rowsList.forEach((rows, index) => {
     if (rows.length < 2) return
-    const headerIdx = rows.findIndex((r) => r.some((c) => MEASURE_WORD_RE.test(c)))
+    const headerIdx = rows.findIndex((r) => r.some(hasMeasureWord))
     cands[index].head = shapeLine(rows[Math.max(0, headerIdx)])
     if (headerIdx < 0) return why(index, 'no-measure-header')
     meta.withHeader++
@@ -264,7 +334,14 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
     .sort((a, b) => (b.reason === 'selected') - (a.reason === 'selected') || a.index - b.index)
     .slice(0, 6)
     .map((c) => ({ ...c, reason: REASON_KEYS.includes(c.reason) ? c.reason : 'not-best' }))
-  if (!best) return { chart: null, meta }
+  if (!best) {
+    const shoe = shoeMmChart(rowsList, options, category)
+    if (!shoe) return { chart: null, meta }
+    if (shoe.index != null && cands[shoe.index]) cands[shoe.index].reason = 'selected'
+    meta.candidates = cands.filter((c) => c.head !== '' || c.reason === 'selected').slice(0, 6).map((c) => ({ ...c, reason: REASON_KEYS.includes(c.reason) ? c.reason : 'not-best' }))
+    Object.assign(meta, { selectedIndex: shoe.index, rowCount: shoe.nums.length, labelCount: shoe.nums.length, labelClass: 'numeric', monotonic: true, overlap: options.length ? mmOptionLabels(options).filter((n) => shoe.nums.includes(Number(n))).length : 0, namesFrom: shoe.source })
+    return { chart: shoe.chart, meta }
+  }
 
   const cat = category || guessCategory('', best.headers)
   const mapping = best.headers.map((h, i) => (i === 0 ? null : mapHeader(h, cat)))
@@ -274,7 +351,7 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
   const rows = best.body.map((r) => {
     const matched = options.length ? matchOption(normLabel(r[0]), options) : null
     // 숫자만 있는 라벨('0')은 옵션 이름('0(S)')을 줄 이름으로 써서 리뷰의 'S' 같은 글자와도 이어지게 해요.
-    const label = matched && /^\d{1,2}$/.test(normLabel(r[0])) ? normLabel(matched) : normLabel(r[0])
+    const label = matched && /^\d{1,2}$/.test(normLabel(r[0])) ? optionKeys(matched).find((k) => outerNumber(k) === normLabel(r[0])) || normLabel(matched) : normLabel(r[0])
     const shown = matched || displayText(r[0])
     if (shown !== label) display[label] = shown
     const m = {}
@@ -343,7 +420,7 @@ const FIT_WORDS = {
 // 서로 다른 사이즈가 둘 이상 나오면 어느 쪽인지 알 수 없어 비워 둬요.
 const SIZE_TOK = 'XXS|XS|S|M|L|XL|XXL|2XL|3XL|FREE|프리'
 const USUAL_RE = new RegExp(`(?:평소|보통|원래|항상|주로|평상시|늘)\\s*(?:에는|엔|는|은)?\\s*(?:사이즈\\s*(?:는|가)?\\s*)?(?:${SIZE_TOK}|\\d{2,3})(?![A-Za-z0-9])\\s*(?:사이즈|로|으로)?`, 'gi')
-const HABIT_RE = new RegExp(`(?<![A-Za-z0-9])(?:${SIZE_TOK}|\\d{2,3})\\s*(?:사이즈)?\\s*입는`, 'gi')
+const HABIT_RE = new RegExp(`(?<![A-Za-z0-9])(?:${SIZE_TOK}|\\d{2,3})\\s*(?:mm|㎜)?\\s*(?:사이즈)?\\s*(?:입는|신는)`, 'gi')
 const OPTION_CUT_RE = /평소|보통|원래|항상|주로|평상시|입는|키\s*\d|몸무게|\d{2,3}\s*(?:cm|kg)|[.!?。]/i
 const normTok = (x) => x.toUpperCase().replace('프리', 'FREE')
 
@@ -363,12 +440,16 @@ function pickReviewSize(t, sizeLabels) {
     const re = new RegExp(`(?<![A-Za-z0-9가-힣])(?:\\d{1,2}\\s*\\(\\s*)?(${SIZE_TOK})(?![A-Za-z0-9가-힣])`, 'gi')
     const found = [...seg.matchAll(re)].map((m) => m[1])
     if (found.length) return uniqueSize(found, labels)
+    // 신발: 구매옵션이 '화이트 / 255' 처럼 mm 숫자로 끝나는 경우
+    const mm = [...seg.matchAll(/(?<![\d.])(2[0-9]\d|3[01]\d)(?:\s*(?:mm|㎜))?(?![\d.])/g)].map((m) => m[1])
+    if (mm.length) return uniqueSize(mm, labels)
   }
   const body = t.replace(USUAL_RE, ' ').replace(HABIT_RE, ' ')
   const patterns = [
     new RegExp(`(?:^|[^A-Za-z0-9])(${SIZE_TOK})\\s*(?:사이즈|로|으로|구매|샀|입|주문|사)`, 'gi'),
     new RegExp(`(?<![A-Za-z0-9])\\d{1,2}\\s*\\(\\s*(${SIZE_TOK})\\s*\\)`, 'gi'),
-    /(\d{2,3})\s*(?:사이즈|인치|로 구매|으로 구매|샀|구매)/g,
+    /(\d{2,3})\s*(?:mm|㎜)?\s*(?:사이즈|인치|로 구매|으로 구매|샀|구매|주문|신어|신었|신고)/g,
+    /(?<![\d.])(2[0-9]\d|3[01]\d)\s*(?:mm|㎜)(?![A-Za-z])/g, // 신발 '265mm'
   ]
   for (const re of patterns) {
     const found = [...body.matchAll(re)].map((m) => m[1])
