@@ -1,6 +1,6 @@
 // 상품 페이지에 "내 사이즈 찾기" 버튼과 결과 카드를 띄웁니다.
 // 페이지 데이터는 이 브라우저 안에서만 읽고, 어디로도 보내지 않아요. 네트워크 호출이 없습니다.
-import { isProductPage, REVIEW_SELECTOR, readReviewTotal } from '../src/lib/pageParser.js'
+import { isProductPage, REVIEW_SELECTOR, readReviewTotal, readReviewCardEls } from '../src/lib/pageParser.js'
 import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
 import { collectDiagnostics, formatReport } from '../src/lib/diagnose.js'
 import { shouldStop, isSafeMoreButton, toReportStop, STOP_LABEL } from '../src/lib/reviewLoader.js'
@@ -172,7 +172,8 @@ function manualForm(r) {
 
 // 리뷰 요소 개수 (스크롤 대상을 찾는 데만 씁니다)
 function reviewElements() {
-  return Array.from(document.querySelectorAll(REVIEW_SELECTOR))
+  const cards = readReviewCardEls(document)
+  return cards.length > 0 ? cards : Array.from(document.querySelectorAll(REVIEW_SELECTOR))
 }
 
 // 리뷰 영역 안의 '더보기' 버튼 중 허용 목록에 맞는 것 하나만 찾습니다.

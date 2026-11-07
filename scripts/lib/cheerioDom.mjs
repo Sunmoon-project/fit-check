@@ -4,7 +4,15 @@ import * as cheerio from 'cheerio'
 
 export function fakeDocument(html) {
   const $ = cheerio.load(html)
-  const wrap = (node) => ({
+  // 같은 노드는 같은 객체로 돌려줘요 (실제 DOM처럼 ===와 Set이 동작하도록)
+  const cache = new WeakMap()
+  const wrap = (node) => {
+    if (!cache.has(node)) cache.set(node, build(node))
+    return cache.get(node)
+  }
+  const build = (node) => ({
+    contains: (other) => other === wrap(node) || $(other._node).parents().toArray().includes(node),
+    _node: node,
     get textContent() {
       return $(node).text()
     },

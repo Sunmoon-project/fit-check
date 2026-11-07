@@ -71,6 +71,12 @@ function reviewStats(reviews) {
   }
 }
 
+const DROP_KEYS = ['tooShort', 'tooLong', 'innerDuplicate', 'noClue', 'duplicate']
+const cleanCount = (v) => (Number.isInteger(v) && v >= 0 && v <= 100000 ? v : 0)
+function cleanDropped(d) {
+  return Object.fromEntries(DROP_KEYS.map((k) => [k, cleanCount(d?.[k])]))
+}
+
 function cleanScroll(s) {
   if (!s || typeof s !== 'object') return null
   const num = (v) => (Number.isInteger(v) && v >= 0 && v <= 100000 ? v : 0)
@@ -132,6 +138,8 @@ export function collectDiagnostics(root, pageUrl = '', extVersion = '', extra = 
     imageNearHeading: imgNear,
     readyState: ready,
     reviewStats: reviewStats(product?.reviews),
+    reviewCards: cleanCount(product?.reviewMeta?.cards),
+    reviewDropped: cleanDropped(product?.reviewMeta?.dropped),
     scroll: cleanScroll(extra?.scroll),
     structure,
   }
@@ -182,6 +190,11 @@ function reviewStatLines(d) {
   if (r) {
     out.push(`리뷰 ${r.loaded}건 중 키 읽음 ${r.withHeight}, 몸무게 읽음 ${r.withWeight}, 둘 다 ${r.withBoth}, 사이즈 읽음 ${r.withSize}, 핏 읽음 ${r.withFit}`)
     out.push(`리뷰 글 모양: 숫자+cm ${r.numCm}건, 숫자+kg ${r.numKg}건, '키' 낱말 ${r.wordHeight}건, '몸무게' 낱말 ${r.wordWeight}건`)
+  }
+  if (d.reviewDropped) {
+    const x = d.reviewDropped
+    out.push(`버린 리뷰 후보 사유: 너무 짧음 ${x.tooShort}, 너무 김 ${x.tooLong}, 안쪽 중복 ${x.innerDuplicate}, 단서 없음 ${x.noClue}, 중복 ${x.duplicate}`)
+    out.push(`리뷰 카드로 묶은 개수: ${d.reviewCards || 0}`)
   }
   if (d.scroll) out.push(`리뷰 불러오기: ${d.scroll.before}건 -> ${d.scroll.after}건, 멈춘 이유 ${d.scroll.stop}`)
   return out
