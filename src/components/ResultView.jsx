@@ -94,6 +94,7 @@ export default function ResultView({ product, profile, calibration, feedbackCoun
         existing={existingFeedback}
         calibration={calibration}
         feedbackCount={feedbackCount}
+        profile={profile}
         onSave={onFeedback}
       />
 
