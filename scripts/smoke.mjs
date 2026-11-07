@@ -9,6 +9,17 @@ import {
   computeCalibration,
   bodyValuesForProfile,
 } from '../src/lib/fitEngine.js'
+import {
+  parseCsv,
+  parseRows,
+  mergeMapping,
+  normalizeGender,
+  normalizeBodyRow,
+  normalizeBodyRows,
+  errorStats,
+  evaluateBody,
+  fitLinear,
+} from './lib/bodyMetrics.mjs'
 import { PRODUCTS } from '../src/data/mockData.js'
 import { parseProductHtml } from '../server/productParser.js'
 import { findSimilar, describeDiff, categoryGroup, makeWardrobeItem } from '../src/lib/wardrobe.js'
@@ -595,6 +606,61 @@ test('fitMetrics: 구간별 정사이즈 비율', () => {
   assert.equal(b[0].n, 2)
   assert.equal(b[0].rate, 0.5)
   assert.equal(b[1].rate, 1)
+})
+
+test('bodyMetrics: 오차 지표 (MAE, RMSE, bias, 이내 비율)', () => {
+  const s = errorStats([1, -2, 4, -6])
+  assert.equal(s.n, 4)
+  assert.equal(s.mae, 3.25)
+  assert.equal(s.bias, -0.75)
+  assert.ok(Math.abs(s.rmse - Math.sqrt(57 / 4)) < 1e-9)
+  assert.equal(s.within3, 0.5)
+  assert.equal(s.within5, 0.75)
+  assert.equal(errorStats([]), null)
+})
+
+test('bodyMetrics: CSV 파싱(따옴표, BOM, CRLF)과 성별 정규화', () => {
+  const rows = parseCsv('\uFEFFgender,note\r\n여,"a,b"\r\nM,"say ""hi"""\r\n')
+  assert.equal(rows.length, 2)
+  assert.equal(rows[0].note, 'a,b')
+  assert.equal(rows[1].note, 'say "hi"')
+  assert.equal(normalizeGender('여'), 'female')
+  assert.equal(normalizeGender('M'), 'male')
+  assert.equal(normalizeGender('?'), null)
+  assert.equal(parseRows('[{"a":1}]').length, 1)
+  assert.equal(parseRows('{"a":1}\n{"a":2}').length, 2)
+})
+
+test('bodyMetrics: 컬럼 매핑 덮어쓰기와 mm 단위 변환', () => {
+  const map = mergeMapping({ height: 'H_mm', footLength: 'F' })
+  const r = normalizeBodyRow({ gender: '남', H_mm: '1700', weight: '65', F: '260' }, map, 'mm')
+  assert.equal(r.height, 170)
+  assert.equal(r.actual.footLength, 260)
+  assert.equal(normalizeBodyRow({ gender: '남', H_mm: '1700', weight: '65' }, map, 'mm').excluded, '실측 부위 값 없음')
+  assert.equal(normalizeBodyRow({ gender: 'x', height: 170, weight: 60, waist: 70 }, mergeMapping()).excluded, '성별 없음/해석 불가')
+  const n = normalizeBodyRows([{ gender: 'female', height: 160, weight: 50, waist: 66 }, null], mergeMapping())
+  assert.equal(n.rows.length, 1)
+  assert.equal(n.total, 2)
+})
+
+test('bodyMetrics: 추정과 실측 비교, 발길이는 cm로 환산', () => {
+  const est = estimateBody({ gender: 'female', height: 160, weight: 50 }).values
+  const rows = [{ gender: 'female', height: 160, weight: 50, actual: { waist: est.waist + 4, footLength: est.footLength } }]
+  const res = evaluateBody(rows, estimateBody)
+  assert.equal(res.female.waist.bias, -4)
+  assert.equal(res.female.waist.within3, 0)
+  assert.equal(res.female.waist.within5, 1)
+  assert.equal(res.female.footLength.mae, 0)
+  assert.equal(res.male.waist, undefined)
+})
+
+test('bodyMetrics: 최소제곱 회귀가 정확한 선형 관계를 복원', () => {
+  const samples = []
+  for (const h of [150, 160, 170, 180]) for (const w of [45, 60, 75]) samples.push({ height: h, weight: w, value: 0.3 * h + 0.5 * w + 7 })
+  const f = fitLinear(samples)
+  assert.ok(Math.abs(f.height - 0.3) < 1e-6 && Math.abs(f.weight - 0.5) < 1e-6 && Math.abs(f.intercept - 7) < 1e-4)
+  assert.equal(fitLinear(samples.slice(0, 3)), null)
+  assert.equal(fitLinear(samples.map((s) => ({ ...s, weight: 50 }))), null)
 })
 
 console.log(`\n${passed}개 통과`)
