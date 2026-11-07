@@ -39,15 +39,20 @@ export const saveFeedback = (list) => write(FEEDBACK_KEY, list)
 // 철회(false)하면 대기열도 함께 지웁니다. 피드백 키(fitcheck.feedback.v1)와는 별개예요.
 const CONSENT_KEY = 'fitcheck.consent.v1'
 const QUEUE_KEY = 'fitcheck.contribQueue.v1'
+// 순수 읽기예요. 저장된 동의 버전이 현재와 다르면 false를 돌려줄 뿐 저장소를 바꾸지 않아요.
 export const loadConsent = (version) => {
   const c = read(CONSENT_KEY, null)
+  return Boolean(c && c.agreed === true && c.version === version)
+}
+// 문구가 바뀌어 이전 동의가 무효가 되면, 그 동의로 쌓인 대기열도 함께 지워요. 렌더 중이 아니라 이펙트·이벤트에서 불러요.
+export function purgeStaleConsent(version) {
+  const c = read(CONSENT_KEY, null)
   if (c && c.version !== version) {
-    // 문구가 바뀌어 이전 동의가 무효가 되면, 그 동의로 쌓인 대기열도 함께 지워요.
     write(QUEUE_KEY, null)
     write(CONSENT_KEY, null)
-    return false
+    return true
   }
-  return Boolean(c && c.agreed === true)
+  return false
 }
 export function saveConsent(agreed, version) {
   if (!agreed) {
@@ -63,6 +68,12 @@ export function enqueueContribution(record, key, consentVersion) {
   if (!record || !key) return false
   const rest = loadContribQueue().filter((e) => e.key !== key)
   return write(QUEUE_KEY, [...rest, { key, consentVersion, record }].slice(-200))
+}
+
+// 서버 전송용 레코드만 꺼내요. 로컬 전용 key는 절대 포함하지 않고, 현재 동의 버전과 다른 항목은 제외해요.
+export function recordsForUpload(queue, currentConsentVersion) {
+  if (!Array.isArray(queue)) return []
+  return queue.filter((e) => e && e.consentVersion === currentConsentVersion && e.record).map((e) => e.record)
 }
 
 // 옷장: 최근 순으로 최대 WARDROBE_MAX개. 용량이 부족하면 오래된 항목의 이미지부터 뺍니다.
