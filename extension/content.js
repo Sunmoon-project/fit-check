@@ -1,14 +1,18 @@
 // 상품 페이지에 "내 사이즈 찾기" 버튼과 결과 카드를 띄웁니다.
 // 페이지 데이터는 이 브라우저 안에서만 읽고, 어디로도 보내지 않아요. 네트워크 호출이 없습니다.
-import { isProductPage } from '../src/lib/pageParser.js'
+import { isProductPage, REVIEW_SELECTOR } from '../src/lib/pageParser.js'
 import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
 import { collectDiagnostics, formatReport } from '../src/lib/diagnose.js'
+import { shouldStop, isSafeMoreButton, toReportStop, STOP_LABEL } from '../src/lib/reviewLoader.js'
 import { EXT_PROFILE_KEY, isUsableProfile } from '../src/lib/extProfile.js'
 
 const WAIT_MS = 4000 // 늦게 그려지는 표·리뷰를 기다리는 최대 시간
 const RETRY_DELAYS = [1500, 2500] // 못 찾았을 때 다시 읽기 전 기다림. 전체 대기는 약 8초 이내
 const EXT_VERSION = (typeof chrome !== 'undefined' && chrome.runtime?.getManifest?.().version) || ''
 const QUIET_MS = 500 // 이 시간 동안 화면 변화가 없으면 다 그려졌다고 봅니다
+const STEP_QUIET_MS = 600 // 리뷰 더 불러오기 한 단계 뒤 화면이 잠잠해질 때까지 기다리는 시간
+const STEP_WAIT_MS = 2500 // 한 단계에서 기다리는 최대 시간
+const REVIEW_BOX = '[class*="review" i],[id*="review" i],[data-testid*="review" i]' // 리뷰 영역으로 보는 조상
 
 const CSS = `
 :host{all:initial}
@@ -30,6 +34,7 @@ p{margin:0}
 .btn{margin-top:8px;border:1px solid #111;border-radius:8px;background:#fff;color:#111;padding:6px 10px;font-size:12px;cursor:pointer}
 .ok{margin-top:6px;font-size:12px;color:#0a7a3c}
 .inp{width:100%;margin-top:6px;border:1px solid #d4d4d4;border-radius:6px;padding:6px;font-size:12px;font-family:inherit}
+.prog{margin-top:6px;font-size:12px;color:#555}
 .note{margin-top:10px;font-size:11px;color:#8a8a8e}
 `
 
@@ -38,6 +43,7 @@ let shadow = null
 let panel = null
 let fab = null
 let busy = false
+let loader = null // 리뷰 더 불러오기 진행 상태 { aborted }
 
 function ensureUi() {
   if (host) return
@@ -164,6 +170,120 @@ function manualForm(r) {
   return box
 }
 
+// 리뷰 요소 개수 (스크롤 대상을 찾는 데만 씁니다)
+function reviewElements() {
+  return Array.from(document.querySelectorAll(REVIEW_SELECTOR))
+}
+
+// 리뷰 영역 안의 '더보기' 버튼 중 허용 목록에 맞는 것 하나만 찾습니다.
+function findMoreButton() {
+  const cands = document.querySelectorAll('button, [role="button"], a:not([href]), a[href^="#"], a[href^="javascript:"]')
+  for (const b of cands) {
+    if (b.disabled || b.getAttribute('aria-disabled') === 'true') continue
+    if (isSafeMoreButton(b.textContent, { inReviewContainer: !!b.closest(REVIEW_BOX) })) return b
+  }
+  return null
+}
+
+function quietWait(quietMs, maxMs) {
+  return new Promise((resolve) => {
+    let quiet = setTimeout(done, quietMs)
+    const limit = setTimeout(done, maxMs)
+    const mo = new MutationObserver(() => {
+      clearTimeout(quiet)
+      quiet = setTimeout(done, quietMs)
+    })
+    mo.observe(document.body || document.documentElement, { childList: true, subtree: true })
+    function done() {
+      mo.disconnect()
+      clearTimeout(quiet)
+      clearTimeout(limit)
+      resolve()
+    }
+  })
+}
+
+// 사용자가 누를 때만 실행: 마지막 리뷰 쪽으로 스크롤하고, 허용된 '더보기'를 단계마다 최대 한 번 누릅니다.
+// 한도(횟수·시간·정체)나 중단 버튼으로 멈추고, 끝나면 항상 원래 스크롤 위치로 돌아옵니다.
+async function loadMoreReviews(onProgress) {
+  const { scrollX, scrollY } = window
+  const state = { aborted: false }
+  loader = state
+  const startedAt = Date.now()
+  let steps = 0
+  let stalls = 0
+  let count = reviewElements().length
+  let reason = null
+  try {
+    while (!(reason = shouldStop({ steps, elapsedMs: Date.now() - startedAt, stalls, aborted: state.aborted, count, total: null }))) {
+      const list = reviewElements()
+      const target = list[list.length - 1]
+      if (target) target.scrollIntoView({ block: 'center' })
+      const btn = findMoreButton()
+      if (btn) btn.click()
+      await quietWait(STEP_QUIET_MS, STEP_WAIT_MS)
+      steps += 1
+      const next = reviewElements().length
+      stalls = next > count ? 0 : stalls + 1
+      count = next
+      onProgress(count)
+    }
+  } finally {
+    window.scrollTo(scrollX, scrollY)
+    loader = null
+  }
+  return reason
+}
+
+function loadMoreBlock(r) {
+  const box = el('div')
+  const btn = el('button', 'btn', '리뷰 더 불러오기')
+  btn.type = 'button'
+  const stop = el('button', 'btn', '중단')
+  stop.type = 'button'
+  stop.hidden = true
+  const prog = el('p', 'prog')
+  prog.setAttribute('role', 'status')
+  stop.addEventListener('click', () => {
+    if (loader) loader.aborted = true
+  })
+  btn.addEventListener('click', async () => {
+    if (busy) return
+    busy = true
+    btn.disabled = true
+    stop.hidden = false
+    fab.disabled = true
+    prog.textContent = '불러온 리뷰 0건'
+    let reason = 'aborted'
+    try {
+      reason = await loadMoreReviews((n) => {
+        prog.textContent = `불러온 리뷰 ${n}건`
+      })
+      const profile = await readProfile()
+      if (!isUsableProfile(profile)) throw new Error('no-profile')
+      const next = analyzePage(document, location.href, profile, EXT_VERSION)
+      const scroll = { before: r.reviewsLoaded ?? 0, after: next.reviewsLoaded ?? 0, stop: toReportStop(reason) }
+      if (next.status === 'ok') {
+        next.diagnostics = collectDiagnostics(document, location.href, EXT_VERSION, { scroll })
+        next.loadInfo = `리뷰 ${scroll.before}건에서 ${scroll.after}건으로 늘렸어요. ${STOP_LABEL[reason]}.`
+      }
+      busy = false
+      renderResult(next)
+    } catch {
+      busy = false
+      prog.textContent = '리뷰를 더 불러오다 문제가 생겼어요. 다시 눌러 주세요.'
+      btn.disabled = false
+      stop.hidden = true
+    } finally {
+      busy = false
+      fab.disabled = false
+    }
+  })
+  box.append(btn, stop, prog)
+  box.append(el('p', 'note', '누를 때만 동작해요. 리뷰 영역으로 스크롤하며 리뷰의 더보기 버튼만 누르고(구매·장바구니 등은 누르지 않아요), 최대 약 30초 또는 20단계 뒤 멈춰요. 끝나면 원래 위치로 돌아와요.'))
+  return box
+}
+
 function renderResult(r) {
   showCard((card) => {
     if (r.status !== 'ok') {
@@ -194,7 +314,9 @@ function renderResult(r) {
       card.append(ul)
     }
     card.append(el('h3', null, r.headline), el('p', null, r.body))
-    card.append(el('p', 'note', '이 페이지에 불러와진 리뷰만 읽어요. 더 많은 리뷰를 반영하려면 리뷰 영역을 직접 스크롤해 불러온 뒤 버튼을 다시 눌러 주세요(자동으로 스크롤하지 않아요).'))
+    card.append(loadMoreBlock(r))
+    if (r.loadInfo) card.append(el('p', 'note', r.loadInfo))
+    card.append(el('p', 'note', '이 페이지에 불러와진 리뷰만 읽어요. 더 많은 리뷰를 반영하려면 아래 '리뷰 더 불러오기'를 눌러 보세요. 누를 때만 리뷰 영역을 스크롤하고 리뷰의 '더보기' 버튼만 눌러요(끝나면 원래 위치로 돌아와요).'))
     card.append(el('p', 'note', '확신도는 후기·사이즈표 근거가 얼마나 있는지로 나눈 참고 단계예요. 정확도를 측정한 값이 아니에요.'))
     if (r.sizeChartMissing && r.diagnostics) card.append(manualForm(r))
     if (r.diagnostics) {

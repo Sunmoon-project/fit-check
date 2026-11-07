@@ -51,7 +51,7 @@ function nearbyRegions(anchor) {
 }
 
 // 리뷰 글은 읽어서 개수만 셉니다. 글과 숫자 값은 결과에 담지 않아요.
-const SCROLL_STOPS = ['reached-end', 'no-growth', 'limit', 'not-run']
+const SCROLL_STOPS = ['reached-end', 'no-growth', 'limit', 'limit-time', 'aborted', 'not-run']
 
 function reviewStats(reviews) {
   const list = reviews || []
