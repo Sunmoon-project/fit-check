@@ -1160,7 +1160,85 @@ test('가짜 HTML: 사이즈 이름 줄이 없고 첫 열에 총장 값(67/69/71
   assert.notEqual(r.recommendedLabel, '67')
   assert.ok(!JSON.stringify(r).includes('"67"'))
   const rep = formatReport(collectDiagnostics(doc, 'https://shop.example/p/1'))
-  assert.match(rep, /첫 열 제목이 실측 항목이라 버린 후보 [1-9]/)
+  assert.match(rep, /뒤집어도 못 쓴 후보 [1-9]/)
+})
+
+// 가로세로가 뒤집힌 표: 첫 열이 실측 항목, 첫 행이 사이즈 이름
+const MEASURE_ROWS = [
+  ['총장', 67, 69, 71, 73, 75],
+  ['어깨너비', 44, 46, 48, 50, 52],
+  ['가슴단면', 52, 54, 56, 58, 60],
+  ['소매길이', 60, 61, 62, 63, 64],
+]
+const flippedTable = (names) =>
+  `<table><tr><th>사이즈</th>${names.map((n) => `<th>${n}</th>`).join('')}</tr>` +
+  MEASURE_ROWS.map((r) => `<tr><td>${r[0]}</td>${r.slice(1).map((v) => `<td>${v}</td>`).join('')}</tr>`).join('') +
+  `</table>`
+const flippedGrid = (names) =>
+  `<div class="g"><div><b>사이즈</b>${names.map((n) => `<b>${n}</b>`).join('')}</div>` +
+  MEASURE_ROWS.map((r) => `<div><b>${r[0]}</b>${r.slice(1).map((v) => `<b>${v}</b>`).join('')}</div>`).join('') +
+  `</div>`
+
+test('가짜 HTML: 첫 열이 실측 항목이고 첫 행이 0~4인 뒤집힌 표를 옵션 "0 (S)"~"4 (2XL)"와 이어 읽는다', () => {
+  const doc = fakeDocument(wrapBody(`<h1>코튼 재킷 아우터</h1>${optionsHtml}${flippedTable([0, 1, 2, 3, 4])}`))
+  const p = parsePage(doc, '')
+  assert.ok(p.sizeChart)
+  assert.deepEqual(p.sizeChart.rows.map((r) => r[0]), ['0(S)', '1(M)', '2(L)', '3(XL)', '4(2XL)'])
+  assert.equal(p.sizeChart.display['0(S)'], '0 (S)')
+  assert.equal(p.sizeChart.headers[1], '총장')
+  assert.equal(p.sizeChart.rows[0][1], '67')
+  assert.equal(p.sizeChartMeta.flipped, 1)
+  const r = analyzePage(doc, '', fakeProfile)
+  assert.equal(r.status, 'ok')
+  assert.ok(OPTION_LIST_LABELS().includes(r.recommendedLabel), r.recommendedLabel)
+  assert.notEqual(r.recommendedLabel, '67')
+  const rep = formatReport(collectDiagnostics(doc, 'https://shop.example/p/1'))
+  assert.match(rep, /뒤집어 읽은 후보 [1-9]/)
+})
+
+test('가짜 HTML: 첫 행이 S,M,L,XL,2XL인 뒤집힌 표도 옵션 이름으로 보여준다', () => {
+  const doc = fakeDocument(wrapBody(`<h1>코튼 재킷 아우터</h1>${optionsHtml}${flippedTable(['S', 'M', 'L', 'XL', '2XL'])}`))
+  const p = parsePage(doc, '')
+  assert.deepEqual(p.sizeChart.rows.map((r) => r[0]), ['S', 'M', 'L', 'XL', '2XL'])
+  assert.equal(p.sizeChart.display.M, '1 (M)')
+  const r = analyzePage(doc, '', fakeProfile)
+  assert.ok(r.recommendedLabel == null || OPTION_LIST_LABELS().includes(r.recommendedLabel))
+  // 옵션이 없어도 글자 사이즈 이름이면 읽는다
+  assert.ok(parsePage(fakeDocument(wrapBody(`<h1>코튼 재킷 아우터</h1>${flippedTable(['S', 'M', 'L', 'XL', '2XL'])}`)), '').sizeChart)
+})
+
+test('가짜 HTML: 뒤집힌 표에서도 총장 값 67은 사이즈 이름으로 읽히지 않는다', () => {
+  // 옵션이 없을 때 뒤집어 읽은 숫자 이름 후보는 쓰지 않는다 (같은 모양의 세로 후보가 있으면 그쪽이 쓰일 수는 있어요)
+  const noOpt = parsePage(fakeDocument(wrapBody(`<h1>코튼 재킷 아우터</h1>${flippedTable([0, 1, 2, 3, 4])}`)), '')
+  assert.equal(noOpt.sizeChartMeta.flipped, 0)
+  assert.ok(!(noOpt.sizeChart?.rows || []).some((row) => row[0] === '67'))
+  const doc = fakeDocument(wrapBody(`<h1>코튼 재킷 아우터</h1>${optionsHtml}${flippedTable([0, 1, 2, 3, 4])}`))
+  const r = analyzePage(doc, '', fakeProfile)
+  assert.ok(!JSON.stringify(r).includes('"67"'))
+  const p = parsePage(doc, '')
+  assert.ok(!p.sizeChart.rows.some((row) => row[0] === '67'))
+})
+
+test('가짜 HTML: 뒤집힌 표의 사이즈 이름이 구매 옵션과 전혀 안 맞으면 거부한다', () => {
+  const doc = fakeDocument(wrapBody(`<h1>코튼 재킷 아우터</h1>${optionsHtml}${flippedTable([95, 100, 105, 110, 115])}`))
+  const p = parsePage(doc, '')
+  assert.equal(p.sizeChart, null)
+  assert.ok(p.sizeChartMeta.rejectedNoOverlap >= 1)
+})
+
+test('가짜 HTML: div로 만든 뒤집힌 격자도 뒤집어 읽는다', () => {
+  const doc = fakeDocument(wrapBody(`<h1>코튼 재킷 아우터</h1>${optionsHtml}${flippedGrid([0, 1, 2, 3, 4])}`))
+  const p = parsePage(doc, '')
+  assert.ok(p.sizeChart)
+  assert.deepEqual(p.sizeChart.rows.map((r) => r[0]), ['0(S)', '1(M)', '2(L)', '3(XL)', '4(2XL)'])
+  assert.ok(p.sizeChartMeta.flipped >= 1)
+})
+
+test('가짜 HTML: 사이즈 제목 근처가 이미지뿐이면 이미지로 제공된 것 같다는 안내를 준다', () => {
+  const doc = fakeDocument(wrapBody('<h1>코튼 재킷 아우터</h1><div><h3>사이즈 정보</h3><img src="a.png"></div>'))
+  const p = parsePage(doc, '')
+  assert.equal(p.sizeChart, null)
+  assert.ok(p.notes.some((n) => /이미지로 제공된 것 같아요.*직접 입력/.test(n)))
 })
 
 test('가짜 HTML: 숫자뿐인 라벨은 증가 순서가 아니거나 한 줄뿐이면 사이즈표로 쓰지 않는다', () => {
@@ -1178,7 +1256,7 @@ test('가짜 HTML: 구매 옵션과 이름이 하나도 겹치지 않는 사이�
   const r = analyzePage(doc, '', fakeProfile)
   assert.equal(r.status, 'no-data')
   assert.equal(r.recommendedSize, undefined)
-  assert.match(formatReport(collectDiagnostics(doc, '')), /구매 옵션과 안 겹쳐 버린 후보 1개/)
+  assert.match(formatReport(collectDiagnostics(doc, '')), /구매 옵션과 안 겹쳐 버린 후보 [1-9]개/)
 })
 
 test('가짜 HTML: 후기 733건 표시와 불러온 2건이면 요약에 "불러온 2건 / 전체 약 733건"을 밝힌다', () => {
