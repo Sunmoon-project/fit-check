@@ -56,6 +56,13 @@ table{border-collapse:collapse;font-size:11px;width:100%}
 th,td{border:1px solid #e3e3e3;padding:3px 5px;text-align:center;white-space:nowrap}
 th{background:#f6f6f6;font-weight:600}
 th.dim,td.dim{color:#a0a0a5}
+.tabs{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.tab{border:1px solid #d4d4d4;border-radius:999px;background:#fff;color:#111;padding:2px 9px;font-size:11px;cursor:pointer}
+.tab.on{background:#111;color:#fff;border-color:#111}
+.bar{display:inline-flex;gap:1px;vertical-align:middle;margin-left:4px}
+.bar i{display:inline-block;width:6px;height:6px;background:#e3e3e3}
+.bar i.on{background:#4a5a6a}
+td.mo{color:#6b6b70;font-size:10px;white-space:normal}
 tr.rec th,tr.rec td{background:#111;color:#fff}
 .cv{display:block;font-size:10px;color:#0a7a3c}
 tr.rec .cv{color:#9fe0ba}
@@ -316,7 +323,56 @@ function chartTable(v) {
   const legend = []
   if (converted) legend.push('→ 단면 값을 둘레(×2)로 바꿔 계산한 값')
   if (v.used.some((u) => !u)) legend.push('흐린 열은 계산에 쓰지 않았어요')
+  if (v.ignored?.length) legend.push('추천 키·몸무게 표는 계산에 쓰지 않았어요')
   if (legend.length) box.append(el('p', 'note', legend.join(' · ')))
+  return box
+}
+
+// 사이즈 탭 + 부위별 비교 표: 내 치수 / 옷 실측 / 여유 / 판정. 비교 기준이 없는 부위는 '실측만 표시'로 구분해요. 모든 글은 textContent로만 넣습니다.
+function compareBlock(cv) {
+  const box = el('div')
+  const tabs = el('div', 'tabs')
+  const panels = []
+  const buttons = []
+  const fmt = (n, u) => (n == null ? '-' : `${n}${u}`)
+  cv.sizes.forEach((s, idx) => {
+    const isRec = s.size === cv.recommended
+    const btn = el('button', 'tab', isRec ? `${s.label} (추천)` : s.label)
+    const panel = el('div', 'tw')
+    const table = el('table')
+    const head = el('tr')
+    for (const h of ['부위', '내 치수', '옷 실측', '여유', '판정']) head.append(el('th', null, h))
+    table.append(head)
+    for (const r of s.rows) {
+      const tr = el('tr')
+      tr.append(el('th', null, r.label))
+      if (r.verdict == null) {
+        tr.append(el('td', null, r.body == null ? '-' : fmt(r.body, r.unit)), el('td', null, fmt(r.garment, r.unit)), el('td', null, '-'))
+        tr.append(el('td', 'mo', r.note))
+      } else {
+        const kind = r.bodyKind === 'measured' ? '' : r.bodyKind === 'standard' ? ' (표준)' : ' (추정)'
+        tr.append(el('td', null, `${fmt(r.body, r.unit)}${kind}`), el('td', null, fmt(r.garment, r.unit)), el('td', null, `${r.ease > 0 ? '+' : ''}${r.ease}${r.unit}`))
+        const td = el('td', null, r.note ? `${r.verdict} (${r.note})` : r.verdict)
+        const bar = el('span', 'bar')
+        for (let i = 0; i < 5; i++) bar.append(el('i', i === r.level ? 'on' : null))
+        td.append(bar)
+        tr.append(td)
+      }
+      table.append(tr)
+    }
+    panel.append(table)
+    panel.hidden = idx !== 0
+    btn.className = idx === 0 ? 'tab on' : 'tab'
+    btn.addEventListener('click', () => {
+      panels.forEach((p, i) => { p.hidden = i !== idx })
+      buttons.forEach((b, i) => { b.className = i === idx ? 'tab on' : 'tab' })
+    })
+    panels.push(panel)
+    buttons.push(btn)
+    tabs.append(btn)
+  })
+  box.append(tabs, ...panels)
+  box.append(el('p', 'note', '둘레는 단면×2, (추정)은 키·몸무게로 계산한 값이에요. 총장은 키로 계산한 표준 기장과 비교하고, 소매·발길이·총장 기준은 휴리스틱이에요. 막대는 왼쪽부터 작을 수 있음 · 타이트 · 적당 · 넉넉 · 매우 넉넉이에요.'))
   return box
 }
 
@@ -844,6 +900,11 @@ function renderResult(r) {
     }
     if (r.exportData) fold.append(exportBlock(r))
     const manual = manualForm(r)
+    if (r.compareView) {
+      const cp = section('사이즈표 비교 (내 치수 vs 옷 실측)', true)
+      cp.body.append(compareBlock(r.compareView))
+      fold.append(cp.det)
+    }
     const ch = section(r.chartView ? '읽은 사이즈표 (페이지 그대로)' : '사이즈표 (읽지 못함)', !r.chartView)
     if (r.chartView) ch.body.append(chartTable(r.chartView), el('p', 'tiny', '읽은 표가 다르면 직접 입력으로 고칠 수 있어요.'))
     ch.body.append(manual)

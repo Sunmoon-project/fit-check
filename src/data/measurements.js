@@ -13,6 +13,17 @@ export const PART_LABEL = Object.fromEntries(BODY_FIELDS.map((f) => [f.key, f.la
 PART_LABEL.footLength = '발길이'
 PART_LABEL.arm = '팔길이'
 
+// 사이즈표에는 있지만 신체 비교 기준(BODY_FIELDS, EASE_RULES)이 없는 부위: 실측만 보여줘요.
+export const EXTRA_PART_LABEL = {
+  sleeveWidth: '소매통',
+  rise: '밑위',
+  hem: '밑단',
+  knee: '무릎',
+  footWidth: '발볼',
+  heelHeight: '굽높이',
+}
+export const LENGTH_PART_LABEL = '총장'
+
 export const CATEGORY_LABEL = { top: '상의', outer: '아우터', bottom: '하의', dress: '원피스', shoes: '신발' }
 
 // 카테고리마다 핏을 판정할 신체 부위

@@ -34,6 +34,7 @@ import {
   makeDeliverMessage, makeAckMessage, makeReadyMessage, parseDeliverMessage, parseAckMessage, isReadyMessage, applyDelivery, newQueueId, syncNotice,
 } from '../src/lib/wardrobeSync.js'
 import { connectExtensionSync } from '../src/lib/syncClient.js'
+import { compareSizes, MEASURE_ONLY_LABEL } from '../src/lib/sizeCompare.js'
 import { buildProfile, isUsableProfile } from '../src/lib/extProfile.js'
 import { fakeDocument } from './lib/cheerioDom.mjs'
 import { checkManifest } from './checkExtension.mjs'
@@ -2992,6 +2993,110 @@ test('색 대비: 제목·막대 색이 흰/연회색 배경에서 기준(글자
   assert.ok(ratio(css.match(/\.tone-compare \{[^}]*--tone-text: (#[0-9a-f]{6})/i)[1], '#ffffff') >= 4.5, 'compare 제목')
   assert.ok(ratio(css.match(/\.tone-feedback \{[^}]*--tone-text: (#[0-9a-f]{6})/i)[1], '#ffffff') >= 4.5, 'feedback 제목')
   for (const c of ['#80808a', '#b8650a']) assert.ok(ratio(c, '#f4f4f5') >= 3, `막대 ${c}`)
+})
+
+// ---- FEAT-002: 실측 머리글 동의어, 부위별 비교(sizeCompare), 표 여러 개 중 실측표 선택 (직접 만든 가짜 HTML이며 실제 무신사 확인이 아니에요) ----
+test('가짜 HTML: 머리글 동의어 변형이 같은 부위로 읽히고 단면은 둘레로, 길이는 그대로 읽는다', () => {
+  const cases = [
+    ['전체길이', 'topLength', 70, 70], ['기장', 'topLength', 70, 70], ['어깨', 'shoulder', 48, 48], ['가슴단면', 'chest', 54, 108], ['가슴둘레', 'chest', 108, 108],
+    ['품', 'chest', 55, 110], ['화장', 'arm', 60, 60], ['팔길이', 'arm', 60, 60], ['소매통', 'sleeveWidth', 20, 40], ['암홀', 'sleeveWidth', 24, 48], ['소매단면', 'sleeveWidth', 18, 36],
+    ['허리둘레', 'waist', 76, 76], ['힙', 'hip', 98, 98], ['엉덩이단면', 'hip', 50, 100], ['허벅지', 'thigh', 60, 60], ['밑위길이', 'rise', 29, 29],
+    ['밑단단면', 'hem', 20, 40], ['무릎단면', 'knee', 22, 44],
+  ]
+  for (const [head, key, raw, expect] of cases) {
+    const page = sysPage('티셔츠', ['사이즈', head], [['S', raw], ['M', raw + 1]])
+    assert.equal(page.sizeChart?.measures?.S?.[key], expect, `${head} -> ${key}`)
+  }
+})
+
+test('가짜 HTML: 하의 허리단면·허벅지단면·밑위·밑단·총장 + 인치 28~34는 둘레로 바꾸고 밑위·밑단을 따로 읽는다', () => {
+  const head = ['사이즈', '총장', '허리단면', '허벅지단면', '밑위', '밑단단면']
+  const rows = [['28', 100, 37, 30, 28, 18], ['30', 101, 39, 31, 28.5, 18.5], ['32', 102, 41, 32, 29, 19], ['34', 103, 43, 33, 29.5, 19.5]]
+  const page = sysPage('와이드 팬츠', head, rows)
+  assert.equal(page.category, 'bottom')
+  assert.deepEqual(page.sizeChart.measures['30'], { inseam: 101, waist: 78, thigh: 62, rise: 28.5, hem: 37 })
+  assert.deepEqual(page.sizeChart.view.keys, ['inseam', 'waist', 'thigh', 'rise', 'hem'])
+  assert.ok(page.sizeChart.view.used.every(Boolean), '읽은 열이 모두 계산에 쓰이는 열로 표시돼요')
+})
+
+test('가짜 HTML: 신발 230~280 mm + 발볼은 발길이와 발볼(mm)로 읽는다', () => {
+  const sizes = ['230', '240', '250', '260', '270', '280']
+  const page = sysPage('캔버스 운동화', ['사이즈(mm)', '발길이', '발볼'], sizes.map((n, i) => [n, n, 95 + i * 2]))
+  assert.equal(page.category, 'shoes')
+  assert.equal(page.sizeChart.measures['230'].footLength, 230)
+  assert.equal(page.sizeChart.measures['230'].footWidth, 95)
+  const cm = sysPage('캔버스 운동화', ['사이즈(mm)', '발길이', '발볼(cm)'], sizes.map((n, i) => [n, n, 9.5 + i * 0.2]))
+  assert.equal(cm.sizeChart.measures['230'].footWidth, 95, 'cm로 적힌 발볼은 mm로 바꿔요')
+})
+
+test('가짜 HTML: 표가 2개면 추천 키·몸무게 표나 부위가 적은 안내표보다 실측표를 고른다', () => {
+  const guide = `<table><tr><td>사이즈</td><td>추천 키</td><td>추천 몸무게</td></tr><tr><td>S</td><td>165</td><td>55</td></tr><tr><td>M</td><td>175</td><td>65</td></tr><tr><td>L</td><td>180</td><td>75</td></tr></table>`
+  const real = `<table>${[SYS_HEAD, ...sysRows(['S', 'M', 'L'])].map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</table>`
+  for (const html of [guide + real, real + guide]) {
+    const { chart, meta } = analyzeSizeCharts([...fakeDocument(`<html><body>${html}</body></html>`).querySelectorAll('table')].map((t) => [...t.querySelectorAll('tr')].map((tr) => [...tr.querySelectorAll('td')].map((c) => c.textContent.trim()))), 'top', [])
+    assert.equal(chart.measures.M.chest, 112)
+    assert.equal(chart.view.ignored.length, 1)
+    assert.equal(chart.view.ignored[0].kind, 'recommend')
+    assert.ok(meta.candidates.some((c) => c.reason === 'selected'))
+  }
+  // 가슴만 있는 안내표(2열)와 실측표가 같이 있으면 읽을 수 있는 열이 많은 실측표를 골라요.
+  const small = [['사이즈', '가슴'], ['S', '90'], ['M', '95'], ['L', '100']]
+  const full = [SYS_HEAD, ...sysRows(['S', 'M', 'L']).map((r) => r.map(String))]
+  assert.equal(analyzeSizeCharts([small, full], 'top', []).chart.view.headers.length, 4)
+  // 상의 상품이면 상의 실측표를, 하의 상품이면 하의 실측표를 골라요.
+  const bottom = [['사이즈', '총장', '허리단면', '허벅지단면'], ['S', '100', '37', '30'], ['M', '101', '39', '31'], ['L', '102', '41', '32']]
+  assert.ok(analyzeSizeCharts([bottom, full], 'top', []).chart.measures.M.shoulder != null)
+  assert.ok(analyzeSizeCharts([full, bottom], 'bottom', []).chart.measures.M.waist != null)
+})
+
+test('sizeCompare: 사이즈별 내 치수·옷 실측·여유·판정을 만들고 비교 기준 없는 부위는 실측만 표시한다', () => {
+  const page = sysPage('와이드 팬츠', ['사이즈', '총장', '허리단면', '허벅지단면', '밑위', '밑단단면'], [['28', 100, 37, 30, 28, 18], ['32', 102, 41, 32, 29, 19]])
+  const body = bodyValuesForProfile({ gender: 'male', height: 175, weight: 70, measurements: { waist: 76 } })
+  const cmp = compareSizes({ chart: page.sizeChart, bodyValues: body.values, measured: body.measured, category: 'bottom' })
+  assert.deepEqual(cmp.sizes.map((x) => x.size), ['28', '32'])
+  const rows = Object.fromEntries(cmp.sizes[0].rows.map((r) => [r.part, r]))
+  assert.equal(rows.waist.garment, 74)
+  assert.equal(rows.waist.body, 76)
+  assert.equal(rows.waist.bodyKind, 'measured')
+  assert.equal(rows.waist.ease, -2)
+  assert.ok(rows.waist.verdict)
+  assert.equal(rows.thigh.bodyKind, 'estimated')
+  assert.equal(rows.inseam.bodyKind, 'standard')
+  assert.equal(rows.inseam.basis, 'heuristic')
+  for (const part of ['rise', 'hem']) {
+    assert.equal(rows[part].verdict, null)
+    assert.equal(rows[part].body, null)
+    assert.equal(rows[part].note, MEASURE_ONLY_LABEL)
+  }
+  assert.deepEqual(cmp.measureOnlyParts.sort(), ['hem', 'rise'])
+  assert.equal(rows.hem.garment, 36)
+  // 기존 판정과 같아요
+  assert.equal(rows.waist.verdict, partVerdicts(body.values, page.sizeChart.measures['28'], 'bottom').find((v) => v.part === 'waist').verdict)
+  assert.deepEqual(compareSizes({ chart: null }), { sizes: [], measureOnlyParts: [], hasComparable: false })
+})
+
+await atest('가짜 HTML + vm: 확장 카드에 사이즈 탭과 내 치수/옷 실측/여유/판정 비교 표가 그려지고 비교 기준 없는 부위는 실측만 표시로 나온다', async () => {
+  const head = ['사이즈', '총장', '허리단면', '허벅지단면', '밑위', '밑단단면']
+  const rows = [['28', 100, 37, 30, 28, 18], ['30', 101, 39, 31, 28.5, 18.5], ['32', 102, 41, 32, 29, 19], ['34', 103, 43, 33, 29.5, 19.5]]
+  const html = `<html><head><meta property="og:title" content="와이드 팬츠"></head><body><h1>와이드 팬츠</h1><table>${[head, ...rows].map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</table>${VIEW_REVIEWS.map((t) => `<div class="review-item">${t}</div>`).join('')}</body></html>`
+  const { texts, created } = await runContentInFakeDom(html)
+  assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
+  assert.ok(texts.includes('사이즈표 비교 (내 치수 vs 옷 실측)'), '비교 섹션')
+  for (const h of ['부위', '내 치수', '옷 실측', '여유', '판정']) assert.ok(texts.includes(h), h)
+  // 카드를 다시 그리는 경우가 있어 마지막으로 그린 4개 탭만 봅니다.
+  const allTabs = created.filter((e) => e.tagName === 'BUTTON' && e.className.split(' ').includes('tab'))
+  assert.ok(allTabs.length >= 4 && allTabs.length % 4 === 0)
+  const tabs = allTabs.slice(-4)
+  assert.ok(tabs.some((t) => t.className.includes('on')))
+  assert.ok(texts.includes('실측만 표시(비교 기준 없음)'), '밑위·밑단은 비교 기준이 없다고 표시')
+  assert.ok(texts.includes('밑위') && texts.includes('밑단') && texts.includes('허리'))
+  // 탭을 누르면 그 사이즈의 표가 보여요
+  const panels = created.filter((e) => e.tagName === 'DIV' && e.className === 'tw' && e.children[0]?.tagName === 'TABLE' && e.children[0].children[0]?.children[1]?._text === '내 치수')
+  assert.ok(panels.length >= 4)
+  const last = panels.slice(-4)
+  assert.deepEqual(last.map((p) => p.hidden), [false, true, true, true])
+  tabs[2]._l.click()
+  assert.deepEqual(last.map((p) => p.hidden), [true, true, false, true])
 })
 
 console.log(`\n${passed}개 통과`)

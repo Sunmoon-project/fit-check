@@ -1,6 +1,8 @@
 // 상품 페이지 해석의 순수 로직 (의존성 없음). 서버(cheerio)와 크롬 확장(DOM)이 함께 씁니다.
 // 입력은 이미 "텍스트 행 배열"로 바뀐 표이고, HTML을 읽는 방법은 각 파서가 맡아요.
 
+import { CATEGORY_PARTS } from '../data/measurements.js'
+
 // ---------- 카테고리 판단 ----------
 const CATEGORY_RULES = [
   ['shoes', /스니커|운동화|신발|슈즈|로퍼|부츠|샌들|슬리퍼|구두|러닝화|sneaker|shoe|boots|loafer|sandal/i],
@@ -12,7 +14,7 @@ const CATEGORY_RULES = [
 
 export function guessCategory(text, headers = []) {
   const h = headers.join(' ')
-  if (/발\s*길이|발\s*볼|사이즈\s*\(\s*mm\s*\)/i.test(h)) return 'shoes'
+  if (/발\s*길이|발\s*볼|굽\s*높이|사이즈\s*\(\s*mm\s*\)/i.test(h)) return 'shoes'
   for (const [cat, re] of CATEGORY_RULES) if (re.test(text || '')) return cat
   if (/허벅지|밑위|허리/.test(h) && !/어깨/.test(h)) return 'bottom'
   if (/어깨|가슴/.test(h)) return 'top'
@@ -24,17 +26,24 @@ const LENGTH_KEY = { top: 'topLength', outer: 'outerLength', bottom: 'inseam', d
 
 // ---------- 사이즈표 ----------
 // 표 헤더 이름 → 핏 엔진이 쓰는 치수 키. 단면 값은 둘레(×2)로 바꿔 비교합니다.
-function mapHeader(header, category) {
+export function mapHeader(header, category) {
   const h = header.replace(/\s/g, '')
   const flat = /단면/.test(h)
-  if (/어깨/.test(h)) return { key: 'shoulder' }
-  if (/가슴|품|chest/i.test(h)) return { key: 'chest', flat, flatBelow: 75 }
+  // 더 구체적인 이름(소매통·밑위·밑단 등)을 먼저 보고, 그다음 일반 이름을 봅니다. 단면은 둘레(×2), 길이는 그대로예요.
+  if (/소매통|암홀|소매단면|소매폭|armhole/i.test(h)) return { key: 'sleeveWidth', flat, flatBelow: 30 }
+  if (/밑위|rise/i.test(h)) return { key: 'rise' }
+  if (/밑단|헴|hem/i.test(h)) return { key: 'hem', flat, flatBelow: 30 }
+  if (/무릎|knee/i.test(h)) return { key: 'knee', flat, flatBelow: 30 }
+  if (/발볼|footwidth/i.test(h)) return { key: 'footWidth', scaleBelow: 30 }
+  if (/굽|heel/i.test(h)) return { key: 'heelHeight' }
+  if (/어깨|shoulder/i.test(h)) return { key: 'shoulder' }
+  if (/가슴|품|chest|bust/i.test(h)) return { key: 'chest', flat, flatBelow: 75 }
   if (/허벅지|thigh/i.test(h)) return { key: 'thigh', flat, flatBelow: 42 }
   if (/엉덩이|힙|hip/i.test(h)) return { key: 'hip', flat, flatBelow: 70 }
   if (/허리|waist/i.test(h)) return { key: 'waist', flat, flatBelow: 55 }
-  if (/소매|팔|sleeve/i.test(h)) return { key: 'arm', minValue: 40 }
+  if (/소매|팔|화장|sleeve/i.test(h)) return { key: 'arm', minValue: 40 }
   if (/발길이|발사이즈|footlength|footsize/i.test(h)) return { key: 'footLength' }
-  if (/총장|기장|총기장|length/i.test(h)) return LENGTH_KEY[category] ? { key: LENGTH_KEY[category] } : null
+  if (/총장|기장|총기장|전체길이|전장|length/i.test(h)) return LENGTH_KEY[category] ? { key: LENGTH_KEY[category] } : null
   return null
 }
 
@@ -50,7 +59,7 @@ export const SIZE_LABEL_RE = new RegExp(
   'i',
 )
 // 영문 헤더(Length, Chest 등)도 읽어요. 공백은 지우고 비교합니다('발 길이' → '발길이').
-const MEASURE_HEADER_RE = /어깨|가슴|총장|기장|허리|허벅지|엉덩이|소매|발길이|단면|품|밑위|밑단|암홀|길이|\b(?:length|chest|shoulder|waist|hip|thigh|sleeve)\b/i
+const MEASURE_HEADER_RE = /어깨|가슴|총장|기장|허리|허벅지|엉덩이|힙|소매|화장|발길이|발볼|굽높이|무릎|단면|품|밑위|밑단|암홀|길이|전장|\b(?:length|chest|shoulder|waist|hip|thigh|sleeve)\b/i
 const ALPHA_ONLY_RE = new RegExp(`^(?:${ALPHA_SIZES})$`, 'i')
 const PAREN_RE = new RegExp(`^\\d{1,2}\\((?:${ALPHA_SIZES})\\)$`, 'i')
 
@@ -108,7 +117,8 @@ const shapeLine = (cells, max = 8) => cells.slice(0, max).map(shapeOfCell).join(
 
 const isLabelCell = (c) => SIZE_LABEL_RE.test(String(c).replace(/\s/g, ''))
 const isMeasureRow = (r) => r.length >= 2 && MEASURE_HEADER_RE.test(r[0].replace(/\s/g, ''))
-const MEASURE_WORD_RE = /어깨|가슴|허리|총장|기장|허벅지|엉덩이|소매|발길이|단면|길이|\b(?:length|chest|shoulder|waist|hip|thigh|sleeve)\b/i
+const MEASURE_WORD_RE = /어깨|가슴|허리|총장|기장|허벅지|엉덩이|힙|소매|화장|발길이|발볼|굽높이|무릎|밑위|밑단|암홀|단면|길이|전장|^품(?:\(|$)|\b(?:length|chest|shoulder|waist|hip|thigh|sleeve)\b/i
+const BODY_GUIDE_RE = /^(?:추천)?(?:키|신장|몸무게|체중|height|weight)(?:\(|$|\/)/i
 const hasMeasureWord = (c) => MEASURE_WORD_RE.test(String(c).replace(/\s/g, ''))
 
 // 사이즈 이름 줄 후보: 맨 앞 칸이 사이즈 이름이 아니면('사이즈', 'cm', 빈칸) 제목 칸이라 떼고 나머지가 모두 사이즈 이름이어야 해요.
@@ -289,11 +299,16 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
     cands[index].flipped = flipped
   }
   let best = null
+  const ignored = []
   rowsList.forEach((rows, index) => {
     if (rows.length < 2) return
     const headerIdx = rows.findIndex((r) => r.some(hasMeasureWord))
     cands[index].head = shapeLine(rows[Math.max(0, headerIdx)])
-    if (headerIdx < 0) return why(index, 'no-measure-header')
+    if (headerIdx < 0) {
+      // 추천 키·몸무게 표 같은 표는 계산에 쓰지 않고, 무엇을 건너뛰었는지만 남겨요.
+      if (rows[0]?.filter((c) => BODY_GUIDE_RE.test(String(c).replace(/\s/g, ''))).length >= 1 && rows.length >= 3) ignored.push({ index, kind: 'recommend', headers: rows[0].slice(0, 6).map(displayText) })
+      return why(index, 'no-measure-header')
+    }
     meta.withHeader++
     let headers = rows[headerIdx]
     let body
@@ -353,12 +368,19 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
     }
     if (flippedCand) meta.flipped++
     why(index, 'not-best', flippedCand)
-    const cand = { index, headers, body, labels, labelClass, monotonic, overlap, rank: CLASS_RANK[labelClass], flipped: flippedCand, source }
+    // 실측표 우선: 이 카테고리의 부위(또는 총장)를 가장 많이 담은 표, 그다음 읽을 수 있는 열이 많은 표를 고릅니다.
+    const keys = headers.slice(1).map((h) => mapHeader(h, category || guessCategory('', headers))?.key).filter(Boolean)
+    const wanted = new Set([...(CATEGORY_PARTS[category] || []), ...(category ? [LENGTH_KEY[category]] : [])])
+    const fit = keys.filter((k) => wanted.has(k)).length
+    const cand = { index, headers, body, labels, labelClass, monotonic, overlap, rank: CLASS_RANK[labelClass], fit, mapped: keys.length, flipped: flippedCand, source }
     const better =
       !best ||
       cand.overlap > best.overlap ||
       (cand.overlap === best.overlap &&
-        (cand.rank > best.rank || (cand.rank === best.rank && cand.body.length > best.body.length)))
+        (cand.rank > best.rank ||
+          (cand.rank === best.rank &&
+            (cand.fit > best.fit ||
+              (cand.fit === best.fit && (cand.mapped > best.mapped || (cand.mapped === best.mapped && cand.body.length > best.body.length)))))))
     if (better) best = cand
   })
   if (best) cands[best.index].reason = 'selected'
@@ -401,10 +423,11 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
       if (i > 0) cells.push({ raw: displayText(cell), value: null, converted: false })
       if (!map || v == null) return
       if (map.minValue && v < map.minValue) return
-      const circumference = map.flat || (map.flatBelow && v < map.flatBelow) ? v * 2 : v
-      m[map.key] = Math.round(circumference * 10) / 10
+      // 단면 → 둘레(×2). 발볼처럼 cm로 적힌 값(30 미만)은 mm로 바꿔요.
+      const converted = map.scaleBelow && v < map.scaleBelow ? v * 10 : map.flat || (map.flatBelow && v < map.flatBelow) ? v * 2 : v
+      m[map.key] = Math.round(converted * 10) / 10
       cells[i - 1].value = m[map.key]
-      cells[i - 1].converted = circumference !== v
+      cells[i - 1].converted = converted !== v
     })
     if (Object.keys(m).length) measures[label] = m
     viewRows.push({ label, shown, cells: cells.slice(0, 10) })
@@ -432,6 +455,9 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
       headers: best.headers.slice(1, 11).map(displayText),
       used: mapping.slice(1, 11).map(Boolean),
       rows: viewRows.slice(0, 20),
+      // 읽은 열의 부위 키(계산에 쓴 열만). 비교 표가 어떤 열을 어떤 부위로 읽었는지 알려줘요.
+      keys: mapping.slice(1, 11).map((m) => m?.key || null),
+      ignored: ignored.slice(0, 3),
     },
   }
   if (Object.keys(display).length) chart.display = display
