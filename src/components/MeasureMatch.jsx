@@ -4,7 +4,7 @@ import { VERDICTS } from '../lib/fitEngine.js'
 export default function MeasureMatch({ perSize, selectedSize, recommendedSize, measured, onSelect }) {
   if (!perSize.length) {
     return (
-      <div className="card">
+      <div className="card tone-measure">
         <div className="section-head">
           <h3>부위별 핏</h3>
         </div>
@@ -15,7 +15,7 @@ export default function MeasureMatch({ perSize, selectedSize, recommendedSize, m
   const current = perSize.find((p) => p.size === selectedSize) || perSize[0]
 
   return (
-    <div className="card">
+    <div className="card tone-measure">
       <div className="section-head">
         <h3>부위별 핏</h3>
         <span className="count-badge">적합도 {current.score}점</span>

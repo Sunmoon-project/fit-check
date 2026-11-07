@@ -54,7 +54,7 @@ export default function FeedbackForm({ product, perSize, defaultSize, existing, 
   const summary = calibrationSummary(calibration, feedbackCount)
 
   return (
-    <form className="card feedback" onSubmit={submit}>
+    <form className="card feedback tone-feedback" onSubmit={submit}>
       <div className="section-head">
         <h3>입어보니 어땠나요?</h3>
         {existing && <span className="count-badge">기록 있음</span>}

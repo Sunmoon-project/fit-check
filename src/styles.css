@@ -501,13 +501,13 @@ body {
 .cmp-item { padding: 12px 0; border-top: 1px solid var(--line); }
 .cmp-item:first-child { border-top: none; padding-top: 0; }
 .cmp-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.cmp-pct { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.cmp-pct { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
 .cmp-chip { display: inline-block; margin: 4px 0; padding: 0 10px; font-size: 12px; border: 1px solid var(--line-strong); border-radius: 999px; }
 .cmp-chip.diff { border-style: dashed; color: var(--muted); }
 .cmp-bar { margin-top: 6px; }
 .cmp-bar-label { display: flex; justify-content: space-between; font-size: 12px; color: var(--ink-2); }
-.cmp-track { height: 4px; margin-top: 3px; background: var(--panel); border-radius: 2px; overflow: hidden; }
-.cmp-fill { height: 100%; background: var(--ink); border-radius: 2px; transition: width 0.8s ease-out; }
+.cmp-track { height: 10px; margin-top: 4px; background: var(--panel); border-radius: 5px; overflow: hidden; }
+.cmp-fill { height: 100%; background: var(--ink); border-radius: 5px; transition: width 0.8s ease-out; }
 .cmp-list.is-start .cmp-fill { width: 0 !important; }
 @media (prefers-reduced-motion: reduce) {
   .cmp-fill { transition: none; }
@@ -517,3 +517,34 @@ body {
 .sync-notice { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #f2f8f4; font-size: 13px; }
 .sync-notice.error { background: #fdf3f2; }
 .sync-notice span { flex: 1 1 200px; }
+
+/* 키·몸무게 묶음 + 유사도 퍼센트 막대 (구간별 색) */
+.cmp-pair { display: flex; gap: 8px; margin-top: 8px; }
+.cmp-col { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; background: var(--panel); border-radius: var(--radius-sm); }
+.cmp-who { font-size: 12px; font-weight: 700; color: var(--muted-2); }
+.cmp-val { font-size: 15px; font-weight: 800; color: var(--ink); }
+.cmp-diff { margin: 6px 0 0; font-size: 12.5px; color: var(--muted-2); }
+.cmp-sim { margin-top: 10px; }
+.cmp-sim-label { display: flex; justify-content: space-between; align-items: baseline; }
+.cmp-tier { font-size: 13px; font-weight: 800; }
+.cmp-sim.high .cmp-tier, .cmp-sim.high .cmp-pct { color: var(--ok); }
+.cmp-sim.mid .cmp-tier, .cmp-sim.mid .cmp-pct { color: #a35a00; }
+.cmp-sim.low .cmp-tier, .cmp-sim.low .cmp-pct { color: var(--muted-2); }
+.cmp-sim.high .cmp-fill { background: var(--ok); }
+.cmp-sim.mid .cmp-fill { background: #b8650a; }
+.cmp-sim.low .cmp-fill { background: #80808a; }
+
+/* 내용별 구분: 카드마다 색 띠와 제목 색을 달리해 무엇에 대한 내용인지 한눈에 보이게 */
+:root { --muted-2: #6b6b70; --tone-reco: #1a7f46; --tone-measure: #2f6db0; --tone-review: #7a52b3; --tone-chart: #5b6b7a; --tone-compare: #0e8a8a; --tone-tryon: #c2417a; --tone-feedback: #b86e00; }
+.muted { color: var(--muted-2); }
+.card[class*="tone-"] { border-left: 5px solid var(--tone); }
+.card[class*="tone-"] .section-head h3 { color: var(--tone-text, var(--tone)); display: flex; align-items: center; gap: 8px; }
+.card[class*="tone-"] .section-head h3::before { content: ''; width: 10px; height: 10px; border-radius: 50%; background: var(--tone); flex: none; }
+.tone-reco { --tone: var(--tone-reco); background: #f3faf6; }
+.tone-measure { --tone: var(--tone-measure); }
+.tone-review { --tone: var(--tone-review); }
+.tone-chart { --tone: var(--tone-chart); }
+.tone-compare { --tone: var(--tone-compare); --tone-text: #0b6e6e; }
+.tone-tryon { --tone: var(--tone-tryon); }
+.tone-feedback { --tone: var(--tone-feedback); --tone-text: #8f5400; }
+.card[class*="tone-"] .section-head { padding-bottom: 8px; border-bottom: 1px solid var(--line); }

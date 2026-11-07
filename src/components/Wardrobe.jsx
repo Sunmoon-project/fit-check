@@ -27,7 +27,7 @@ export function SimilarInWardrobe({ target, wardrobe }) {
   const cmp = findSimilar(target, wardrobe.filter((w) => w.product.url !== target.product.url))
   if (!cmp) return null
   return (
-    <div className="card similar-card">
+    <div className="card similar-card tone-compare">
       <div className="section-head"><h3>내 옷장 속 비슷한 옷</h3></div>
       <div className="similar-body">
         <div className="wd-thumb small"><Thumb item={cmp.item} /></div>

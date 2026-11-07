@@ -2286,7 +2286,7 @@ test('가짜 데이터: 체형 차이가 커질수록 유사도는 줄어들기�
 
 
 // ---- 체형 비교 (직접 만든 가짜 데이터와 가짜 DOM이에요. 실제 무신사·크롬에서 확인한 것이 아니에요) ----
-import { compareBody, countUpValue } from '../src/lib/similarityBreakdown.js'
+import { compareBody, countUpValue, similarityTier, TIER_LABEL, diffText } from '../src/lib/similarityBreakdown.js'
 
 test('가짜 데이터: compareBody는 성별 같음/다름/모름과 키 없는 후기를 구분한다', () => {
   const me = { gender: 'male', height: 175, weight: 70 }
@@ -2772,6 +2772,71 @@ test('리뷰 신발 사이즈: 265mm 구매, 270 신어요, 구매옵션 화이�
   }
   for (const text of ['굽 30mm 편해요', '평소 250 신어요', '두 켤레 샀어요 250 260']) assert.equal(parseReviewText(text, labels).size, null, text)
   assert.equal(parseReviewText('300 신어요', labels).size, null, '표에 없는 사이즈')
+})
+
+await atest('content.js(가짜 DOM, vm): 체형 비교는 키·몸무게를 한 묶음으로 보이고 유사도 막대는 후기마다 하나뿐이다', async () => {
+  const { created } = await runContentInFakeDom(CMP_HTML())
+  findCompareTab(created)._l.click()
+  await new Promise((r) => setTimeout(r, 50))
+  const rows = created.filter((e) => e.className === 'cr')
+  assert.ok(rows.length >= 2)
+  const groups = created.filter((e) => e.className === 'cgrp')
+  assert.equal(groups.length, rows.length, '후기마다 키·몸무게 묶음 하나')
+  assert.ok(groups.every((g) => g.children.length === 2), '나 / 후기 두 칸')
+  assert.equal(created.filter((e) => e.className === 'cbf').length, rows.length, '퍼센트 막대는 후기마다 하나')
+  assert.equal(created.filter((e) => /^cb (high|mid|low)$/.test(e.className)).length, rows.length, '구간 색 클래스')
+  assert.ok(created.every((e) => e.className !== 'cbl' || e.children.length === 2))
+})
+
+test('체형 비교: 유사도 구간과 차이 문구 (순수 함수, 가짜 값)', () => {
+  assert.equal(similarityTier(BODY_SIM.threshold), 'high')
+  assert.equal(similarityTier(BODY_SIM.threshold - 1), 'mid')
+  assert.equal(similarityTier(BODY_SIM.threshold / 2), 'mid')
+  assert.equal(similarityTier(BODY_SIM.threshold / 2 - 1), 'low')
+  assert.equal(similarityTier(null), 'low')
+  const c = compareBody({ gender: 'male', height: 175, weight: 70 }, { gender: 'male', height: 172, weight: 68 })
+  assert.equal(diffText(c), '키 3cm · 몸무게 2kg 차이')
+  assert.equal(diffText({ height: { diff: null }, weight: { diff: 1 } }), null)
+  assert.ok(Object.keys(TIER_LABEL).length === 3)
+  const web = readFileSync(new URL('../src/components/SimilarityCompare.jsx', import.meta.url), 'utf8')
+  assert.ok(web.includes('<BodyPair') && web.includes('<SimBar') && !web.includes('<Bar '), '웹도 묶음 + 막대 하나')
+})
+
+test('사이즈표 회귀 방지: 95/100·S/M 같은 묶음 옵션은 표 줄 이름을 바꾸지 않고, 옵션만으로 의류를 신발로 만들지 않는다 (가짜 표)', () => {
+  const num = [[['사이즈', '어깨', '가슴'], ['95', '45', '55'], ['100', '47', '58'], ['105', '49', '61']]]
+  const alpha = [[['사이즈', '어깨', '가슴'], ['S', '45', '55'], ['M', '47', '58'], ['L', '49', '61']]]
+  const a = analyzeSizeCharts(num, 'top', ['95/100', '105']).chart
+  assert.deepEqual(Object.keys(a.measures), ['95', '100', '105'])
+  assert.equal(a.display, undefined)
+  const b = analyzeSizeCharts(alpha, 'top', ['S/M', 'L']).chart
+  assert.deepEqual(Object.keys(b.measures), ['S', 'M', 'L'])
+  assert.equal(b.display, undefined)
+  const shoeLike = analyzeSizeCharts([], 'top', ['블랙 270', '블랙 280'])
+  assert.equal(shoeLike.chart, null, '옵션 2개만으로는 신발 표를 만들지 않음')
+  assert.equal(analyzeSizeCharts([], 'top', ['블랙 270', '블랙 275', '블랙 280']).chart.category, 'shoes')
+  assert.equal(analyzeSizeCharts([], 'top', ['블랙 271', '블랙 272', '블랙 273']).chart, null, '5mm 단위가 아니면 거부')
+  const kr = analyzeSizeCharts([[['KR', '230', '240', '250'], ['US', '5', '6', '7']]], 'top', []).chart
+  assert.deepEqual(Object.keys(kr.measures), ['230', '240', '250'])
+  assert.equal(kr.category, 'shoes')
+})
+
+test('리뷰 사이즈: 사이즈표가 없을 때 2024 주문 같은 연도·숫자를 사이즈로 읽지 않는다', () => {
+  for (const t of ['2024 주문 후 만족', '12024 구매', '가격 3,250 구매했어요']) assert.equal(parseReviewText(t, []).size, null, t)
+  assert.equal(parseReviewText('265 주문했어요', []).size, '265')
+})
+
+test('색 대비: 제목·막대 색이 흰/연회색 배경에서 기준(글자 4.5:1, 막대 3:1) 이상이다 (계산, 실제 화면 확인 아님)', () => {
+  const lum = (hex) => {
+    const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+  }
+  const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05) }
+  const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8')
+  const v = (name) => css.match(new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, 'i'))[1]
+  for (const [name, bg] of [['tone-measure', '#ffffff'], ['tone-review', '#ffffff'], ['tone-chart', '#ffffff'], ['tone-tryon', '#ffffff'], ['tone-reco', '#f3faf6'], ['muted-2', '#ffffff']]) assert.ok(ratio(v(name), bg) >= 4.5, name)
+  assert.ok(ratio(css.match(/\.tone-compare \{[^}]*--tone-text: (#[0-9a-f]{6})/i)[1], '#ffffff') >= 4.5, 'compare 제목')
+  assert.ok(ratio(css.match(/\.tone-feedback \{[^}]*--tone-text: (#[0-9a-f]{6})/i)[1], '#ffffff') >= 4.5, 'feedback 제목')
+  for (const c of ['#80808a', '#b8650a']) assert.ok(ratio(c, '#f4f4f5') >= 3, `막대 ${c}`)
 })
 
 console.log(`\n${passed}개 통과`)

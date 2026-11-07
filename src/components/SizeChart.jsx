@@ -2,7 +2,7 @@
 export default function SizeChart({ chart, recommendedSize, selectedSize }) {
   if (!chart) {
     return (
-      <div className="card">
+      <div className="card tone-chart">
         <div className="section-head">
           <h3>사이즈표</h3>
         </div>
@@ -11,7 +11,7 @@ export default function SizeChart({ chart, recommendedSize, selectedSize }) {
     )
   }
   return (
-    <div className="card">
+    <div className="card tone-chart">
       <div className="section-head">
         <h3>사이즈표</h3>
         <span className="muted small">단위 {chart.unit}</span>

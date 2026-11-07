@@ -29,6 +29,20 @@ export function compareBody(profile, review) {
   }
 }
 
+// 유사도 구간: 비슷한 체형 기준(BODY_SIM.threshold) 이상이면 high, 절반 이상이면 mid, 그 아래는 low (막대 색 구분용)
+export function similarityTier(sim) {
+  if (!isNum(sim)) return 'low'
+  return sim >= BODY_SIM.threshold ? 'high' : sim >= BODY_SIM.threshold / 2 ? 'mid' : 'low'
+}
+export const TIER_LABEL = { high: '비슷한 체형', mid: '조금 달라요', low: '많이 달라요' }
+
+// '키 3cm · 몸무게 2kg 차이' (차이를 알 수 없으면 null)
+export function diffText(c) {
+  if (!isNum(c?.height?.diff) || !isNum(c?.weight?.diff)) return null
+  const r = (n) => Math.round(n * 10) / 10
+  return `키 ${r(c.height.diff)}cm · 몸무게 ${r(c.weight.diff)}kg 차이`
+}
+
 // 숫자가 0에서 target까지 올라가는 값 (easeOutCubic). 항상 정수이고 0~target 범위에 있어요.
 export function countUpValue(elapsedMs, durationMs, target) {
   const end = isNum(target) ? Math.max(0, Math.round(target)) : 0

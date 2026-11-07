@@ -6,7 +6,7 @@ import { buildExportEnvelope } from '../src/lib/wardrobeImport.js'
 import { SYNC_QUEUE_KEY, WEB_APP_OPEN_URL, enqueue } from '../src/lib/wardrobeSync.js'
 import { collectDiagnostics, formatReport } from '../src/lib/diagnose.js'
 import { shouldStop, isSafeMoreButton, toReportStop, STOP_LABEL } from '../src/lib/reviewLoader.js'
-import { compareBody, countUpValue } from '../src/lib/similarityBreakdown.js'
+import { compareBody, countUpValue, similarityTier, TIER_LABEL, diffText } from '../src/lib/similarityBreakdown.js'
 import { EXT_PROFILE_KEY, isUsableProfile } from '../src/lib/extProfile.js'
 
 const WAIT_MS = 4000 // 늦게 그려지는 표·리뷰를 기다리는 최대 시간
@@ -27,13 +27,13 @@ const CSS = `
 .card.min .fold{display:none}
 .hd{position:sticky;top:-12px;background:#fff;z-index:1;padding-bottom:2px}
 .hd .close{margin-left:6px}
-.tiny{margin:2px 0 0;font-size:11px;color:#8a8a8e}
+.tiny{margin:2px 0 0;font-size:11px;color:#6b6b70}
 .row{display:flex;justify-content:space-between;align-items:center;gap:8px}
-.eyebrow{font-size:11px;color:#8a8a8e}
+.eyebrow{font-size:11px;color:#6b6b70}
 .close{border:0;background:none;font-size:18px;line-height:1;cursor:pointer;color:#555}
 .badge{font-size:12px;font-weight:600}
 .size{font-size:28px;font-weight:700;margin:2px 0 0}
-.sum{margin:8px 0 0;color:#555;font-size:12px}
+.sum{margin:8px 0 0;color:#333;font-size:13px;background:#f3faf6;border-radius:8px;padding:6px 8px}
 .why{margin:6px 0 0;padding-left:16px;color:#555;font-size:12px}
 h3{margin:10px 0 2px;font-size:14px}
 p{margin:0}
@@ -43,9 +43,13 @@ p{margin:0}
 .weblink{display:inline-block;margin-top:6px;margin-right:8px;font-size:12px;color:#111}
 .inp{width:100%;margin-top:6px;border:1px solid #d4d4d4;border-radius:6px;padding:6px;font-size:12px;font-family:inherit}
 .prog{margin-top:6px;font-size:12px;color:#555}
-.note{margin-top:6px;font-size:11px;color:#8a8a8e}
+.note{margin-top:6px;font-size:11px;color:#6b6b70}
 .sec{margin-top:8px;border-top:1px solid #ececec;padding-top:6px}
-.sec>summary{cursor:pointer;font-size:12px;font-weight:600;color:#111}
+.sec>summary{cursor:pointer;font-size:13px;font-weight:700;color:var(--tc,#111);padding:4px 0 4px 8px;border-left:4px solid var(--tc,#d4d4d4)}
+.sec.s-why{--tc:#0a7a3c}
+.sec.s-rv{--tc:#6a42a8}
+.sec.s-ch{--tc:#4a5a6a}
+.sec.s-dx{--tc:#a35a00}
 .secbody{margin-top:6px}
 .tw{overflow-x:auto;margin-top:6px}
 table{border-collapse:collapse;font-size:11px;width:100%}
@@ -60,7 +64,7 @@ tr.rec .cv{color:#9fe0ba}
 .rv{border:1px solid #ececec;border-radius:8px;padding:6px 8px;margin-top:6px}
 .rvm{display:flex;flex-wrap:wrap;gap:4px}
 .tag{font-size:10px;border-radius:999px;background:#f1f1f1;padding:1px 7px;color:#333}
-.tag.miss{background:#fff;border:1px dashed #c8c8c8;color:#8a8a8e}
+.tag.miss{background:#fff;border:1px dashed #c8c8c8;color:#6b6b70}
 .tag.sim{background:#111;color:#fff}
 .rvh{margin-bottom:4px}
 .rvn{font-size:12px;color:#111}
@@ -70,7 +74,7 @@ tr.rec .cv{color:#9fe0ba}
 .phs{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
 .ph{width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid #ececec}
 .tabs{display:flex;gap:4px;border-bottom:1px solid #ececec;margin-top:2px}
-.tab{border:0;border-bottom:2px solid transparent;background:none;padding:6px 8px;font-size:12px;color:#8a8a8e;cursor:pointer}
+.tab{border:0;border-bottom:2px solid transparent;background:none;padding:6px 8px;font-size:12px;color:#6b6b70;cursor:pointer}
 .tab.on{color:#111;border-bottom-color:#111;font-weight:600}
 .tab:focus-visible{outline:2px solid #111;outline-offset:1px}
 .tp{max-height:320px;overflow-y:auto;overscroll-behavior:contain;padding-top:2px}
@@ -83,12 +87,24 @@ tr.rec .cv{color:#9fe0ba}
 .cr:first-child{border-top:0}
 .crh{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 .cpct{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
-.cb{margin-top:4px}
-.cbl{display:flex;justify-content:space-between;font-size:11px;color:#555}
-.cbt{height:4px;background:#f0f0f0;border-radius:2px;overflow:hidden;margin-top:2px}
+.cgrp{display:flex;gap:6px;margin-top:6px}
+.ccol{flex:1;display:flex;flex-direction:column;gap:2px;background:#f6f6f7;border-radius:8px;padding:6px 8px}
+.ccl{font-size:11px;color:#6b6b70;font-weight:600}
+.ccv{font-size:13px;font-weight:700;color:#111}
+.cdiff{margin:4px 0 0;font-size:11px;color:#6b6b70}
+.ctier{font-size:12px;font-weight:700}
+.cb.high .ctier,.cb.high .cpct{color:#0a7a3c}
+.cb.mid .ctier,.cb.mid .cpct{color:#a35a00}
+.cb.low .ctier,.cb.low .cpct{color:#6b6b70}
+.cb.high .cbf{background:#0a7a3c}
+.cb.mid .cbf{background:#b8650a}
+.cb.low .cbf{background:#80808a}
+.cb{margin-top:8px}
+.cbl{display:flex;justify-content:space-between;align-items:baseline;font-size:11px;color:#555}
+.cbt{height:8px;background:#f0f0f0;border-radius:4px;overflow:hidden;margin-top:3px}
 .cbf{height:100%;background:#111;border-radius:2px;transition:width .8s ease-out}
 .cg{display:inline-block;font-size:11px;border:1px solid #d4d4d4;border-radius:999px;padding:0 8px;color:#111}
-.cg.diff{border-style:dashed;color:#8a8a8e}
+.cg.diff{border-style:dashed;color:#6b6b70}
 .lnk{border:0;background:none;padding:0;margin-left:4px;font-size:11px;color:#555;text-decoration:underline;cursor:pointer}
 @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
 `
@@ -241,8 +257,11 @@ function manualForm(r) {
 }
 
 // ---------- 접을 수 있는 구역 / 읽은 그대로 보여주기 (페이지 글은 전부 textContent로만 넣어요) ----------
+// 섹션마다 색을 달리해 무엇에 대한 내용인지 구분해요 (추천 이유 초록 / 리뷰 보라 / 사이즈표 청회색 / 문제 해결 주황).
+const SECTION_TONE = [[/추천 이유/, 's-why'], [/리뷰/, 's-rv'], [/사이즈표/, 's-ch'], [/진단|문제/, 's-dx']]
 function section(title, open = false) {
-  const det = el('details', 'sec')
+  const tone = (SECTION_TONE.find(([re]) => re.test(title)) || [])[1]
+  const det = el('details', tone ? `sec ${tone}` : 'sec')
   det.open = open
   det.append(el('summary', null, title))
   const body = el('div', 'secbody')
@@ -510,27 +529,39 @@ function compareTab(rvs, all) {
     head.append(el('span', 'rvn', rv.nick || '구매자'))
     const pct = el('span', 'cpct', `${c.similarity ?? 0}%`)
     pct.setAttribute('aria-hidden', 'true')
-    head.append(pct, el('span', 'sr', `체형 유사도 ${c.similarity ?? 0}%`))
+    head.append(el('span', 'sr', `체형 유사도 ${c.similarity ?? 0}%`))
     counters.push({ node: pct, target: c.similarity ?? 0 })
     li.append(head)
     const genderText = c.gender.state === 'same' ? '성별 같음' : c.gender.state === 'diff' ? '성별 다름' : '성별 확인 불가'
     const chip = el('span', c.gender.state === 'diff' ? 'cg diff' : 'cg', rv.gender ? `${genderText} (${GENDER_TEXT[rv.gender]})` : genderText)
     li.append(chip)
-    for (const [label, unit, m] of [['키', 'cm', c.height], ['몸무게', 'kg', c.weight]]) {
-      const b = el('div', 'cb')
-      const lab = el('div', 'cbl')
-      lab.append(el('span', null, `${label} 나 ${m.me}${unit}`), el('span', null, `후기 ${m.review}${unit}`))
-      const track = el('div', 'cbt')
-      track.setAttribute('role', 'img')
-      track.setAttribute('aria-label', `${label} 비교: 나 ${m.me}${unit}, 후기 ${m.review}${unit}, 차이 ${m.diff}${unit}`)
-      const fill = el('div', 'cbf')
-      const w = `${Math.round(m.fill * 100)}%`
-      fill.style.width = w
-      track.append(fill)
-      fills.push({ node: fill, w })
-      b.append(lab, track)
-      li.append(b)
+    if (c.gender.state === 'diff') li.append(el('p', 'tiny', '성별이 달라 유사도는 0%예요. 키·몸무게는 참고용이에요.'))
+    // 키·몸무게는 한 묶음으로 나란히, 그 아래에 비슷한 체형인지 보여주는 퍼센트 막대 하나
+    const grp = el('div', 'cgrp')
+    for (const [who, h, w] of [['나', c.height.me, c.weight.me], ['후기', c.height.review, c.weight.review]]) {
+      const col = el('div', 'ccol')
+      col.append(el('span', 'ccl', who), el('span', 'ccv', `${h}cm · ${w}kg`))
+      grp.append(col)
     }
+    li.append(grp)
+    const dt = diffText(c)
+    if (dt) li.append(el('p', 'cdiff', dt))
+    const sim = c.similarity ?? 0
+    const tier = similarityTier(sim)
+    const b = el('div', `cb ${tier}`)
+    const lab = el('div', 'cbl')
+    lab.append(el('span', 'ctier', TIER_LABEL[tier]))
+    lab.append(pct)
+    const track = el('div', 'cbt')
+    track.setAttribute('role', 'img')
+    track.setAttribute('aria-label', `체형 유사도 ${sim}%: ${TIER_LABEL[tier]}`)
+    const fill = el('div', 'cbf')
+    const w = `${Math.max(0, Math.min(100, Math.round(sim)))}%`
+    fill.style.width = w
+    track.append(fill)
+    fills.push({ node: fill, w })
+    b.append(lab, track)
+    li.append(b)
     ul.append(li)
   }
   box.append(ul)

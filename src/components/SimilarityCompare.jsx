@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { compareBody, countUpValue } from '../lib/similarityBreakdown.js'
+import { compareBody, countUpValue, similarityTier, TIER_LABEL, diffText } from '../lib/similarityBreakdown.js'
 
 const COUNT_MS = 900
 const MAX_ROWS = 20
@@ -43,15 +43,31 @@ function useCountUp(targets, active) {
   return { shown, grown }
 }
 
-function Bar({ label, unit, m }) {
+// 키·몸무게를 나와 후기 두 칸으로 묶어 한 번에 보여줘요.
+function BodyPair({ c }) {
+  const dt = diffText(c)
   return (
-    <div className="cmp-bar">
-      <div className="cmp-bar-label">
-        <span>{label} 나 {m.me}{unit}</span>
-        <span>후기 {m.review}{unit}</span>
+    <>
+      <div className="cmp-pair">
+        <div className="cmp-col"><span className="cmp-who">나</span><span className="cmp-val">{c.height.me}cm · {c.weight.me}kg</span></div>
+        <div className="cmp-col"><span className="cmp-who">후기</span><span className="cmp-val">{c.height.review}cm · {c.weight.review}kg</span></div>
       </div>
-      <div className="cmp-track" role="img" aria-label={`${label} 비교: 나 ${m.me}${unit}, 후기 ${m.review}${unit}, 차이 ${m.diff}${unit}`}>
-        <div className="cmp-fill" style={{ width: `${Math.round(m.fill * 100)}%` }} />
+      {dt && <p className="cmp-diff">{dt}</p>}
+    </>
+  )
+}
+
+// 비슷한 체형인지 퍼센트 막대 하나로 보여줘요 (구간별 색: 비슷함 초록 / 조금 달라요 주황 / 많이 달라요 회색).
+function SimBar({ sim, shown }) {
+  const tier = similarityTier(sim)
+  return (
+    <div className={`cmp-sim ${tier}`}>
+      <div className="cmp-sim-label">
+        <span className="cmp-tier">{TIER_LABEL[tier]}</span>
+        <span className="cmp-pct" aria-hidden="true">{shown}%</span>
+      </div>
+      <div className="cmp-track" role="img" aria-label={`체형 유사도 ${sim}%: ${TIER_LABEL[tier]}`}>
+        <div className="cmp-fill" style={{ width: `${Math.max(0, Math.min(100, Math.round(sim)))}%` }} />
       </div>
     </div>
   )
@@ -70,7 +86,7 @@ export default function SimilarityCompare({ profile, reviews }) {
 
   if (rows.length === 0) return null
   return (
-    <div className="card">
+    <div className="card tone-compare">
       <div className="section-head">
         <h3>체형 비교</h3>
         <button type="button" className="btn text" aria-expanded={open} aria-controls="sim-compare-panel" onClick={() => setOpen((v) => !v)}>
@@ -89,14 +105,13 @@ export default function SimilarityCompare({ profile, reviews }) {
                 <li key={r.id ?? i} className="cmp-item">
                   <div className="cmp-top">
                     <strong>{r.nick || '구매자'}</strong>
-                    <span className="cmp-pct" aria-hidden="true">{shown[i] ?? targets[i]}%</span>
                     <span className="sr-only">체형 유사도 {targets[i]}%</span>
                   </div>
                   <span className={`cmp-chip ${c.gender.state === 'diff' ? 'diff' : ''}`}>
                     {r.gender ? `${gt} (${GENDER_TEXT[r.gender]})` : gt}
                   </span>
-                  <Bar label="키" unit="cm" m={c.height} />
-                  <Bar label="몸무게" unit="kg" m={c.weight} />
+                  <BodyPair c={c} />
+                  <SimBar sim={targets[i]} shown={shown[i] ?? targets[i]} />
                   {c.gender.state === 'diff' && <p className="muted small">성별이 달라 유사도는 0%예요. 막대는 키·몸무게만 비교한 거예요.</p>}
                 </li>
               )

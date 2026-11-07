@@ -179,7 +179,11 @@ function mmSequence(cells) {
 }
 function shoeEvidence(rowsList, options, category) {
   if (category === 'shoes') return true
-  if (mmOptionLabels(options).length >= 2) return true
+  // 옵션만으로는: 220~319의 5mm 단위 숫자가 3개 이상일 때만 (의류 옵션과 헷갈리지 않게)
+  const opt = [...new Set(mmOptionLabels(options).map(Number))]
+  if (opt.length >= 3 && opt.every((n) => n % 5 === 0)) return true
+  // 'KR 230 240 250' 처럼 맨 앞 칸이 단위·국가 표기이고 뒤가 mm 숫자 줄인 표
+  if (rowsList.some((rows) => rows.some((r) => r.length >= 4 && /^(?:kr|mm|한국|국내|cm)$/i.test(String(r[0]).trim()) && mmSequence(r.slice(1)) != null))) return true
   return rowsList.some((rows) => rows.some((r) => r.some((c) => /^(?:사이즈|size|kr|mm)?\s*\(?\s*mm\s*\)?$/i.test(String(c).trim()) && /mm/i.test(c))))
 }
 const mmOptionLabels = (options) => options.map((o) => (String(o).match(/(?<![\d.])(2[0-9]\d|3[01]\d)(?:\.\d)?\s*(?:mm|㎜)?(?![\d.])/) || [])[1]).filter(Boolean)
@@ -201,7 +205,7 @@ function shoeMmChart(rowsList, options, category) {
   }
   if (!nums) {
     const o = [...new Set(mmOptionLabels(options).map(Number))].sort((a, b) => a - b)
-    if (o.length < 2) return null
+    if (o.length < (category === 'shoes' ? 2 : 3)) return null
     nums = o
     from = 'shoe-options'
   }
@@ -351,8 +355,13 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
   const rows = best.body.map((r) => {
     const matched = options.length ? matchOption(normLabel(r[0]), options) : null
     // 숫자만 있는 라벨('0')은 옵션 이름('0(S)')을 줄 이름으로 써서 리뷰의 'S' 같은 글자와도 이어지게 해요.
-    const label = matched && /^\d{1,2}$/.test(normLabel(r[0])) ? optionKeys(matched).find((k) => outerNumber(k) === normLabel(r[0])) || normLabel(matched) : normLabel(r[0])
-    const shown = matched || displayText(r[0])
+    const n0 = normLabel(r[0])
+    // 숫자만 있는 라벨('0')은 옵션 안의 '0(S)' 조각을 줄 이름으로 써서 리뷰의 'S'와도 이어지게 해요. 그 외에는 표 라벨을 그대로 둡니다.
+    const paren = matched && /^\d{1,2}$/.test(n0) ? optionKeys(matched).find((k) => outerNumber(k) === n0) : null
+    const label = paren || n0
+    // 옵션 이름이 표 줄 이름과 같거나('1 (M)' ↔ '1(M)') 괄호 조각일 때만 옵션 표기를 보여줘요. '95/100', 'S/M' 같은 묶음 옵션은 줄마다 표 라벨을 씁니다.
+    const mn = matched ? normLabel(matched) : ''
+    const shown = matched && (mn === label || mn === n0 || innerToken(mn) === label || paren) ? matched : displayText(r[0])
     if (shown !== label) display[label] = shown
     const m = {}
     const cells = []
@@ -448,7 +457,7 @@ function pickReviewSize(t, sizeLabels) {
   const patterns = [
     new RegExp(`(?:^|[^A-Za-z0-9])(${SIZE_TOK})\\s*(?:사이즈|로|으로|구매|샀|입|주문|사)`, 'gi'),
     new RegExp(`(?<![A-Za-z0-9])\\d{1,2}\\s*\\(\\s*(${SIZE_TOK})\\s*\\)`, 'gi'),
-    /(\d{2,3})\s*(?:mm|㎜)?\s*(?:사이즈|인치|로 구매|으로 구매|샀|구매|주문|신어|신었|신고)/g,
+    /(?<![\d.,])(\d{2,3})\s*(?:mm|㎜)?\s*(?:사이즈|인치|로 구매|으로 구매|샀|구매|주문|신어|신었|신고)/g,
     /(?<![\d.])(2[0-9]\d|3[01]\d)\s*(?:mm|㎜)(?![A-Za-z])/g, // 신발 '265mm'
   ]
   for (const re of patterns) {
