@@ -512,3 +512,8 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .cmp-fill { transition: none; }
 }
+
+/* 확장에서 자동으로 가져온 결과 알림 */
+.sync-notice { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #f2f8f4; font-size: 13px; }
+.sync-notice.error { background: #fdf3f2; }
+.sync-notice span { flex: 1 1 200px; }

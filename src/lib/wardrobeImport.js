@@ -186,6 +186,11 @@ export function parseImportText(text, { now = Date.now() } = {}) {
   } catch {
     return { ok: false, reason: REASONS.notJson }
   }
+  return parseEnvelopeData(data, { now })
+}
+
+// 이미 JSON으로 풀린 봉투 → { ok: true, item } | { ok: false, reason }. 붙여넣기와 자동 전달이 같은 검사를 써요.
+export function parseEnvelopeData(data, { now = Date.now() } = {}) {
   if (!isObj(data) || data.app !== ENVELOPE_APP || data.kind !== ENVELOPE_KIND || data.v !== ENVELOPE_VERSION) return { ok: false, reason: REASONS.envelope }
   const item = sanitizeItem(data.item, { now })
   if (!item) return { ok: false, reason: REASONS.item }

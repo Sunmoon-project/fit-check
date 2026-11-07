@@ -4,6 +4,7 @@ const PROFILE_KEY = 'fitcheck.profile.v2'
 const PHOTO_KEY = 'fitcheck.photo.v1'
 const FEEDBACK_KEY = 'fitcheck.feedback.v1'
 const WARDROBE_KEY = 'fitcheck.wardrobe.v1'
+const SYNC_SEEN_KEY = 'fitcheck.syncSeen.v1' // 확장에서 자동으로 받아 처리한 항목 id (같은 항목을 두 번 담지 않으려고)
 
 function read(key, fallback) {
   try {
@@ -87,6 +88,11 @@ export function trimNote(res) {
   if (res.reviewsCleared > 0) parts.push(`오래된 옷 ${res.reviewsCleared}개의 리뷰를 지웠어요`)
   return parts.length ? `저장 공간 때문에 ${parts.join(', ')}.` : ''
 }
+export const loadSyncSeen = () => {
+  const v = read(SYNC_SEEN_KEY, [])
+  return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []
+}
+export const saveSyncSeen = (ids) => write(SYNC_SEEN_KEY, ids)
 export const loadWardrobe = () => read(WARDROBE_KEY, [])
 export function saveWardrobe(list) {
   let next = list.slice(0, WARDROBE_MAX)

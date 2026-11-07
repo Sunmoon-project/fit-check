@@ -78,8 +78,8 @@ function ImportPanel({ onImport }) {
 
   return (
     <details className="card wd-import">
-      <summary>확장에서 가져오기</summary>
-      <p className="muted small">확장 카드의 ‘내 옷장으로 보내기’를 누른 뒤 복사된 글을 붙여넣거나, 저장한 .json 파일을 골라주세요.</p>
+      <summary>확장에서 직접 가져오기 (자동으로 안 될 때)</summary>
+      <p className="muted small">확장 카드의 ‘내 옷장으로 보내기’를 누르면 보통 이 페이지로 자동으로 들어와요. 자동 전달이 안 될 때만, 확장 카드의 ‘붙여넣기용으로 복사’를 누른 뒤 글을 붙여넣거나 저장한 .json 파일을 골라주세요.</p>
       <textarea
         className="wd-import-text"
         rows={4}

@@ -1,4 +1,4 @@
-// `npm run build:extension`: extension/ → dist-extension/ (content.js, popup.js는 IIFE 단일 파일)
+// `npm run build:extension`: extension/ → dist-extension/ (content.js, bridge.js, popup.js는 IIFE 단일 파일)
 import { build } from 'vite'
 import { cpSync, rmSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -8,7 +8,7 @@ const out = resolve(root, 'dist-extension')
 rmSync(out, { recursive: true, force: true })
 mkdirSync(out, { recursive: true })
 
-for (const name of ['content', 'popup']) {
+for (const name of ['content', 'bridge', 'popup']) {
   await build({
     configFile: false,
     root,
