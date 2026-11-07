@@ -8,6 +8,8 @@ import {
   generateFitComment,
   computeCalibration,
   bodyValuesForProfile,
+  describeEvidence,
+  CONFIDENCE_LABEL,
 } from '../src/lib/fitEngine.js'
 import {
   parseCsv,
@@ -834,6 +836,48 @@ test('fitMetrics: 이웃 투표 동률은 예측 불가로 처리하고 집계',
   assert.equal(me.predicted, null)
   assert.equal(me.tie, true)
   assert.equal(evaluate(rows, bodySimilarity).ties, 3) // 세 행 모두 이웃 둘의 라벨이 갈림
+})
+
+test('evidence: 리뷰·사이즈표 개수가 실제 데이터와 일치', () => {
+  const p = Object.values(PRODUCTS)[0]
+  const profile = { height: 170, weight: 65, gender: 'male', preferredFit: 'regular' }
+  const r = generateFitComment(profile, p)
+  assert.equal(r.evidence.reviewTotal, (p.reviews || []).length)
+  assert.equal(r.evidence.reviewMatched, r.matched.length)
+  assert.equal(r.evidence.sizeChart, !!p.sizeChart && r.perSize.length > 0)
+  const mk = (n) => Array.from({ length: n }, (_, i) => ({ height: 170, weight: 65, size: 'M', fit: 'true', i }))
+  const r12 = generateFitComment(profile, { ...p, reviews: mk(12) })
+  assert.equal(r12.evidence.reviewTotal, 12)
+  assert.equal(r12.evidence.reviewMatched, r12.matched.length)
+  assert.equal(r12.evidence.reviewVotes <= r12.evidence.reviewMatched, true)
+})
+
+test('describeEvidence: 높음/보통/낮음 문구와 개수', () => {
+  const ev = { reviewTotal: 12, reviewMatched: 5, reviewVotes: 5, sizeChart: true, measuredParts: 2, estimatedParts: 0, calibrated: false }
+  const hi = describeEvidence(ev, 'high')
+  assert.equal(hi.summary, '리뷰 12건 중 비슷한 체형 5건 · 사이즈표 실측 비교 · 확신도 높음')
+  assert.equal(hi.reasons.length, 0)
+  const mid = describeEvidence({ ...ev, estimatedParts: 1 }, 'medium')
+  assert.ok(mid.summary.includes('확신도 보통'))
+  assert.ok(mid.reasons.some((x) => x.includes('1개 부위')))
+  const lo = describeEvidence(ev, 'low')
+  assert.ok(lo.summary.includes('확신도 낮음'))
+  assert.ok(lo.reasons.length > 0)
+  // 요약의 숫자는 evidence에 있는 값뿐
+  const nums = hi.summary.match(/\d+/g).map(Number)
+  assert.ok(nums.every((n) => Object.values(ev).includes(n)))
+})
+
+test('describeEvidence: 리뷰·사이즈표가 없으면 낮음과 사유', () => {
+  const profile = { height: 170, weight: 65, gender: 'male' }
+  const r = generateFitComment(profile, { name: 'x', category: 'top', sizeChart: null, reviews: [] })
+  assert.equal(r.confidence, 'low')
+  assert.equal(r.evidence.reviewTotal, 0)
+  assert.equal(r.evidence.sizeChart, false)
+  const d = describeEvidence(r.evidence, r.confidence)
+  assert.ok(d.summary.includes('리뷰 없음') && d.summary.includes('사이즈표 없음'))
+  assert.ok(d.reasons.some((x) => x.includes('리뷰가 없어요')))
+  assert.ok(!/\d/.test(d.summary.replace(CONFIDENCE_LABEL.low.text, '')))
 })
 
 console.log(`\n${passed}개 통과`)

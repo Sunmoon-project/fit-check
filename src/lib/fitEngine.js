@@ -306,11 +306,23 @@ export function generateFitComment(profile, product, calibration = {}) {
   if (calibrated) notes.push('내 착용 기록으로 판정 기준을 보정했어요.')
   notes.push('후기와 사이즈표를 종합한 참고용 추천이에요. 소재와 신축성에 따라 다를 수 있어요.')
 
+  const compared = verdicts.filter((v) => !v.isLength)
+  const evidence = {
+    reviewTotal: (product.reviews || []).length,
+    reviewMatched: matched.length,
+    reviewVotes: reviewPick?.votes ?? 0,
+    sizeChart: measureResult != null,
+    measuredParts: compared.filter((v) => measured.has(v.part)).length,
+    estimatedParts: compared.filter((v) => !measured.has(v.part)).length,
+    calibrated,
+  }
+
   return {
     headline,
     body: body.filter(Boolean).join(' '),
     note: notes.join(' '),
     confidence,
+    evidence,
     recommendedSize,
     tendency: reviewPick?.tendency ?? null,
     matched,
@@ -365,9 +377,34 @@ export function calibrationSummary(calibration, count) {
 }
 
 export const CONFIDENCE_LABEL = {
-  high: { text: '추천 정확도 높음', color: '#2f7a53' },
-  medium: { text: '추천 정확도 보통', color: '#c27a1e' },
-  low: { text: '참고용', color: '#8a877f' },
+  high: { text: '확신도 높음', color: '#2f7a53' },
+  medium: { text: '확신도 보통', color: '#c27a1e' },
+  low: { text: '확신도 낮음(참고용)', color: '#8a877f' },
+}
+
+// 추천의 근거를 사람이 읽는 문장으로. 숫자는 모두 evidence에서만 가져옵니다.
+// 확신도는 규칙 기반 구분이며 보정된 확률이 아닙니다.
+export function describeEvidence(evidence, confidence) {
+  const e = evidence || {}
+  const word = CONFIDENCE_LABEL[confidence]?.text ?? CONFIDENCE_LABEL.low.text
+  const parts = []
+  if (e.reviewTotal > 0) parts.push(`리뷰 ${e.reviewTotal}건 중 비슷한 체형 ${e.reviewMatched}건`)
+  else parts.push('리뷰 없음')
+  if (e.sizeChart) {
+    parts.push(e.estimatedParts > 0 ? '사이즈표 비교(일부 부위는 추정)' : e.measuredParts > 0 ? '사이즈표 실측 비교' : '사이즈표 비교')
+  } else parts.push('사이즈표 없음')
+  parts.push(word)
+
+  const reasons = []
+  if (confidence !== 'high') {
+    if (!e.reviewTotal) reasons.push('참고할 리뷰가 없어요.')
+    else if (!e.reviewMatched) reasons.push(`리뷰 ${e.reviewTotal}건 중 비슷한 체형의 후기가 없어요.`)
+    else if (e.reviewVotes < 2) reasons.push(`비슷한 체형 후기 ${e.reviewMatched}건 중 사이즈와 핏을 밝힌 후기가 ${e.reviewVotes}건뿐이에요.`)
+    if (!e.sizeChart) reasons.push('사이즈표를 읽지 못해 실측 비교를 하지 못했어요.')
+    else if (e.estimatedParts > 0) reasons.push(`직접 잰 치수가 없어 ${e.estimatedParts}개 부위는 추정값으로 비교했어요.`)
+    if (!reasons.length) reasons.push('후기와 사이즈표의 결과가 완전히 일치하지는 않아요.')
+  }
+  return { summary: parts.join(' · '), reasons }
 }
 
 export const FIT_LABEL = {

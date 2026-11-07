@@ -308,6 +308,9 @@ body {
 .fit-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
 .conf-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; }
 .conf-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.evidence { margin: 0 0 14px; padding: 10px 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.evidence-summary { margin: 0; font-size: 13px; font-weight: 700; color: var(--ink); }
+.evidence-why { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--ink-2); }
 .reco-size { display: flex; align-items: baseline; gap: 10px; }
 .size-big { font-size: 56px; font-weight: 800; letter-spacing: -0.04em; line-height: 1; }
 .fit-headline { margin: 12px 0 6px; font-size: 18px; font-weight: 800; }
