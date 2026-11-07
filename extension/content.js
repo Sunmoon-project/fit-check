@@ -120,7 +120,7 @@ function reportBlock(report) {
     done.textContent = (await copyText(report)) ? '복사했어요' : '복사하지 못했어요. 브라우저 권한을 확인해주세요.'
   })
   box.append(btn, done)
-  box.append(el('p', 'note', '리포트에는 주소(쿼리·해시 제외), 확장 버전, 찾은 개수, 화면 구조 모양(글자는 L/N/T 기호)만 들어 있어요. 키·몸무게 등 체형 정보, 리뷰 글, 상품명은 들어 있지 않아요.'))
+  box.append(el('p', 'note', '리포트에는 주소 경로(쿼리·해시 제외, 주소에 상품명이 있으면 같이 들어가요), 확장 버전, 찾은 개수, 화면 구조 모양(글자는 L/N/T 기호)만 들어 있어요. 키·몸무게 등 체형 정보, 리뷰 글, 페이지 본문은 들어 있지 않아요.'))
   return box
 }
 
@@ -147,12 +147,16 @@ function manualForm(r) {
         msg.textContent = '열 순서와 줄의 숫자 개수가 맞는지 확인해주세요.'
         return
       }
-      const profile = await readProfile()
-      if (!isUsableProfile(profile)) {
-        msg.textContent = '먼저 확장 프로그램 아이콘을 눌러 체형 정보를 저장해주세요.'
-        return
+      try {
+        const profile = await readProfile()
+        if (!isUsableProfile(profile)) {
+          msg.textContent = '먼저 확장 프로그램 아이콘을 눌러 체형 정보를 저장해주세요.'
+          return
+        }
+        renderResult({ ...analyzePage(document, location.href, profile, EXT_VERSION, { extraRows }), manual: true })
+      } catch {
+        msg.textContent = '직접 입력한 표로 분석하지 못했어요. 입력 형식을 확인하고 다시 눌러주세요.'
       }
-      renderResult(analyzePage(document, location.href, profile, EXT_VERSION, { extraRows }))
     })
     box.append(cols, lines, go, msg, el('p', 'note', '입력한 표는 저장하거나 전송하지 않고 이번 분석에만 써요.'))
   })
@@ -175,6 +179,7 @@ function renderResult(r) {
       }
       return
     }
+    if (r.manual) card.append(el('p', 'note', '직접 입력한 사이즈표 값으로 계산한 결과예요. 페이지에서 읽은 값이 아니에요.'))
     const conf = el('span', 'badge', r.confidenceLabel.text)
     conf.style.color = r.confidenceLabel.color
     const row = el('div', 'row')
@@ -237,12 +242,11 @@ async function run() {
     }
     renderResult(result)
   } catch (err) {
-    // 오류는 이름과 메시지만 리포트에 넣습니다 (스택 제외, 주소는 메시지에서 제거).
+    // 오류는 이름만 리포트에 넣습니다 (메시지에 페이지 글이 섞일 수 있어 제외).
     let diagnostics = null
     try {
       diagnostics = collectDiagnostics(document, location.href, EXT_VERSION)
       diagnostics.errorName = String(err?.name || 'Error')
-      diagnostics.errorMessage = String(err?.message || '')
     } catch {
       diagnostics = null
     }

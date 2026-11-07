@@ -53,7 +53,7 @@ export function readTables(root) {
 // textContent만 쓰므로 display:none 등으로 접힌 내용도 읽어요. 클릭·스크롤은 하지 않습니다.
 export const MEASURE_RE = /어깨|가슴|총장|기장|허리|허벅지|엉덩이|소매|발길이|단면/
 const HEADING_RE = /사이즈|실측|size/i
-const MAX_ANCHORS = 60
+const MAX_ANCHORS = 250
 const MAX_CLIMB = 6
 const MAX_CHILDREN = 80
 

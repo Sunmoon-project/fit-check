@@ -1059,6 +1059,30 @@ test('가짜 HTML: 진단 리포트에 프로필·리뷰 글·상품명·쿼리�
   for (const bad of [PLANT.name, PLANT.profile, '리뷰본문비밀문장', 'SECRETQ', 'frag', '171']) assert.ok(!rep.includes(bad), bad)
   assert.ok(rep.includes('https://shop.example/p/1'))
   assert.ok(rep.includes('0.1.0'))
+  assert.ok(!rep.includes('failed at'))
+  assert.ok(rep.includes('TypeError'))
+})
+
+test('가짜 HTML: 오류 경로 리포트는 오류 이름만 담고 페이지 글이 든 메시지는 버린다', () => {
+  const d = collectDiagnostics(fakeDocument(IMG_HTML), 'https://shop.example/p/1', '0.1.0')
+  d.errorName = 'DOMException'
+  d.errorMessage = `bad node: ${PLANT.review} ${PLANT.name}`
+  const rep = formatReport(d)
+  assert.ok(rep.includes('DOMException'))
+  for (const bad of [PLANT.name, '리뷰본문비밀문장', 'bad node']) assert.ok(!rep.includes(bad), bad)
+})
+
+test('가짜 HTML: 메뉴·상품 목록·스펙 격자는 사이즈표로 읽지 않는다', () => {
+  const nav = '<ul class="nav"><li><a>기장</a><a>허리</a></li><li><a>소매</a><a>어깨</a></li><li><a>가슴</a><a>단면</a></li></ul>'
+  const list = '<ul class="goods">' + Array.from({ length: 4 }, (_, i) => `<li><span>허리 편한 바지 ${i}</span><span>${10000 + i}원</span></li>`).join('') + '</ul>'
+  const spec = '<dl class="spec"><div><dt>기장</dt><dd>긴 기장</dd></div><div><dt>허리</dt><dd>밴딩</dd></div><div><dt>소매</dt><dd>없음</dd></div></dl>'
+  for (const html of [nav, list, spec]) assert.equal(parsePage(fakeDocument(wrapBody(html)), '').sizeChart, null, html.slice(0, 30))
+})
+
+test('가짜 HTML: 차트 앞에 측정 단어 조각이 많아도 실제 차트를 찾는다', () => {
+  const noise = Array.from({ length: 120 }, (_, i) => `<p>기장 ${i}</p>`).join('')
+  const chart = '<div class="c"><div><b>사이즈</b><b>어깨</b><b>가슴</b></div><div><b>M</b><b>50</b><b>57</b></div><div><b>L</b><b>52</b><b>60</b></div></div>'
+  assert.ok(parsePage(fakeDocument(wrapBody(noise + chart)), '').sizeChart)
 })
 
 test('가짜 HTML: 진단 리포트 길이는 상한을 넘지 않는다', () => {
