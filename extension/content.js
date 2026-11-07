@@ -856,7 +856,7 @@ async function run() {
     // 사이즈표를 못 찾으면 짧게 기다렸다가 다시 읽어요. 클릭·스크롤은 하지 않고 화면 글만 읽습니다.
     let result = analyzePage(document, location.href, profile, EXT_VERSION)
     for (const delay of RETRY_DELAYS) {
-      if (result.status !== 'no-data') break
+      if (result.status !== 'no-data' && result.status !== 'no-product') break
       await new Promise((r) => setTimeout(r, delay))
       result = analyzePage(document, location.href, profile, EXT_VERSION)
     }

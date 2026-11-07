@@ -23,7 +23,7 @@ import {
   fitLinear,
 } from './lib/bodyMetrics.mjs'
 import { PRODUCTS } from '../src/data/mockData.js'
-import { parseReviewText } from '../src/lib/productCore.js'
+import { parseReviewText, analyzeSizeCharts } from '../src/lib/productCore.js'
 import { parseProductHtml } from '../server/productParser.js'
 import { parsePage, isProductPage, splitSentences, extractCardView, parseGender } from '../src/lib/pageParser.js'
 import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
@@ -2713,6 +2713,65 @@ test('가짜 데이터 sync: 두 탭(가짜 window)이 같은 전달을 받아�
   a.deliverToSelf(makeDeliverMessage(entries)); b.deliverToSelf(makeDeliverMessage(entries))
   assert.equal(store.length, 1)
   assert.deepEqual(b.posted[1].data.ids, ['qaaaaaaa'], '두 번째 탭도 처리 완료로 ack')
+})
+
+test('확장 분석: 상품 페이지가 아닌 화면(장바구니 등)은 따로 안내하고, 상품 페이지로 보이면 기존 문구를 쓴다', () => {
+  const profile = buildProfile({ gender: 'male', height: '175', weight: '70' }).profile
+  const cart = analyzePage(fakeDocument('<html><body><h1>장바구니</h1><p>담긴 상품이 없어요</p></body></html>'), 'https://shop.example/cart', profile)
+  assert.equal(cart.status, 'no-data')
+  assert.equal(cart.notProductPage, true)
+  assert.ok(cart.message.includes('상품 상세 페이지가 아니에요') && cart.diagnostics, '직접 입력·리포트는 남김')
+  const prod = analyzePage(fakeDocument('<html><head><meta property="og:type" content="product"></head><body><h1>니트 스웨터</h1></body></html>'), 'https://shop.example/p/1', profile)
+  assert.equal(prod.status, 'no-data')
+  assert.equal(prod.notProductPage, false)
+  assert.ok(!prod.message.includes('상품 상세 페이지가 아니에요'))
+})
+
+test('사이즈표: 신발은 사이즈 이름(mm)이 발길이로 읽힌다 (가짜 표)', () => {
+  const chartOf = (rows, cat, opts = []) => analyzeSizeCharts(rows, cat, opts)
+  for (const [rows, cat] of [
+    [[[['사이즈(mm)', '230', '240', '250', '260']]], 'top'],
+    [[[['KR', '230', '240', '250'], ['US', '5', '6', '7']]], 'shoes'],
+    [[[['사이즈'], ['230mm'], ['240mm'], ['250mm']]], 'shoes'],
+    [[[['사이즈', '발 길이', '발볼'], ['230', '230', '95'], ['240', '240', '98']]], 'shoes'],
+  ]) {
+    const { chart } = chartOf(rows, cat)
+    assert.ok(chart, JSON.stringify(rows))
+    assert.equal(chart.category, 'shoes')
+    assert.equal(chart.unit, 'mm')
+    for (const [k, m] of Object.entries(chart.measures)) assert.equal(m.footLength, Number(k))
+  }
+  const fromOptions = chartOf([], 'shoes', ['블랙 / 240', '블랙 / 250'])
+  assert.deepEqual(Object.keys(fromOptions.chart.measures), ['240', '250'])
+  assert.equal(chartOf([[['사이즈', '230', '240']]], 'shoes').chart, null, '2개뿐이면 표로 보지 않음')
+  assert.equal(chartOf([[['번호', '3', '2', '1', '9']]], 'shoes').chart, null, 'mm 범위 밖이거나 커지지 않으면 거부')
+  assert.equal(chartOf([[['사이즈', '230', '240', '250']]], 'top', []).chart, null, '신발 근거가 없으면 일반 옷으로 오해하지 않음')
+})
+
+test('사이즈표: 옵션에 색상이 붙어도(블랙 / M) 영문 헤더(Size, Length, Chest)도 읽는다 (가짜 표)', () => {
+  const { chart, meta } = analyzeSizeCharts([[['사이즈', '어깨', '가슴'], ['M', '45', '55'], ['L', '47', '58']]], 'top', ['블랙 / M', '블랙 / L'])
+  assert.deepEqual(Object.keys(chart.measures), ['M', 'L'])
+  assert.equal(meta.overlap, 2)
+  const num = analyzeSizeCharts([[['사이즈', '어깨', '가슴'], ['0', '45', '55'], ['1', '47', '58']]], 'top', ['블랙 / 0 (S)', '블랙 / 1 (M)'])
+  assert.deepEqual(Object.keys(num.chart.measures), ['0(S)', '1(M)'])
+  const en = analyzeSizeCharts([[['Size', 'Length', 'Chest'], ['S', '70', '100'], ['M', '72', '104']]], 'top', [])
+  assert.deepEqual(Object.keys(en.chart.measures), ['S', 'M'])
+  assert.equal(en.chart.measures.M.chest, 104)
+  const wrong = analyzeSizeCharts([[['사이즈', '어깨', '가슴'], ['M', '45', '55'], ['L', '47', '58']]], 'top', ['블랙 / XL'])
+  assert.equal(wrong.chart, null, '옵션과 전혀 안 겹치면 여전히 거부')
+})
+
+test('리뷰 신발 사이즈: 265mm 구매, 270 신어요, 구매옵션 화이트 / 255, 평소 사이즈는 제외 (가짜 문장)', () => {
+  const labels = ['250', '255', '260', '265', '270']
+  for (const [text, want] of [
+    ['265mm 구매했어요', '265'], ['270 신어요 딱 맞음', '270'], ['구매옵션 화이트 / 255 발볼 넓어요', '255'],
+    ['평소 250 신는데 260 샀어요', '260'], ['250 신는데 265 구매했어요', '265'], ['260mm 사이즈 정사이즈', '260'],
+  ]) {
+    assert.equal(parseReviewText(text, labels).size, want, text)
+    assert.equal(parseReviewText(text, []).size, want, `${text} (라벨 없음)`)
+  }
+  for (const text of ['굽 30mm 편해요', '평소 250 신어요', '두 켤레 샀어요 250 260']) assert.equal(parseReviewText(text, labels).size, null, text)
+  assert.equal(parseReviewText('300 신어요', labels).size, null, '표에 없는 사이즈')
 })
 
 console.log(`\n${passed}개 통과`)
