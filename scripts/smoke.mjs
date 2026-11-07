@@ -32,9 +32,9 @@ import {
 import { bodySimilarity } from '../src/lib/fitEngine.js'
 import { runHfTryOn, parseSse, spaceBaseUrl, isValidSpaceId, clearTryOnCache, garmentDescription, isTryOnSupported, DEFAULT_SPACE } from '../server/hfTryOn.js'
 
-import { toContribution, toBand, toDomain, contributionKey, SCHEMA_VERSION } from '../src/lib/contribution.js'
+import { toContribution, toBand, toDomain, contributionKey, ALLOWED_DOMAINS, SCHEMA_VERSION } from '../src/lib/contribution.js'
 import { CONSENT_SUMMARY, CONSENT_VERSION } from '../src/data/consent.js'
-import { loadConsent, saveConsent, enqueueContribution, loadContribQueue } from '../src/lib/storage.js'
+import { loadConsent, purgeStaleConsent, saveConsent, enqueueContribution, loadContribQueue, recordsForUpload } from '../src/lib/storage.js'
 
 let passed = 0
 function test(name, fn) {
@@ -705,7 +705,7 @@ test('toContribution: 식별 정보 제외, 구간 값만', () => {
 })
 
 test('toContribution: 기존 feedback 형식(parts 없음 등)도 처리, 필수값 없으면 null', () => {
-  const old = { url: 'https://a.com/x', productName: 'x', category: 'top', size: 'L', result: 'true', returned: false, savedAt: 1 }
+  const old = { url: 'https://www.musinsa.com/x', productName: 'x', category: 'top', size: 'L', result: 'true', returned: false, savedAt: 1 }
   const c = toContribution(old, PF, true)
   assert.deepEqual(c.parts, {})
   assert.equal(c.returned, false)
@@ -720,7 +720,7 @@ test('동의 문구에 철회와 미동의 사용 가능 안내 포함', () => {
 
 test('toDomain: IP, localhost, 사설·예시 호스트는 null', () => {
   for (const u of ['http://192.168.0.1/a', 'http://localhost:3000/a', 'http://[::1]/a', 'https://shop.internal/a', 'https://intranet/a', 'https://a.example.com/p', 'https://example.com/p', 'https://x.test/p']) assert.equal(toDomain(u), null, u)
-  assert.equal(toDomain('https://m.shop.co.kr/p'), 'm.shop.co.kr')
+  assert.equal(toDomain('https://m.musinsa.com/p'), 'musinsa.com')
 })
 
 test('toContribution: 공개 도메인을 알 수 없으면 null(데모 상품 제외)', () => {
@@ -775,6 +775,48 @@ test('동의 버전이 바뀌면 이전 동의로 쌓인 대기열도 지워짐'
     assert.equal(loadConsent(CONSENT_VERSION), true)
     assert.equal(loadContribQueue().length, 1)
     assert.equal(loadConsent(CONSENT_VERSION + 1), false)
+    assert.equal(loadContribQueue().length, 1) // 읽기는 삭제하지 않음
+    assert.equal(purgeStaleConsent(CONSENT_VERSION + 1), true)
+    assert.equal(loadContribQueue().length, 0)
+    assert.equal(loadConsent(CONSENT_VERSION), false)
+  })
+})
+
+test('contributionKey: 쿼리로 상품을 가르는 URL은 다른 키, www·추적 파라미터는 같은 키', () => {
+  const k = (url) => contributionKey({ ...FB, url })
+  assert.notEqual(k('https://shop.com/goods/view?goodsNo=1'), k('https://shop.com/goods/view?goodsNo=2'))
+  assert.notEqual(k('https://shop.com/detail.html?product_no=1'), k('https://shop.com/detail.html?product_no=2'))
+  assert.equal(k('https://www.shop.com/goods/view?goodsNo=1'), k('https://shop.com/goods/view?goodsNo=1&utm_source=a&fbclid=x'))
+  assert.equal(k('https://shop.com/g?a=1&b=2'), k('https://shop.com/g?b=2&a=1'))
+})
+
+test('toDomain: 허용 목록 밖(소규모·무료 서브도메인)은 null, 허용 목록은 통과', () => {
+  for (const u of ['https://tiny-shop.co.kr/p/1', 'https://mystore.cafe24.com/p/1', 'https://abc.myshopify.com/p', 'https://smartstore.naver.com/abc/products/1']) assert.equal(toDomain(u), null, u)
+  assert.equal(toContribution({ ...FB, url: 'https://tiny-shop.co.kr/p/1' }, PF, true), null)
+  assert.equal(toContribution({ ...FB, url: 'https://www.musinsa.com/products/1' }, PF, true).domain, 'musinsa.com')
+  assert.ok(ALLOWED_DOMAINS.includes('musinsa.com'))
+})
+
+test('recordsForUpload: record만 반환하고 key·이전 동의 버전 항목은 제외', () => {
+  const rec = toContribution({ ...FB, url: 'https://www.musinsa.com/products/1' }, PF, true)
+  const q = [
+    { key: 'k1', consentVersion: CONSENT_VERSION, record: rec },
+    { key: 'k2', consentVersion: CONSENT_VERSION - 1, record: rec },
+  ]
+  const out = recordsForUpload(q, CONSENT_VERSION)
+  assert.equal(out.length, 1)
+  assert.ok(!('key' in out[0]) && !JSON.stringify(out).includes('k1'))
+  assert.deepEqual(recordsForUpload(null, CONSENT_VERSION), [])
+})
+
+test('loadConsent는 저장소를 바꾸지 않고, purgeStaleConsent만 지움', () => {
+  withLocalStorage(() => {
+    saveConsent(true, CONSENT_VERSION)
+    enqueueContribution(toContribution({ ...FB, url: 'https://www.musinsa.com/products/1' }, PF, true), 'k', CONSENT_VERSION)
+    assert.equal(loadConsent(CONSENT_VERSION + 1), false)
+    assert.equal(loadContribQueue().length, 1)
+    assert.equal(purgeStaleConsent(CONSENT_VERSION), false)
+    assert.equal(purgeStaleConsent(CONSENT_VERSION + 1), true)
     assert.equal(loadContribQueue().length, 0)
     assert.equal(loadConsent(CONSENT_VERSION), false)
   })

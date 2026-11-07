@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { calibrationSummary } from '../lib/fitEngine.js'
 import { toContribution, contributionKey } from '../lib/contribution.js'
-import { loadConsent, saveConsent, enqueueContribution } from '../lib/storage.js'
+import { loadConsent, purgeStaleConsent, saveConsent, enqueueContribution } from '../lib/storage.js'
 import { CONSENT_VERSION, CONSENT_LABEL, CONSENT_SUMMARY, CONSENT_STATUS_NOTE } from '../data/consent.js'
 
 const RESULTS = [
@@ -19,6 +19,10 @@ export default function FeedbackForm({ product, perSize, defaultSize, existing, 
   const [saved, setSaved] = useState(false)
   // 기본은 해제. 사용자가 직접 체크한 경우에만 켜져요.
   const [consent, setConsent] = useState(() => loadConsent(CONSENT_VERSION))
+  // 동의 문구 버전이 바뀐 경우 이전 대기열을 지워요(읽기 경로가 아니라 마운트 때).
+  useEffect(() => {
+    purgeStaleConsent(CONSENT_VERSION)
+  }, [])
 
   if (sizes.length === 0) return null
 

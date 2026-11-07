@@ -13,8 +13,33 @@ export function toBand(value, step) {
 }
 
 // URL에서 도메인만 남겨요. 경로·쿼리·계정 정보는 버립니다.
-// IP, localhost, 사설·예약 호스트, 예시(데모) 도메인은 null이에요. 소규모 사설 호스트가 준식별자가 되는 걸 막기 위해서예요.
-// 공개 접미사 목록으로 정규화하거나 허용 도메인 목록을 두는 건 서버 전송 전에 따로 해야 해요(docs/후기데이터_설계.md).
+// 알려진 대형 공개 쇼핑몰(허용 목록)만 도메인으로 인정해요. 소규모 쇼핑몰이나 무료 서브도메인 호스팅(*.cafe24.com 등)은
+// 한 사람을 좁히는 준식별자가 될 수 있어서 null이에요. IP, localhost, 사설·예약 호스트, 예시(데모) 도메인도 null이에요.
+// 목록 밖 도메인을 쓰려면 이 목록에 추가해야 해요. k-익명 공개는 아직 구현되지 않았어요(docs/후기데이터_설계.md).
+export const ALLOWED_DOMAINS = [
+  'musinsa.com',
+  '29cm.co.kr',
+  'wconcept.co.kr',
+  'coupang.com',
+  'ssfshop.com',
+  'zigzag.kr',
+  'a-bly.com',
+  'brandi.co.kr',
+  'ssg.com',
+  'lotteon.com',
+  'gmarket.co.kr',
+  '11st.co.kr',
+  'auction.co.kr',
+  'handsome.co.kr',
+  'thehandsome.com',
+  'uniqlo.com',
+  'zara.com',
+  'hm.com',
+  'spao.com',
+  'topten10.co.kr',
+  'nike.com',
+  'adidas.co.kr',
+]
 const RESERVED_TLDS = ['localhost', 'local', 'internal', 'lan', 'home', 'corp', 'test', 'example', 'invalid', 'onion']
 const EXAMPLE_HOSTS = ['example.com', 'example.org', 'example.net']
 export function toDomain(url) {
@@ -24,7 +49,9 @@ export function toDomain(url) {
     if (/^\d+(\.\d+)*$/.test(h)) return null // IPv4
     if (RESERVED_TLDS.includes(h.split('.').pop())) return null
     if (EXAMPLE_HOSTS.some((e) => h === e || h.endsWith(`.${e}`))) return null
-    return h
+    // 허용 목록의 도메인 자신 또는 그 하위 호스트(m.musinsa.com)는 등록 도메인으로 줄여요.
+    const hit = ALLOWED_DOMAINS.find((d) => h === d || h.endsWith(`.${d}`))
+    return hit || null
   } catch {
     return null
   }
@@ -32,12 +59,20 @@ export function toDomain(url) {
 
 // 같은 상품·사이즈를 수정해 다시 저장할 때 대기열에서 이전 기록을 바꾸기 위한 로컬 전용 키예요.
 // 서버로 보내는 레코드에는 들어가지 않아요(상품 주소 원문도 저장하지 않고 해시만 써요).
+// 상품 번호를 쿼리로 받는 쇼핑몰(goodsNo, product_no, id 등)도 구분되도록 추적용 파라미터만 빼고 쿼리를 포함해요.
+const TRACKING_PARAMS = /^(utm(_.*)?|fbclid|gclid|ref|ref_.*|referrer|source|src|cid|campaign|affiliate|aff|adid|ad_id|mc_.*|_ga|igshid|n_media|n_query|n_rank|n_ad_group|n_ad|n_keyword_id|n_keyword|n_campaign_type|n_ad_group_type)$/i
 export function contributionKey(feedback) {
   if (!feedback) return null
   let base = String(feedback.url || '')
   try {
     const u = new URL(base)
-    base = `${u.hostname}${u.pathname}`
+    const host = u.hostname.toLowerCase().replace(/^www\./, '')
+    const params = [...u.searchParams.entries()]
+      .filter(([k]) => !TRACKING_PARAMS.test(k))
+      .sort(([ak, av], [bk, bv]) => (ak === bk ? (av < bv ? -1 : av > bv ? 1 : 0) : ak < bk ? -1 : 1))
+      .map(([k, v]) => `${k}=${v}`)
+      .join('&')
+    base = `${host}${u.pathname}${params ? `?${params}` : ''}`
   } catch {
     // URL이 아니면 원문 그대로 해시
   }
