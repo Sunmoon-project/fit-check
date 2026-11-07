@@ -2,7 +2,7 @@
 // 확장은 사용자가 누를 때만 JSON을 클립보드에 복사하고, 웹 옷장은 붙여넣거나 고른 파일을 여기서 검사해요.
 // 가져오는 데이터는 믿지 않습니다: 모양·길이·범위를 검사하고, 모르는 키는 버리고, http/https 주소만 남겨요.
 import { CATEGORY_LABEL } from '../data/measurements.js'
-import { SHOE_STATUSES, SHOE_UNSUPPORTED_NOTE, resolveShoeSizeMm, shoeGender } from './shoeFit.js'
+import { SHOE_STATUSES, SHOE_UNSUPPORTED_NOTE, SHOE_NO_FOOT_NOTE, resolveShoeSizeMm, shoeGender } from './shoeFit.js'
 
 export const ENVELOPE_APP = 'fitcheck'
 export const ENVELOPE_KIND = 'wardrobe-item'
@@ -148,7 +148,8 @@ export function sanitizeItem(raw, { now = Date.now() } = {}) {
         outMeasures = measures || { footLength: r.mm }
       } else {
         status = 'unsupported'
-        note = SHOE_UNSUPPORTED_NOTE
+        // 사이즈를 mm로 읽었다면 이름 문제가 아니라 발길이를 모르는 경우예요.
+        note = r ? SHOE_NO_FOOT_NOTE : SHOE_UNSUPPORTED_NOTE
       }
     }
   }
