@@ -40,7 +40,7 @@ function shapeTree(el, depth, indent, lines) {
 }
 
 function headingAnchors(root) {
-  return all(root, '*').filter((e) => kids(e).length === 0 && HEADING.test(clean(e.textContent)) && clean(e.textContent).length <= 30).slice(0, 40)
+  return all(root, '*').filter((e) => kids(e).length === 0 && HEADING.test(clean(e.textContent)) && clean(e.textContent).length <= 30).slice(0, 150)
 }
 
 function nearbyRegions(anchor) {
@@ -128,7 +128,7 @@ export function formatReport(d) {
   if (d.readyState) out.push(`readyState: ${d.readyState}`)
   out.push(...diagnosticLines(d))
   out.push(`JSON-LD Product: ${yn(d.jsonLdProduct)}, og:type: ${d.ogType || '없음'}`)
-  if (d.errorName) out.push(`오류: ${String(d.errorName).slice(0, 40)}${d.errorMessage ? ' / ' + String(d.errorMessage).replace(/https?:\/\/\S+/g, '').slice(0, 120) : ''}`)
+  if (d.errorName) out.push(`오류: ${String(d.errorName).replace(/[^A-Za-z]/g, '').slice(0, 30)}`)
   d.structure.forEach((s, i) => out.push(`\n구조 ${i + 1} (L=사이즈 글자, N=숫자, T=그 외 글, _=빈칸)\n${s}`))
   return out.join('\n').slice(0, REPORT_MAX)
 }
