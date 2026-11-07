@@ -3527,7 +3527,7 @@ await atest('content.js(가짜 DOM, vm): 가짜 HTML에서 분류 신뢰도가 �
 
 
 // ---------- 신발 전용 사이즈 비교 ----------
-import { parseShoeOption, parseShoeOptions, parseShoeFeel, aggregateShoeReviews, reviewAggregateLine, recommendShoe, shoeViewFor, withShoeRecommendation } from '../src/lib/shoeFit.js'
+import { parseShoeOption, parseShoeOptions, parseShoeFeel, aggregateShoeReviews, reviewAggregateLine, recommendShoe, shoeViewFor, withShoeRecommendation, chartWidthsByMm } from '../src/lib/shoeFit.js'
 
 const SHOE_NAME = '[xYASE] braided moc boots (grunge taupe)'
 const shoeOpts = ['230 (230-235)', '240 (240-245)', '250 (250-255)']
@@ -3666,6 +3666,15 @@ await atest('content.js(가짜 DOM, vm): 가짜 HTML 신발 페이지는 신발 
   assert.ok(!texts.includes('체형 비교'))
 })
 
+await atest('content.js(가짜 DOM, vm): 신발 사이즈표에 발볼 열이 있으면 확장 신발 비교에 발볼 한 줄과 사이즈별 발볼이 나온다', async () => {
+  const table = `<table><tr><th>사이즈</th><th>발길이</th><th>발볼</th></tr>${[[240, 92], [250, 98], [260, 104]].map(([m, w]) => `<tr><td>${m}</td><td>${m}</td><td>${w}</td></tr>`).join('')}</table>`
+  const html = shoePage(SHOE_CARDS).replace('<ul class="opts">', `${table}<ul class="opts">`)
+  const { texts } = await runContentInFakeDom(html)
+  assert.ok(texts.includes('신발 사이즈 비교'))
+  assert.ok(texts.some((t) => t.startsWith('발볼 ') && t.endsWith('mm')), '사이즈별 발볼')
+  assert.ok(texts.some((t) => t.includes('휴리스틱') && t.includes('발볼') && t.includes('사이즈표')), '발볼 근거 한 줄')
+})
+
 
 // ---------- 신발 리뷰 수정 ----------
 test('가짜 데이터: 발볼 보정 뒤 작아요 다수면 "큰 사이즈가 없다"가 아니라 이미 보정했다고 안내한다', () => {
@@ -3706,6 +3715,90 @@ test('가짜 데이터: 웹 신발 추천은 엔진 결과를 신발 추천 사�
   assert.equal(withShoeRecommendation(base, null), base)
   // cm 단위 표(25.0)는 mm 옵션으로 읽을 수 없어 null: 웹은 기존 비교로 돌아간다
   assert.equal(shoeViewFor({ sizeChart: { measures: { '25.0': {}, '25.5': {} } }, reviews: [] }, shoeProfile()), null)
+})
+
+// ---- 신발 사이즈표 발볼 열 (명시적인 가짜 표) ----
+const widthOpts = (mms) => parseShoeOptions(mms.map(String))
+const mmWidths = (pairs) => chartWidthsByMm({ measures: Object.fromEntries(pairs.map(([mm, w]) => [String(mm), { footLength: mm, footWidth: w }])) })
+const lvWidths = (pairs) => chartWidthsByMm({ measures: Object.fromEntries(pairs.map(([mm]) => [String(mm), { footLength: mm }])), widthLevels: Object.fromEntries(pairs.map(([mm, l]) => [String(mm), l])) })
+
+test('가짜 표: 발볼 mm 열 - 넓은 발이고 표 안에서 좁은 사이즈면 정확히 한 단계만 위로, 기본 규칙과 겹치지 않는다', () => {
+  const options = widthOpts([240, 250, 260, 270])
+  const sizeWidths = mmWidths([[240, 92], [250, 98], [260, 102], [270, 104]])
+  const r = recommendShoe({ options, footLength: 233, footWidth: 'wide', sizeWidths })
+  assert.equal(recommendShoe({ options, footLength: 233, sizeWidths }).recommended.mm, 240, '보통 발은 그대로')
+  assert.equal(r.recommended.mm, 250, '한 단계만 올림(두 단계 아님)')
+  assert.equal(r.widthBasis, 'chart')
+  assert.ok(r.widthLine.includes('휴리스틱') && r.widthLine.includes('92mm'))
+  assert.ok(!r.reasons.some((t) => t.includes('발볼이 넓은 편이라')), '기본 규칙 문구는 같이 나오지 않음')
+  assert.equal(r.rows[0].widthText, '발볼 92mm')
+  // 넓은 발이어도 표 안에서 좁지 않은 사이즈면 올리지 않음 (기본 규칙으로 되돌아가지도 않음)
+  const keep = recommendShoe({ options, footLength: 243, footWidth: 'wide', sizeWidths })
+  assert.equal(keep.recommended.mm, 250)
+  assert.ok(keep.widthLine.includes('바꾸지 않았어요'))
+  // 좁은 발 + 표 안에서 넓은 사이즈 + 아래 사이즈의 길이 여유가 충분하면 한 단계 아래
+  const wideRow = mmWidths([[230, 90], [240, 92], [250, 104], [260, 106]])
+  const dn = recommendShoe({ options: widthOpts([230, 240, 250, 260]), footLength: 235, preferredFit: 'relaxed', footWidth: 'narrow', sizeWidths: wideRow })
+  assert.equal(dn.recommended.mm, 240)
+  assert.ok(dn.widthLine.includes('한 단계 작은'))
+  // 길이 여유가 모자라면 내리지 않음
+  const tight = recommendShoe({ options: widthOpts([230, 240, 250, 260]), footLength: 240, preferredFit: 'relaxed', footWidth: 'narrow', sizeWidths: wideRow })
+  assert.ok(tight.recommended.mm >= 250)
+})
+
+test('가짜 표: 발볼 E/2E/3E/4E와 좁음/보통/넓음 단계도 같은 규칙으로 읽는다', () => {
+  const options = widthOpts([240, 250, 260])
+  const e = recommendShoe({ options, footLength: 233, footWidth: 'wide', sizeWidths: lvWidths([[240, -1], [250, 0], [260, 1]]) })
+  assert.equal(e.recommended.mm, 250)
+  assert.equal(e.rows[0].widthText, '발볼 D')
+  assert.equal(e.rows[2].widthText, '발볼 2E')
+  const e4 = recommendShoe({ options, footLength: 233, footWidth: 'wide', sizeWidths: lvWidths([[240, 0], [250, 2], [260, 3]]) })
+  assert.equal(e4.recommended.mm, 250, 'E < 3E < 4E: 240은 표 안에서 좁음')
+  const htmlOf = (cells) => `<html><head><title>러닝화</title></head><body><h1>러닝 스니커즈</h1><table><tr><th>사이즈</th><th>발길이</th><th>발볼</th></tr>${[240, 250, 260].map((mm, i) => `<tr><td>${mm}</td><td>${mm}</td><td>${cells[i]}</td></tr>`).join('')}</table></body></html>`
+  for (const cells of [['D', 'E', '2E'], ['좁음', '보통', '넓음']]) {
+    const p = parsePage(fakeDocument(htmlOf(cells)), '')
+    assert.equal(p.category, 'shoes', cells.join())
+    assert.equal(p.sizeChart.measures['240'].footWidth, undefined, '글자 발볼을 mm 숫자로 읽지 않음')
+    assert.deepEqual(Object.values(p.sizeChart.widthLevels), [-1, 0, 1], cells.join())
+    const v = shoeViewFor(p, shoeProfile({ footWidth: 'wide', measurements: { footLength: '233' } }))
+    assert.equal(v.widthBasis, 'chart')
+    assert.ok(v.rows.every((r) => r.widthText))
+  }
+  const mmPage = parsePage(fakeDocument(htmlOf(['92', '98', '104'])), '')
+  assert.deepEqual(Object.values(mmPage.sizeChart.measures).map((m) => m.footWidth), [92, 98, 104])
+  assert.equal(mmPage.sizeChart.widthLevels, undefined)
+})
+
+test('가짜 표: 발볼 열이 없으면 기존 규칙(넓은 발이면 한 단계 위) 그대로, 발볼 값이 한 개뿐이어도 기본 규칙', () => {
+  const options = widthOpts([240, 250, 260])
+  const none = recommendShoe({ options, footLength: 233, footWidth: 'wide', sizeWidths: {} })
+  assert.equal(none.recommended.mm, 250)
+  assert.equal(none.widthBasis, 'foot')
+  assert.equal(none.widthLine, '')
+  assert.ok(none.reasons.some((t) => t.includes('발볼이 넓은 편이라')))
+  assert.equal(recommendShoe({ options, footLength: 233, footWidth: 'wide' }).recommended.mm, 250, 'sizeWidths 생략도 같음')
+  assert.equal(recommendShoe({ options, footLength: 233, footWidth: 'wide', sizeWidths: mmWidths([[240, 90]]) }).widthBasis, 'foot')
+  const normal = recommendShoe({ options, footLength: 233, footWidth: 'normal', sizeWidths: {} })
+  assert.equal(normal.recommended.mm, 240)
+  assert.equal(normal.widthBasis, null)
+  // 발볼 열은 있지만 모든 사이즈가 같으면 기본 규칙을 겹쳐 쓰지 않음
+  const flat = recommendShoe({ options, footLength: 233, footWidth: 'wide', sizeWidths: mmWidths([[240, 98], [250, 98], [260, 98]]) })
+  assert.equal(flat.recommended.mm, 240)
+  assert.equal(flat.widthBasis, 'chart')
+  // 발볼 입력이 없으면 입력을 권하는 한 줄
+  assert.ok(recommendShoe({ options, footLength: 233, sizeWidths: mmWidths([[240, 92], [250, 98], [260, 104]]) }).widthLine.includes('입력하면'))
+})
+
+test('가짜 표: 발볼로 올린 뒤 리뷰 "작아요"가 많아도 한 번 더 올리지 않고, 웹 본문에도 발볼 줄이 들어간다', () => {
+  const options = widthOpts([240, 250, 260, 270])
+  const sizeWidths = mmWidths([[240, 92], [250, 98], [260, 102], [270, 104]])
+  const mk = (size, fit) => ({ size, view: { shoeFeel: { size: fit, extras: [] } } })
+  const reviews = [mk('250', 'small'), mk('250', 'small'), mk('250', 'small')]
+  const r = recommendShoe({ options, footLength: 233, footWidth: 'wide', sizeWidths, reviews })
+  assert.equal(r.recommended.mm, 250)
+  assert.ok(r.notes.some((t) => t.includes('이미 한 단계')))
+  const out = withShoeRecommendation({ recommendedSize: 'M', headline: 'h', body: 'b' }, r)
+  assert.ok(out.body.includes('사이즈표 발볼 기준'))
 })
 
 await atest('content.js(가짜 DOM, vm): 가짜 HTML에서 종류 칩으로 신발을 고르면 신발 사이즈 비교가 나온다 (사이즈표·리뷰 없음)', async () => {

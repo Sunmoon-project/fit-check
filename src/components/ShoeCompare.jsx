@@ -27,6 +27,7 @@ export default function ShoeCompare({ view: sv, selectedSize, onSelect }) {
               </button>
               <span className="muted small">
                 {row.rangeText}
+                {row.widthText && ` · ${row.widthText}`}
                 {row.ease != null && ` · 여유 ${row.ease > 0 ? '+' : ''}${row.ease}mm`}
               </span>
               {row.verdict && <span className={`verdict-label v-${row.verdictKey}`}>{row.verdict}</span>}
@@ -36,6 +37,7 @@ export default function ShoeCompare({ view: sv, selectedSize, onSelect }) {
         ))}
       </ul>
       {sv.reasons.map((t) => <p key={t} className="small">{t}</p>)}
+      {sv.widthLine && <p className="small shoe-width-line">{sv.widthLine}</p>}
       {sv.notes.map((t) => <p key={t} className="muted small">{t}</p>)}
       <p className="muted small disclaimer">{sv.heuristicNote}</p>
     </div>

@@ -133,6 +133,49 @@ export function reviewAggregateLine(a) {
   return `${a.mm} 구매 리뷰 ${a.count}건${parts.length ? ` 중 ${parts.join(', ')}` : ''}`
 }
 
+// ---------- 사이즈표 발볼 열 ----------
+// 사이즈표의 발볼(mm / E·2E·3E·4E / 좁음·보통·넓음)을 같은 표 안의 중간값과 견줘 '좁은 편/보통/넓은 편'으로 바꿔요.
+// 브랜드마다 재는 방식이 달라서 절대값이 아닌 표 안에서의 상대 비교이고, 휴리스틱이에요.
+const WIDTH_MM_GAP = 3
+const WIDTH_LEVEL_GAP = 1
+const LEVEL_NAME = { '-1': 'D', 0: 'E', 1: '2E', 2: '3E', 3: '4E' }
+function median(nums) {
+  const a = [...nums].sort((x, y) => x - y)
+  const m = a.length >> 1
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2
+}
+/** 사이즈표 → { [mm]: { value, kind:'mm'|'level' } } (mm 사이즈 이름만). 발볼 열이 없으면 빈 객체. */
+export function chartWidthsByMm(sizeChart) {
+  const out = {}
+  const put = (label, value, kind) => {
+    const o = parseShoeOption(label)
+    if (o && !out[o.mm]) out[o.mm] = { value, kind }
+  }
+  for (const [label, m] of Object.entries(sizeChart?.measures || {})) {
+    if (Number.isFinite(m?.footWidth)) put(label, m.footWidth, 'mm')
+  }
+  for (const [label, v] of Object.entries(sizeChart?.widthLevels || {})) {
+    if (Number.isFinite(v)) put(label, v, 'level')
+  }
+  return out
+}
+/** 옵션별 상대 발볼. 같은 종류 값이 2개 이상일 때만 만들어요. */
+function relativeWidths(opts, widths) {
+  const have = opts.filter((o) => widths?.[o.mm])
+  const kind = ['mm', 'level'].find((k) => have.filter((o) => widths[o.mm].kind === k).length >= 2)
+  if (!kind) return null
+  const used = have.filter((o) => widths[o.mm].kind === kind)
+  const med = median(used.map((o) => widths[o.mm].value))
+  const gap = kind === 'mm' ? WIDTH_MM_GAP : WIDTH_LEVEL_GAP
+  const byMm = {}
+  for (const o of used) {
+    const v = widths[o.mm].value
+    byMm[o.mm] = { value: v, text: kind === 'mm' ? `${v}mm` : (LEVEL_NAME[v] ?? String(v)), rel: v - med <= -gap ? 'narrow' : v - med >= gap ? 'wide' : 'normal' }
+  }
+  return { kind, median: med, medianText: kind === 'mm' ? `${med}mm` : (LEVEL_NAME[med] ?? String(med)), byMm }
+}
+const REL_LABEL = { narrow: '표 중간값보다 좁은 편', normal: '표 중간값 수준', wide: '표 중간값보다 넓은 편' }
+
 // ---------- 추천 ----------
 function targetEase(pref) {
   const r = EASE_RULES.footLength
@@ -142,14 +185,16 @@ function targetEase(pref) {
 }
 
 /**
- * @param {{ options: {label,mm,lo,hi}[], footLength: number|null, footLengthEstimated?: boolean, footWidth?: string, preferredFit?: string, reviews?: object[] }} input
+ * @param {{ options: {label,mm,lo,hi}[], footLength: number|null, footLengthEstimated?: boolean, footWidth?: string, preferredFit?: string, reviews?: object[], sizeWidths?: object|null }} input
+ * sizeWidths: chartWidthsByMm 결과. 사이즈표에 발볼이 있으면 그 값으로만 발볼을 따지고, 없을 때만 '넓은 발이면 한 단계 위' 기본 규칙을 써요.
  */
-export function recommendShoe({ options, footLength, footLengthEstimated = false, footWidth = '', preferredFit = 'regular', reviews = [] }) {
+export function recommendShoe({ options, footLength, footLengthEstimated = false, footWidth = '', preferredFit = 'regular', reviews = [], sizeWidths = null }) {
   const opts = (options || []).filter((o) => Number.isFinite(o?.mm)).sort((a, b) => a.mm - b.mm)
   const aggs = aggregateShoeReviews(reviews)
   const aggOf = (mm) => aggs.find((a) => a.mm === mm) || null
   const hasFoot = Number.isFinite(footLength) && footLength > 0
   const width = FOOT_WIDTHS.includes(footWidth) ? footWidth : ''
+  const rel = relativeWidths(opts, sizeWidths)
   const rows = opts.map((o) => {
     const ease = hasFoot ? Math.round((o.mm - footLength) * 10) / 10 : null
     const verdict = ease == null ? null : classifyEase('footLength', ease)
@@ -164,6 +209,7 @@ export function recommendShoe({ options, footLength, footLengthEstimated = false
       verdict: verdict?.label || null,
       verdictKey: verdict?.key || null,
       level: verdict?.level ?? null,
+      widthText: rel?.byMm[o.mm] ? `발볼 ${rel.byMm[o.mm].text}` : '',
       reviewCount: agg?.count || 0,
       reviewLine: agg ? reviewAggregateLine(agg) : '',
       recommended: false,
@@ -172,6 +218,8 @@ export function recommendShoe({ options, footLength, footLengthEstimated = false
   const reasons = []
   const notes = []
   let recommended = null
+  let widthLine = ''
+  let widthBasis = rel ? 'chart' : null
   if (rows.length && hasFoot) {
     const target = targetEase(preferredFit)
     let idx = 0
@@ -181,10 +229,31 @@ export function recommendShoe({ options, footLength, footLengthEstimated = false
       if (d < best || (d === best && r.ease >= 0)) idx = i
     })
     reasons.push(`내 발길이 ${footLength}mm${footLengthEstimated ? '(키로 추정한 값)' : ''} 기준으로 여유 ${Math.round(rows[idx].ease)}mm인 ${rows[idx].label}이(가) 가장 가까워요.`)
-    let bumped = false
-    if (width === 'wide' && idx < rows.length - 1) {
+    let bumped = false // 발볼 때문에 한 단계 위로 옮김
+    let lowered = false // 발볼 때문에 한 단계 아래로 옮김
+    if (rel) {
+      // 사이즈표 발볼 기준 (휴리스틱). 기본 '넓은 발' 규칙과 함께 쓰지 않아요.
+      const here = rel.byMm[rows[idx].mm]
+      const name = rows[idx].label
+      if (!width) {
+        widthLine = `사이즈표에 발볼이 있어요. 내 발볼을 입력하면(좁은 편·보통·넓은 편) 표의 발볼과 견줘 사이즈를 조정해요. (휴리스틱)`
+      } else if (!here) {
+        widthLine = `${name}의 발볼 값을 읽지 못해 발볼로는 사이즈를 바꾸지 않았어요. (사이즈표 발볼 기준, 휴리스틱)`
+      } else if (width === 'wide' && here.rel === 'narrow' && idx < rows.length - 1) {
+        idx += 1
+        bumped = true
+        widthLine = `발볼이 넓은 편인데 ${name}의 사이즈표 발볼(${here.text})이 ${REL_LABEL.narrow}(${rel.medianText})이라 한 단계 큰 ${rows[idx].label}을(를) 골랐어요. (사이즈표 발볼 기준, 휴리스틱)`
+      } else if (width === 'narrow' && here.rel === 'wide' && idx > 0 && rows[idx - 1].ease >= EASE_RULES.footLength.snug) {
+        idx -= 1
+        lowered = true
+        widthLine = `발볼이 좁은 편이고 ${name}의 사이즈표 발볼(${here.text})이 ${REL_LABEL.wide}(${rel.medianText})이라 길이 여유를 지킬 수 있는 한 단계 작은 ${rows[idx].label}을(를) 골랐어요. (사이즈표 발볼 기준, 휴리스틱)`
+      } else {
+        widthLine = `${name}의 사이즈표 발볼은 ${here.text}로 ${REL_LABEL[here.rel]}이에요. 발볼이 ${FOOT_WIDTH_LABEL[width]}이라 발볼 때문에 사이즈를 바꾸지 않았어요. (사이즈표 발볼 기준, 휴리스틱)`
+      }
+    } else if (width === 'wide' && idx < rows.length - 1) {
       idx += 1
       bumped = true
+      widthBasis = 'foot'
       reasons.push(`발볼이 넓은 편이라 한 단계 큰 ${rows[idx].label}을(를) 골랐어요.`)
     }
     // 같은 사이즈를 산 리뷰가 충분하고 '작아요'가 절반 이상이면 한 단계 위, '커요'가 절반 이상이면 한 단계 아래를 권해요.
@@ -195,9 +264,11 @@ export function recommendShoe({ options, footLength, footLengthEstimated = false
       if (smallMany && !bumped && idx < rows.length - 1) {
         idx += 1
         reasons.push(`${rows[idx - 1].mm} 구매 리뷰 ${agg.felt}건 중 ${agg.size.small}건이 작다고 해서 한 단계 큰 ${rows[idx].label}을(를) 권해요.`)
-      } else if (largeMany && idx > 0) {
+      } else if (largeMany && idx > 0 && !lowered) {
         idx -= 1
         reasons.push(`${rows[idx + 1].mm} 구매 리뷰 ${agg.felt}건 중 ${agg.size.large}건이 크다고 해서 한 단계 작은 ${rows[idx].label}을(를) 권해요.`)
+      } else if (largeMany && lowered) {
+        notes.push(`${rows[idx].mm} 구매 리뷰에서 크다는 의견이 많지만, 발볼 때문에 이미 한 단계 작은 사이즈로 골랐어요.`)
       } else if (smallMany && bumped) {
         notes.push(`${rows[idx].mm} 구매 리뷰에서 작다는 의견이 많지만, 발볼 때문에 이미 한 단계 큰 사이즈로 골랐어요.`)
       } else if (smallMany) {
@@ -210,7 +281,7 @@ export function recommendShoe({ options, footLength, footLengthEstimated = false
     notes.push('발길이를 알 수 없어 추천하지 않았어요. 확장 아이콘의 ‘직접 잰 치수’에 발길이(mm)를 입력하면 사이즈별 여유를 계산해요.')
   }
   if (hasFoot && footLengthEstimated) notes.push('발길이를 입력하지 않아 키로 추정했어요. 직접 입력하면 더 정확해요.')
-  if (!width && hasFoot) notes.push('발볼을 입력하면(좁은 편·보통·넓은 편) 넓은 발에 맞춰 사이즈를 조정해요.')
+  if (!width && hasFoot && !rel) notes.push('발볼을 입력하면(좁은 편·보통·넓은 편) 넓은 발에 맞춰 사이즈를 조정해요.')
   return {
     rows,
     recommended,
@@ -219,6 +290,8 @@ export function recommendShoe({ options, footLength, footLengthEstimated = false
     footWidth: width,
     footWidthLabel: width ? FOOT_WIDTH_LABEL[width] : '',
     reasons,
+    widthLine,
+    widthBasis: widthLine || widthBasis === 'foot' ? widthBasis : null,
     notes,
     reviewLines: aggs.map(reviewAggregateLine),
     reviewTotal: aggs.reduce((s, a) => s + a.count, 0),
@@ -240,6 +313,7 @@ export function shoeViewFor(product, profile) {
     footWidth: profile.footWidth,
     preferredFit: profile.preferredFit,
     reviews: product.reviews,
+    sizeWidths: chartWidthsByMm(product?.sizeChart),
   })
 }
 
@@ -247,5 +321,5 @@ export function shoeViewFor(product, profile) {
 export function withShoeRecommendation(result, shoe) {
   const rec = shoe?.recommended
   if (!rec) return result
-  return { ...result, recommendedSize: String(rec.mm), headline: `${rec.label} 사이즈를 추천해요`, body: shoe.reasons.join(' ') || result.body }
+  return { ...result, recommendedSize: String(rec.mm), headline: `${rec.label} 사이즈를 추천해요`, body: [...shoe.reasons, shoe.widthLine].filter(Boolean).join(' ') || result.body }
 }

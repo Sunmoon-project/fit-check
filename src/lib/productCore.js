@@ -36,6 +36,17 @@ export function mapHeader(header, category) {
   return null
 }
 
+/** 발볼 칸의 글자 표기 → 상대 단계. D=-1, E=0, 2E=1, 3E=2, 4E=3 / 좁음=-1, 보통=0, 넓음=1. 읽을 수 없으면 null. mm 숫자('98')는 null. */
+export function widthLevelOf(cell) {
+  const t = String(cell ?? '').replace(/\s/g, '')
+  const e = t.match(/^(?:([2-4])E|(E{1,4})|(D))$/i)
+  if (e) return e[1] ? Number(e[1]) - 1 : e[2] ? e[2].length - 1 : -1
+  if (/^(?:매우|아주)?좁(?:음|은|은편|다)?$|^narrow$/i.test(t)) return -1
+  if (/^(?:보통|적당|표준|normal|regular|standard)$/i.test(t)) return 0
+  if (/^(?:매우|아주)?넓(?:음|은|은편|다)?$|^wide$/i.test(t)) return 1
+  return null
+}
+
 export function toNumber(cell) {
   const m = String(cell).replace(/,/g, '').match(/-?\d+(?:\.\d+)?/)
   return m ? Number(m[0]) : null
@@ -414,6 +425,7 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
   const cat = category || guessCategory('', best.headers)
   const mapping = best.headers.map((h, i) => (i === 0 ? null : mapHeader(h, cat)))
   const measures = {}
+  const widthLevels = {}
   const display = {}
   const viewRows = []
   const rows = best.body.map((r) => {
@@ -431,8 +443,16 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
     const cells = []
     r.forEach((cell, i) => {
       const map = mapping[i]
-      const v = toNumber(cell)
       if (i > 0) cells.push({ raw: displayText(cell), value: null, converted: false })
+      // 발볼이 E/2E/좁음/보통/넓음처럼 글자면 mm가 아니라 단계로 따로 둬요 ('2E'를 2로 읽지 않기 위해).
+      if (map?.key === 'footWidth') {
+        const lv = widthLevelOf(cell)
+        if (lv != null) {
+          widthLevels[label] = lv
+          return
+        }
+      }
+      const v = toNumber(cell)
       if (!map || v == null) return
       if (map.minValue && v < map.minValue) return
       // 단면 → 둘레(×2). 발볼처럼 cm로 적힌 값(30 미만)은 mm로 바꿔요.
@@ -477,6 +497,7 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
     },
   }
   if (Object.keys(display).length) chart.display = display
+  if (Object.keys(widthLevels).length) chart.widthLevels = widthLevels
   return { chart, meta }
 }
 
