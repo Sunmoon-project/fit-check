@@ -120,7 +120,7 @@ function reportBlock(report) {
     done.textContent = (await copyText(report)) ? '복사했어요' : '복사하지 못했어요. 브라우저 권한을 확인해주세요.'
   })
   box.append(btn, done)
-  box.append(el('p', 'note', '리포트에는 주소 경로(쿼리·해시 제외, 주소에 상품명이 있으면 같이 들어가요), 확장 버전, 찾은 개수, 화면 구조 모양(글자는 L/N/T 기호)만 들어 있어요. 키·몸무게 등 체형 정보, 리뷰 글, 페이지 본문은 들어 있지 않아요.'))
+  box.append(el('p', 'note', '리포트에는 주소 경로(쿼리·해시 제외, 주소에 상품명이 있으면 같이 들어가요), 확장 버전, 찾은 개수, 화면 구조 모양(글자는 L/N/T 기호), 리뷰에서 키·몸무게·사이즈를 읽은 건수만 들어 있어요. 키·몸무게 값 등 체형 정보, 리뷰 글, 페이지 본문은 들어 있지 않아요.'))
   return box
 }
 
@@ -179,6 +179,7 @@ function renderResult(r) {
       }
       return
     }
+    // 아래 결과 카드 끝에서 사이즈표가 없었으면 직접 입력, 진단 리포트는 항상 붙입니다.
     if (r.manual) card.append(el('p', 'note', '직접 입력한 사이즈표 값으로 계산한 결과예요. 페이지에서 읽은 값이 아니에요.'))
     const conf = el('span', 'badge', r.confidenceLabel.text)
     conf.style.color = r.confidenceLabel.color
@@ -195,6 +196,11 @@ function renderResult(r) {
     card.append(el('h3', null, r.headline), el('p', null, r.body))
     card.append(el('p', 'note', '이 페이지에 불러와진 리뷰만 읽어요. 더 많은 리뷰를 반영하려면 리뷰 영역을 직접 스크롤해 불러온 뒤 버튼을 다시 눌러 주세요(자동으로 스크롤하지 않아요).'))
     card.append(el('p', 'note', '확신도는 후기·사이즈표 근거가 얼마나 있는지로 나눈 참고 단계예요. 정확도를 측정한 값이 아니에요.'))
+    if (r.sizeChartMissing && r.diagnostics) card.append(manualForm(r))
+    if (r.diagnostics) {
+      card.append(el('p', 'note', '문제가 있나요?'))
+      card.append(reportBlock(formatReport(r.diagnostics)))
+    }
   })
 }
 

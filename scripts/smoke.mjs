@@ -1216,6 +1216,35 @@ test('가짜 HTML: 진단 리포트에 새 판단 줄이 있고 리뷰 글·체�
   assert.ok(rep.length <= REPORT_MAX)
 })
 
+const NOCHART_REVIEWS = ['ZQXWORD1 키 183 몸무게 77 L 사이즈 샀어요 정사이즈', 'ZQXWORD2 178cm 66kg M 사이즈로 샀어요 작아요', 'ZQXWORD3 키 169 몸무게 58 S 사이즈 샀어요 커요', 'ZQXWORD4 그냥 좋아요']
+const NOCHART_HTML = `<h1>코튼 재킷 아우터</h1>${NOCHART_REVIEWS.map((t) => `<div class="review-item">${t}</div>`).join('')}`
+
+test('확장 분석: 사이즈표 없이 리뷰만 있는 ok 결과도 diagnostics와 sizeChartMissing을 가진다', () => {
+  const profile = buildProfile({ gender: 'male', height: '175', weight: '70' }).profile
+  const r = analyzePage(fakeDocument(wrapBody(NOCHART_HTML)), 'https://shop.example/p/1', profile)
+  assert.equal(r.status, 'ok')
+  assert.equal(r.sizeChartMissing, true)
+  assert.ok(r.diagnostics && r.diagnostics.reviewStats.loaded >= 3)
+  const withChart = analyzePage(fakeDocument(EXT_HTML), 'https://shop.example/p/1', profile)
+  assert.equal(withChart.status, 'ok')
+  assert.equal(withChart.sizeChartMissing, false)
+  assert.ok(withChart.diagnostics)
+})
+
+test('진단 리포트: 리뷰 통계 개수와 스크롤 정보가 있고 리뷰 글·키·몸무게 값은 없다', () => {
+  const d = collectDiagnostics(fakeDocument(wrapBody(NOCHART_HTML)), 'https://shop.example/p/1', '', { scroll: { before: 3, after: 12, stop: 'reached-end' } })
+  const s = d.reviewStats
+  assert.ok(s.loaded >= 3 && s.withHeight >= 1 && s.withWeight >= 1 && s.withBoth >= 1 && s.withSize >= 1 && s.withFit >= 1)
+  assert.ok(s.numCm >= 1 && s.numKg >= 1 && s.wordHeight >= 1 && s.wordWeight >= 1)
+  const rep = formatReport(d)
+  assert.ok(rep.includes('몸무게 읽음') && rep.includes('숫자+cm') && rep.includes('3건 -> 12건, 멈춘 이유 reached-end'))
+  for (const secret of ['ZQXWORD', '183', '178', '77', '66kg', '169']) assert.ok(!rep.includes(secret), secret)
+  assert.ok(rep.length <= REPORT_MAX)
+  const bad = formatReport(collectDiagnostics(fakeDocument(wrapBody(NOCHART_HTML)), '', '', { scroll: { before: 1, after: 2, stop: '비밀 글' } }))
+  assert.ok(bad.includes('멈춘 이유 not-run') && !bad.includes('비밀'))
+  assert.ok(!formatReport(collectDiagnostics(fakeDocument(wrapBody(NOCHART_HTML)), '')).includes('리뷰 불러오기'))
+})
+
 test('확장 소스와 diagnose.js에 네트워크 호출이 없다 (새 코드 포함)', () => {
   for (const f of ['src/lib/diagnose.js', 'src/lib/pageParser.js', 'src/lib/extAnalyze.js', 'extension/content.js']) {
     const code = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8')

@@ -50,7 +50,34 @@ function nearbyRegions(anchor) {
   return out
 }
 
-export function collectDiagnostics(root, pageUrl = '', extVersion = '') {
+// 리뷰 글은 읽어서 개수만 셉니다. 글과 숫자 값은 결과에 담지 않아요.
+const SCROLL_STOPS = ['reached-end', 'no-growth', 'limit', 'not-run']
+
+function reviewStats(reviews) {
+  const list = reviews || []
+  const n = (f) => list.filter(f).length
+  const text = (r) => String(r.text || '')
+  return {
+    loaded: list.length,
+    withHeight: n((r) => r.height != null),
+    withWeight: n((r) => r.weight != null),
+    withBoth: n((r) => r.height != null && r.weight != null),
+    withSize: n((r) => !!r.size),
+    withFit: n((r) => !!r.fit),
+    numCm: n((r) => /\d\s*(cm|㎝|센치)/i.test(text(r))),
+    numKg: n((r) => /\d\s*(kg|㎏|키로|킬로)/i.test(text(r))),
+    wordHeight: n((r) => text(r).includes('키')),
+    wordWeight: n((r) => text(r).includes('몸무게')),
+  }
+}
+
+function cleanScroll(s) {
+  if (!s || typeof s !== 'object') return null
+  const num = (v) => (Number.isInteger(v) && v >= 0 && v <= 100000 ? v : 0)
+  return { before: num(s.before), after: num(s.after), stop: SCROLL_STOPS.includes(s.stop) ? s.stop : 'not-run' }
+}
+
+export function collectDiagnostics(root, pageUrl = '', extVersion = '', extra = {}) {
   const tables = readTables(root)
   const candidates = findGridCandidates(root)
   const anchors = headingAnchors(root)
@@ -104,6 +131,8 @@ export function collectDiagnostics(root, pageUrl = '', extVersion = '') {
     ogType: /^[a-z][a-z._-]{0,20}$/.test(ogType) ? ogType : ogType ? 'other' : '',
     imageNearHeading: imgNear,
     readyState: ready,
+    reviewStats: reviewStats(product?.reviews),
+    scroll: cleanScroll(extra?.scroll),
     structure,
   }
 }
@@ -142,7 +171,19 @@ export function diagnosticLines(d) {
     `읽은 사이즈표 줄 ${d.chartRowCount}개, 리뷰 후보 ${d.reviewLikeCount}개, 인정한 리뷰 ${d.reviewsKept}개`,
     `사이즈 제목 근처에 이미지: ${yn(d.imageNearHeading)}`,
     ...chartLines(d),
+    ...reviewStatLines(d),
   ]
+}
+
+function reviewStatLines(d) {
+  const r = d.reviewStats
+  const out = []
+  if (r) {
+    out.push(`리뷰 ${r.loaded}건 중 키 읽음 ${r.withHeight}, 몸무게 읽음 ${r.withWeight}, 둘 다 ${r.withBoth}, 사이즈 읽음 ${r.withSize}, 핏 읽음 ${r.withFit}`)
+    out.push(`리뷰 글 모양: 숫자+cm ${r.numCm}건, 숫자+kg ${r.numKg}건, '키' 낱말 ${r.wordHeight}건, '몸무게' 낱말 ${r.wordWeight}건`)
+  }
+  if (d.scroll) out.push(`리뷰 불러오기: ${d.scroll.before}건 -> ${d.scroll.after}건, 멈춘 이유 ${d.scroll.stop}`)
+  return out
 }
 
 function chartLines(d) {
