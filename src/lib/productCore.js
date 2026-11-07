@@ -35,7 +35,7 @@ export function mapHeader(header, category) {
   if (/밑단|헴|hem/i.test(h)) return { key: 'hem', flat, flatBelow: 30 }
   if (/무릎|knee/i.test(h)) return { key: 'knee', flat, flatBelow: 30 }
   if (/발볼|footwidth/i.test(h)) return { key: 'footWidth', scaleBelow: 30 }
-  if (/굽|heel/i.test(h)) return { key: 'heelHeight' }
+  if (/굽|heel/i.test(h)) return { key: 'heelHeight', divideFrom: 30 }
   if (/어깨|shoulder/i.test(h)) return { key: 'shoulder' }
   if (/가슴|품|chest|bust/i.test(h)) return { key: 'chest', flat, flatBelow: 75 }
   if (/허벅지|thigh/i.test(h)) return { key: 'thigh', flat, flatBelow: 42 }
@@ -424,7 +424,8 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
       if (!map || v == null) return
       if (map.minValue && v < map.minValue) return
       // 단면 → 둘레(×2). 발볼처럼 cm로 적힌 값(30 미만)은 mm로 바꿔요.
-      const converted = map.scaleBelow && v < map.scaleBelow ? v * 10 : map.flat || (map.flatBelow && v < map.flatBelow) ? v * 2 : v
+      const raw = map.divideFrom && v >= map.divideFrom ? v / 10 : v // 굽높이가 mm(50)로 적힌 표는 cm(5)로
+      const converted = map.divideFrom ? raw : map.scaleBelow && v < map.scaleBelow ? v * 10 : map.flat || (map.flatBelow && v < map.flatBelow) ? v * 2 : v
       m[map.key] = Math.round(converted * 10) / 10
       cells[i - 1].value = m[map.key]
       cells[i - 1].converted = converted !== v
