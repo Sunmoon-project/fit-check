@@ -536,13 +536,11 @@ function compareTab(rvs, all) {
     const chip = el('span', c.gender.state === 'diff' ? 'cg diff' : 'cg', rv.gender ? `${genderText} (${GENDER_TEXT[rv.gender]})` : genderText)
     li.append(chip)
     if (c.gender.state === 'diff') li.append(el('p', 'tiny', '성별이 달라 유사도는 0%예요. 키·몸무게는 참고용이에요.'))
-    // 키·몸무게는 한 묶음으로 나란히, 그 아래에 비슷한 체형인지 보여주는 퍼센트 막대 하나
+    // 후기 작성자의 키·몸무게만 보여주고(내 체형은 탭 맨 위에 있어요), 그 아래에 비슷한 체형인지 보여주는 퍼센트 막대 하나
     const grp = el('div', 'cgrp')
-    for (const [who, h, w] of [['나', c.height.me, c.weight.me], ['후기', c.height.review, c.weight.review]]) {
-      const col = el('div', 'ccol')
-      col.append(el('span', 'ccl', who), el('span', 'ccv', `${h}cm · ${w}kg`))
-      grp.append(col)
-    }
+    const col = el('div', 'ccol')
+    col.append(el('span', 'ccl', '후기 체형'), el('span', 'ccv', `${c.height.review}cm · ${c.weight.review}kg`))
+    grp.append(col)
     li.append(grp)
     const dt = diffText(c)
     if (dt) li.append(el('p', 'cdiff', dt))
