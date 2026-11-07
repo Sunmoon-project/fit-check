@@ -29,7 +29,7 @@ export default function MatchedReviews({ matched, others }) {
   const total = matched.length + others.length
 
   return (
-    <div className="card">
+    <div className="card tone-review">
       <div className="section-head">
         <h3>비슷한 체형 후기</h3>
         <span className="count-badge">{matched.length}건 / 전체 {total}건</span>

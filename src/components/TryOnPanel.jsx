@@ -170,7 +170,7 @@ export default function TryOnPanel({ product, verdicts, selectedSize, captureRef
 
   if (product.category === 'shoes') {
     return (
-      <div className="card">
+      <div className="card tone-tryon">
         <div className="section-head"><h3>사진 합성</h3></div>
         <p className="muted small">신발은 사진 합성(미리보기·AI 합성)을 지원하지 않아요. 사이즈 추천과 리뷰를 참고해주세요.</p>
       </div>
@@ -181,7 +181,7 @@ export default function TryOnPanel({ product, verdicts, selectedSize, captureRef
   const aiCategoryOk = AI_CATEGORIES.includes(product.category)
 
   return (
-    <div className="card tryon">
+    <div className="card tryon tone-tryon">
       <div className="section-head">
         <h3>사진 합성 <span className="muted small">{CATEGORY_LABEL[product.category]} · {selectedSize || '-'}</span></h3>
         <span className="tag-rough">대략적인 미리보기</span>

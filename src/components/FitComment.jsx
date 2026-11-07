@@ -6,7 +6,7 @@ export default function FitComment({ result }) {
   const evidence = result.evidence ? describeEvidence(result.evidence, result.confidence) : null
 
   return (
-    <div className="card reco-card">
+    <div className="card reco-card tone-reco">
       <div className="fit-head">
         <span className="eyebrow">내 체형 추천</span>
         <span className="conf-badge" style={{ color: conf.color }}>
