@@ -30,7 +30,7 @@ function pickRows(rows, category) {
   return out.length ? out.slice(0, MAX_PARTS) : rows.slice(0, MAX_PARTS)
 }
 
-function diffText(base, other, parts) {
+function diffText(other, parts) {
   const items = []
   for (const row of parts) {
     const o = other.rows.find((r) => r.label === row.label)
@@ -64,8 +64,8 @@ export function summarizeSizeChart({ sizes, recommended = null, category } = {})
   const parts = pickRows(base.rows.filter((r) => isNum(r.garment)), category)
   out.keyParts = parts.map((r) => ({ label: r.label, value: r.garment, unit: r.unit }))
   const named = (s) => ({ label: labelOf(s), rows: s.rows })
-  if (idx > 0) out.neighbors.lowerDiff = diffText(base, named(list[idx - 1]), parts)
-  if (idx < list.length - 1) out.neighbors.upperDiff = diffText(base, named(list[idx + 1]), parts)
+  if (idx > 0) out.neighbors.lowerDiff = diffText(named(list[idx - 1]), parts)
+  if (idx < list.length - 1) out.neighbors.upperDiff = diffText(named(list[idx + 1]), parts)
   const judged = base.rows.filter((r) => r.verdict && r.body != null).slice(0, MAX_DIFFS + 1)
   out.verdictLine = judged.length ? judged.map((r) => `${r.label} ${r.verdict}`).join(' · ') : null
   return out

@@ -3277,7 +3277,9 @@ await atest('content.js(가짜 DOM, vm): 표를 못 읽으면 안내와 사이�
   const link = created.find((e) => e.className === 'lnk' && e.textContent === '사이즈표 직접 입력')
   assert.ok(link, '직접 입력 링크')
   link._l.click()
-  assert.ok(created.some((e) => e.tagName === 'TEXTAREA'), '직접 입력 양식이 열려요')
+  link._l.click()
+  assert.equal(created.filter((e) => e.tagName === 'TEXTAREA').length, 1, '두 번 눌러도 양식은 하나예요')
+  assert.equal(created.filter((e) => e.textContent === '이 표로 다시 분석').length, 1, '다시 분석 버튼도 하나예요')
 })
 
 test('content.js CSS(소스 분석): 사이즈표 요약 글자·칩 대비가 4.5:1 이상이다', () => {
