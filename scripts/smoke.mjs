@@ -3410,6 +3410,7 @@ await atest('content.js(가짜 DOM, vm): 가짜 HTML(무신사 스크린샷 구�
 // ---- 자동 카테고리 분류 (전부 직접 만든 가짜 HTML·가짜 데이터예요. 실제 무신사·크롬에서 확인한 것이 아니에요) ----
 import { classifyCategory, categoryEvidenceLine } from '../src/lib/categoryClassifier.js'
 import { recategorizeProduct } from '../src/lib/recategorize.js'
+import { shoeChartNotice, chartForNotice } from '../src/lib/shoeChartNotice.js'
 
 const catHtml = ({ title = '', ld = null, options = [], table = null, reviews = true } = {}) => {
   const rv = reviews ? Array.from({ length: 3 }, (_, i) => ({ '@type': 'Review', reviewBody: `키 17${i} 몸무게 7${i} M 사이즈 구매 정사이즈로 잘 맞아요` })) : []
@@ -3874,5 +3875,113 @@ test('신발 옷장 가져오기·자동 전달: verdictStatus를 검사하고 �
   assert.ok(!('verdictStatus' in sanitizeItem(fakeEnvelope().item)))
 })
 
+
+// ---- 신발 사이즈표 ↔ 사용자가 고른 종류 (직접 만든 가짜 HTML·가짜 DOM이에요. 실제 무신사·크롬에서 확인한 것이 아니에요) ----
+const SC_REVIEWS = Array.from({ length: 3 }, (_, i) => ({ '@type': 'Review', reviewBody: `키 17${i} 몸무게 7${i} 250 사이즈 구매 정사이즈로 잘 맞아요` }))
+const scPage = (title, opts, table = '') =>
+  `<html><head><script type="application/ld+json">${JSON.stringify({ '@graph': [{ '@type': 'Product', name: title, review: SC_REVIEWS }] })}</script></head><body><h1>${title}</h1><ul>${opts.map((o) => `<li><span>${o}</span></li>`).join('')}</ul>${table}</body></html>`
+const SC_SHOE_OPTS = ['230 (230-235)', '240 (240-245)', '250 (250-255)']
+const SC_FOOT_TABLE = '<table><tr><th>사이즈</th><th>발길이</th><th>가슴</th></tr><tr><td>230</td><td>230</td><td>50</td></tr><tr><td>240</td><td>240</td><td>52</td></tr><tr><td>250</td><td>250</td><td>54</td></tr></table>'
+const scProfile = buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular', measurements: {} }).profile
+
+test('shoeChartNotice: 신발 상품에서 신발이 아닌 종류를 고르면 안내와 되돌리기 칩, 옷 상품에서 신발을 고르면 설명, 같은 종류는 없음', () => {
+  const shoe = { category: 'shoes', sizeChart: { unit: 'mm', measures: { 250: { footLength: 250 } } }, shoeOptionLabels: SC_SHOE_OPTS }
+  const n = shoeChartNotice(shoe, 'top')
+  assert.deepEqual(n, { kind: 'shoe-chart-not-shoes', message: '신발 사이즈표라 이 종류로는 실측 비교를 하지 않아요', actionCategory: 'shoes', actionLabel: '신발로 다시 보기' })
+  assert.equal(shoeChartNotice(shoe, 'shoes'), null)
+  assert.equal(shoeChartNotice(shoe, null), null)
+  const cloth = { category: 'top', sizeChart: { unit: 'cm', measures: { M: { chest: 50 } } } }
+  const c = shoeChartNotice(cloth, 'shoes')
+  assert.equal(c.kind, 'clothing-chart-as-shoes')
+  assert.equal(c.actionCategory, 'top')
+  assert.ok(c.message.includes('옷 사이즈표'))
+  assert.equal(shoeChartNotice(cloth, 'top'), null)
+  // 발길이 열을 빼고, 남는 실측이 없으면 표를 쓰지 않는다
+  assert.equal(chartForNotice({ unit: 'mm', category: 'shoes', measures: { 250: { footLength: 250 } } }, n), null)
+  const mixed = chartForNotice({ unit: 'cm', measures: { M: { footLength: 250, chest: 50 } } }, n)
+  assert.deepEqual(mixed.measures, { M: { chest: 50 } })
+  assert.equal(chartForNotice({ unit: 'cm', measures: { M: { chest: 50 } } }, c), null)
+})
+
+test('가짜 HTML: 신발 상품을 상의로 고르면 발길이는 부위 판정에서 빠지고 안내가 나오며, 신발로 되돌리면 신발 비교로 돌아온다', () => {
+  const doc = () => fakeDocument(scPage('Daily item', SC_SHOE_OPTS, SC_FOOT_TABLE))
+  const auto = analyzePage(doc(), '', scProfile)
+  assert.equal(auto.category, 'shoes')
+  assert.equal(auto.categoryNotice, null)
+  assert.ok(auto.shoeView, '신발이면 신발 비교')
+  const top = analyzePage(doc(), '', scProfile, '', { categoryOverride: 'top' })
+  assert.equal(top.category, 'top')
+  assert.equal(top.categoryOverridden, true)
+  assert.equal(top.categoryNotice.message, '신발 사이즈표라 이 종류로는 실측 비교를 하지 않아요')
+  assert.equal(top.categoryNotice.actionLabel, '신발로 다시 보기')
+  assert.equal(top.shoeView, null)
+  assert.ok(!JSON.stringify(top.compareView).includes('발길이'), '비교 표에 발길이가 없다')
+  assert.ok(!top.exportData.verdicts.some((v) => v.part === 'footLength'), '판정에 발길이가 없다')
+  assert.ok(!(top.exportData.measures && 'footLength' in top.exportData.measures))
+  const back = analyzePage(doc(), '', scProfile, '', { categoryOverride: top.categoryNotice.actionCategory })
+  assert.equal(back.category, 'shoes')
+  assert.equal(back.categoryNotice, null)
+  assert.ok(back.shoeView)
+  // 옵션만 있는 신발 페이지도 같다
+  const optOnly = analyzePage(fakeDocument(scPage('Daily item', SC_SHOE_OPTS)), '', scProfile, '', { categoryOverride: 'outer' })
+  assert.equal(optOnly.categoryNotice.kind, 'shoe-chart-not-shoes')
+  assert.ok(!JSON.stringify(optOnly.compareView).includes('발길이'))
+  assert.equal(optOnly.sizeChartMissing, true)
+})
+
+test('가짜 HTML: 옷 상품을 신발로 고르면 설명이 나오고 옷 사이즈표는 신발 비교에 쓰지 않는다', () => {
+  const html = scPage('Daily item', [], '<table><tr><th>사이즈</th><th>가슴</th><th>총장</th></tr><tr><td>S</td><td>50</td><td>67</td></tr><tr><td>M</td><td>52</td><td>69</td></tr></table>')
+  const auto = analyzePage(fakeDocument(html), '', scProfile)
+  assert.equal(auto.category, 'top')
+  const forced = analyzePage(fakeDocument(html), '', scProfile, '', { categoryOverride: 'shoes' })
+  assert.equal(forced.category, 'shoes')
+  assert.equal(forced.categoryNotice.kind, 'clothing-chart-as-shoes')
+  assert.equal(forced.categoryNotice.actionCategory, 'top')
+  assert.equal(forced.compareView, null)
+})
+
+test('웹 recategorizeProduct: 신발 상품을 상의로 고르면 발길이를 빼고 안내하며, 신발로 되돌리면 안내가 사라진다', () => {
+  const base = parsePage(fakeDocument(scPage('Daily item', SC_SHOE_OPTS, SC_FOOT_TABLE)), '')
+  assert.equal(base.category, 'shoes')
+  const top = recategorizeProduct(base, 'top')
+  assert.equal(top.category, 'top')
+  assert.equal(top.categoryNotice.actionCategory, 'shoes')
+  const cmp = compareSizes({ chart: top.sizeChart, bodyValues: {}, category: 'top' })
+  assert.ok(!JSON.stringify(cmp).includes('footLength') && !JSON.stringify(cmp).includes('발길이'))
+  assert.ok(!generateFitComment(scProfile, top).perSize.some((p) => p.verdicts.some((v) => v.part === 'footLength')))
+  const back = recategorizeProduct(base, top.categoryNotice.actionCategory)
+  assert.equal(back.category, 'shoes')
+  assert.equal(back.categoryNotice, null)
+  assert.equal(back.sizeChart.unit, base.sizeChart.unit)
+  assert.ok(shoeViewFor(back, scProfile))
+  const cloth = parsePage(fakeDocument(scPage('Daily item', [], '<table><tr><th>사이즈</th><th>가슴</th></tr><tr><td>S</td><td>50</td></tr><tr><td>M</td><td>52</td></tr></table>')), '')
+  const asShoes = recategorizeProduct(cloth, 'shoes')
+  assert.equal(asShoes.categoryNotice.kind, 'clothing-chart-as-shoes')
+  assert.equal(asShoes.sizeChart, null)
+})
+
+await atest('content.js(가짜 DOM, vm): 신발 페이지를 상의로 바꾸면 안내와 되돌리기 칩이 보이고, 칩을 누르면 신발로 돌아간다', async () => {
+  const { texts, created } = await runContentInFakeDom(scPage('Daily item', SC_SHOE_OPTS))
+  const waitFor = async (fn) => { for (let i = 0; i < 200 && !fn(); i++) await new Promise((r) => setTimeout(r, 10)) }
+  const chip = (label) => created.filter((e) => e.tagName === 'BUTTON' && /^cat( on)?$/.test(e.className) && e._text === label).at(-1)
+  const NOTICE = '신발 사이즈표라 이 종류로는 실측 비교를 하지 않아요'
+  assert.ok(chip('신발'), '처음에는 신발로 분류')
+  assert.ok(!texts.includes(NOTICE), '처음에는 안내가 없다')
+  const topChip = created.find((e) => e.tagName === 'BUTTON' && /^cat( on)?$/.test(e.className) && e._text && e._text !== '신발')
+  assert.ok(topChip, '신발이 아닌 종류 칩')
+  const before = texts.length
+  topChip.click()
+  await waitFor(() => texts.slice(before).includes(NOTICE))
+  const after = texts.slice(before)
+  assert.ok(after.includes(NOTICE), '안내 한 줄')
+  assert.ok(!after.some((t) => t.includes('발길이') && /적당|넉넉|타이트/.test(t)), '발길이 판정이 나오지 않는다')
+  const revert = chip('신발로 다시 보기')
+  assert.ok(revert, '되돌리기 칩')
+  const mark = texts.length
+  revert.click()
+  await waitFor(() => texts.slice(mark).some((t) => t.includes('내 발길이') || t.includes('발길이를 알 수 없어요')))
+  assert.ok(!texts.slice(mark).includes(NOTICE), '되돌린 뒤에는 안내가 없다')
+  assert.ok(texts.slice(mark).some((t) => t.includes('발길이')), '신발 비교로 돌아왔다')
+})
 
 console.log(`\n${passed}개 통과`)

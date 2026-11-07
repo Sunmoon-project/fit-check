@@ -17,6 +17,12 @@ export default function CategoryPicker({ product, onPick }) {
           </button>
         ))}
       </div>
+      {product.categoryNotice && (
+        <p className="muted small category-notice" role="status">
+          {product.categoryNotice.message}{' '}
+          <button type="button" className="chip small" onClick={() => onPick(product.categoryNotice.actionCategory)}>{product.categoryNotice.actionLabel}</button>
+        </p>
+      )}
     </div>
   )
 }

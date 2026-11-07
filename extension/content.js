@@ -1082,6 +1082,19 @@ function categoryChips(r) {
   return box
 }
 
+// 고른 종류와 사이즈표(신발 mm표 ↔ 옷 실측표)가 맞지 않을 때: 안내 한 줄과 원래 종류로 되돌리는 칩 (웹과 같은 shoeChartNotice 결과)
+function categoryNoticeBlock(r) {
+  const n = r.categoryNotice
+  if (!n) return null
+  const box = el('div', 'cats')
+  box.append(el('span', 'tiny', n.message))
+  const b = el('button', 'cat', n.actionLabel)
+  b.type = 'button'
+  b.addEventListener('click', () => reanalyzeWithCategory(n.actionCategory))
+  box.append(b)
+  return box
+}
+
 async function reanalyzeWithCategory(key) {
   if (busy) return
   chosenCategory = key
@@ -1100,6 +1113,8 @@ function renderResult(r) {
   showCard((card) => {
     if (r.status !== 'ok') {
       card.append(el('p', null, r.message))
+      const noticeBox = categoryNoticeBlock(r)
+      if (noticeBox) card.append(noticeBox)
       if (r.details?.length) {
         const diag = section('진단 정보')
         const ul = el('ul', 'det')
@@ -1121,6 +1136,8 @@ function renderResult(r) {
     card.append(row)
     const chips = categoryChips(r)
     if (chips) card.append(chips)
+    const noticeBox = categoryNoticeBlock(r)
+    if (noticeBox) card.append(noticeBox)
     if (r.recommendedSize) card.append(el('div', 'size', r.recommendedLabel || r.recommendedSize))
     card.append(el('p', 'sum', r.manual ? `${r.summary} · 직접 입력한 사이즈표` : r.summary))
     card.append(el('p', 'tiny', '참고용이에요. 확신도는 정확도를 측정한 값이 아니에요.'))

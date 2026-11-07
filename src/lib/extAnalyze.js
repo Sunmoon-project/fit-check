@@ -108,6 +108,7 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     return {
       status: 'no-data',
       name: product.name,
+      categoryNotice: product.categoryNotice || null,
       // 상품 페이지로 보이지 않으면(구조화된 상품 정보도, 읽을 사이즈표도 없음) 먼저 그 점을 알려요. 상품 페이지가 맞는데 못 읽은 경우를 위해 직접 입력 양식은 그대로 둡니다.
       notProductPage: !isProductPage(root),
       message: isProductPage(root)
@@ -135,6 +136,7 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     categoryEvidence: product.categoryEvidence,
     categoryCandidates: (product.categoryCandidates || []).map((c) => ({ key: c, label: CATEGORY_LABEL[c] || c })),
     categoryOverridden: product.categoryOverridden === true,
+    categoryNotice: product.categoryNotice || null,
     recommendedSize: shoe?.recommended ? String(shoe.recommended.mm) : result.recommendedSize,
     recommendedLabel: shoe?.recommended ? shoe.recommended.label : result.recommendedLabel,
     reviewsLoaded: product.reviews.length,
