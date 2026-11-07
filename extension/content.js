@@ -36,6 +36,26 @@ p{margin:0}
 .inp{width:100%;margin-top:6px;border:1px solid #d4d4d4;border-radius:6px;padding:6px;font-size:12px;font-family:inherit}
 .prog{margin-top:6px;font-size:12px;color:#555}
 .note{margin-top:10px;font-size:11px;color:#8a8a8e}
+.sec{margin-top:8px;border-top:1px solid #ececec;padding-top:6px}
+.sec>summary{cursor:pointer;font-size:12px;font-weight:600;color:#111}
+.secbody{margin-top:6px}
+.tw{overflow-x:auto;margin-top:6px}
+table{border-collapse:collapse;font-size:11px;width:100%}
+th,td{border:1px solid #e3e3e3;padding:3px 5px;text-align:center;white-space:nowrap}
+th{background:#f6f6f6;font-weight:600}
+th.dim,td.dim{color:#a0a0a5}
+tr.rec th,tr.rec td{background:#111;color:#fff}
+.cv{display:block;font-size:10px;color:#0a7a3c}
+tr.rec .cv{color:#9fe0ba}
+.flag{margin-top:6px;font-size:11px;color:#8a5a00}
+.rvl{list-style:none;margin:6px 0 0;padding:0}
+.rv{border:1px solid #ececec;border-radius:8px;padding:6px 8px;margin-top:6px}
+.rvm{display:flex;flex-wrap:wrap;gap:4px}
+.tag{font-size:10px;border-radius:999px;background:#f1f1f1;padding:1px 7px;color:#333}
+.tag.miss{background:#fff;border:1px dashed #c8c8c8;color:#8a8a8e}
+.tag.sim{background:#111;color:#fff}
+.rvt{margin-top:4px;font-size:12px;color:#222;white-space:pre-wrap;word-break:break-word}
+.lnk{border:0;background:none;padding:0;margin-left:4px;font-size:11px;color:#555;text-decoration:underline;cursor:pointer}
 `
 
 let host = null
@@ -167,6 +187,117 @@ function manualForm(r) {
     box.append(cols, lines, go, msg, el('p', 'note', '입력한 표는 저장하거나 전송하지 않고 이번 분석에만 써요.'))
   })
   box.append(open)
+  box.openForm = () => open.click()
+  return box
+}
+
+// ---------- 접을 수 있는 구역 / 읽은 그대로 보여주기 (페이지 글은 전부 textContent로만 넣어요) ----------
+function section(title, open = false) {
+  const det = el('details', 'sec')
+  det.open = open
+  det.append(el('summary', null, title))
+  const body = el('div', 'secbody')
+  det.append(body)
+  return { det, body }
+}
+
+const NAMES_FROM_NOTE = {
+  'other-table': '사이즈 이름은 다른 표에서 가져왔어요.',
+  options: '표에 사이즈 이름이 없어 구매 옵션 순서대로 이름을 붙였어요. 맞는지 확인해 주세요.',
+}
+
+// 읽어낸 사이즈표를 행=사이즈, 열=실측 항목으로 그대로 보여줍니다. 계산에 쓴 값이 원문과 다르면(단면→둘레) 따로 표시해요.
+function chartTable(v) {
+  const box = el('div')
+  if (v.manual) box.append(el('p', 'flag', '직접 입력한 표예요. 페이지에서 읽은 값이 아니에요.'))
+  if (v.flipped) box.append(el('p', 'flag', '뒤집어 읽음: 원본은 가로가 사이즈, 세로가 실측 항목이었어요.'))
+  if (NAMES_FROM_NOTE[v.namesFrom]) box.append(el('p', 'flag', NAMES_FROM_NOTE[v.namesFrom]))
+  const table = el('table')
+  const head = el('tr')
+  head.append(el('th', null, '사이즈'))
+  v.headers.forEach((h, i) => {
+    const th = el('th', v.used[i] ? null : 'dim', h)
+    if (!v.used[i]) th.setAttribute('title', '계산에 쓰지 않은 열')
+    head.append(th)
+  })
+  table.append(head)
+  let converted = false
+  for (const row of v.rows) {
+    const tr = el('tr', row.label === v.recommended ? 'rec' : null)
+    tr.append(el('th', null, row.label === v.recommended ? `${row.shown} (추천)` : row.shown))
+    row.cells.forEach((c, i) => {
+      const td = el('td', v.used[i] ? null : 'dim')
+      td.append(el('span', null, c.raw))
+      if (c.converted) {
+        converted = true
+        td.append(el('span', 'cv', `→ ${c.value}`))
+      }
+      tr.append(td)
+    })
+    table.append(tr)
+  }
+  const wrap = el('div', 'tw')
+  wrap.append(table)
+  box.append(wrap)
+  const legend = []
+  if (converted) legend.push('→ 단면 값을 둘레(×2)로 바꿔 계산한 값')
+  if (v.used.some((u) => !u)) legend.push('흐린 열은 계산에 쓰지 않았어요')
+  if (legend.length) box.append(el('p', 'note', legend.join(' · ')))
+  return box
+}
+
+const REVIEW_PREVIEW = 120
+
+function reviewItem(rv) {
+  const li = el('li', 'rv')
+  const meta = el('div', 'rvm')
+  const tag = (label, value, text) => meta.append(el('span', value == null ? 'tag miss' : 'tag', value == null ? `${label} 못 읽음` : `${label} ${text}`))
+  if (rv.similarity != null) meta.append(el('span', 'tag sim', `체형 유사도 ${rv.similarity}`))
+  tag('키', rv.height, `${rv.height}cm`)
+  tag('몸무게', rv.weight, `${rv.weight}kg`)
+  tag('구매 사이즈', rv.size, rv.size)
+  tag('핏 평가', rv.fitLabel, rv.fitLabel)
+  li.append(meta)
+  const full = rv.text
+  const p = el('p', 'rvt', full.length > REVIEW_PREVIEW ? `${full.slice(0, REVIEW_PREVIEW)}…` : full)
+  li.append(p)
+  if (full.length > REVIEW_PREVIEW) {
+    const more = el('button', 'lnk', '더보기')
+    more.type = 'button'
+    let openText = false
+    more.addEventListener('click', () => {
+      openText = !openText
+      p.textContent = openText ? full : `${full.slice(0, REVIEW_PREVIEW)}…`
+      more.textContent = openText ? '접기' : '더보기'
+    })
+    li.append(more)
+  }
+  return li
+}
+
+function reviewList(list) {
+  const ul = el('ul', 'rvl')
+  for (const rv of list) ul.append(reviewItem(rv))
+  return ul
+}
+
+// 추천 근거가 된 리뷰를 페이지에서 읽은 그대로. 비슷한 체형 리뷰를 먼저, 나머지는 접어 둡니다. 저장·전송하지 않아요.
+function reviewsBlock(rvs) {
+  const box = el('div')
+  if (rvs.matched.length) box.append(reviewList(rvs.matched))
+  else box.append(el('p', 'note', '비슷한 체형(키·몸무게를 읽은) 리뷰가 없어요.'))
+  if (rvs.matchedTotal > rvs.matched.length) box.append(el('p', 'note', `비슷한 체형 ${rvs.matchedTotal - rvs.matched.length}건은 표시하지 않았어요.`))
+  if (rvs.others.length) {
+    const rest = section(`나머지 리뷰 ${rvs.othersTotal}건 (체형 정보가 없거나 다른 리뷰)`)
+    let built = false
+    rest.det.addEventListener('toggle', () => {
+      if (built || !rest.det.open) return
+      built = true
+      rest.body.append(reviewList(rvs.others))
+      if (rvs.othersTotal > rvs.others.length) rest.body.append(el('p', 'note', `${rvs.othersTotal - rvs.others.length}건은 표시하지 않았어요.`))
+    })
+    box.append(rest.det)
+  }
   return box
 }
 
@@ -321,11 +452,22 @@ function renderResult(r) {
       card.append(ul)
     }
     card.append(el('h3', null, r.headline), el('p', null, r.body))
+    if (r.reviewViews) {
+      const rv = section(`리뷰 원문 (비슷한 체형 ${r.reviewViews.matchedTotal}건 / 불러온 ${r.reviewsLoaded}건)`)
+      rv.body.append(reviewsBlock(r.reviewViews))
+      card.append(rv.det)
+    }
+    {
+      const manual = manualForm(r)
+      const ch = section(r.chartView ? '읽은 사이즈표 (페이지 그대로)' : '사이즈표 (읽지 못함)', !r.chartView)
+      if (r.chartView) ch.body.append(chartTable(r.chartView), el('p', 'note', '읽은 표가 다르면 직접 입력으로 고칠 수 있어요.'))
+      ch.body.append(manual)
+      card.append(ch.det)
+    }
     card.append(loadMoreBlock(r))
     if (r.loadInfo) card.append(el('p', 'note', r.loadInfo))
     card.append(el('p', 'note', '이 페이지에 불러와진 리뷰만 읽어요. 더 많은 리뷰를 반영하려면 아래 [리뷰 더 불러오기]를 눌러 보세요. 누를 때만 리뷰 영역을 스크롤하고 리뷰의 더보기 버튼만 눌러요(끝나면 원래 위치로 돌아와요).'))
     card.append(el('p', 'note', '확신도는 후기·사이즈표 근거가 얼마나 있는지로 나눈 참고 단계예요. 정확도를 측정한 값이 아니에요.'))
-    if (r.sizeChartMissing && r.diagnostics) card.append(manualForm(r))
     if (r.diagnostics) {
       card.append(el('p', 'note', '문제가 있나요?'))
       card.append(reportBlock(formatReport(r.diagnostics)))

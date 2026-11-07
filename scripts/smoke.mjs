@@ -1217,7 +1217,9 @@ test('가짜 HTML: 뒤집힌 표에서도 총장 값 67은 사이즈 이름으�
   assert.ok(!(noOpt.sizeChart?.rows || []).some((row) => row[0] === '67'))
   const doc = fakeDocument(wrapBody(`<h1>코튼 재킷 아우터</h1>${optionsHtml}${flippedTable([0, 1, 2, 3, 4])}`))
   const r = analyzePage(doc, '', fakeProfile)
-  assert.ok(!JSON.stringify(r).includes('"67"'))
+  // 값 칸의 원문 '67'은 있어도 되지만 사이즈 이름·추천으로는 나오면 안 돼요
+  assert.ok(!r.chartView.rows.some((row) => row.label === '67' || row.shown === '67'))
+  assert.ok(r.recommendedSize !== '67' && r.recommendedLabel !== '67')
   const p = parsePage(doc, '')
   assert.ok(!p.sizeChart.rows.some((row) => row[0] === '67'))
 })
@@ -1442,7 +1444,7 @@ test('diagnose: 리뷰 불러오기 멈춘 이유(시간 한도·중단)가 리�
 })
 
 // 확장 content.js를 임시 폴더에 IIFE로 빌드해 가짜 DOM(node:vm)에서 fab 클릭(run) 경로를 실행합니다. 실제 무신사·크롬이 아니에요.
-async function runContentInFakeDom() {
+async function runContentInFakeDom(pageHtml = null) {
   const root = resolvePath(import.meta.dirname, '..')
   const outDir = mkdtempSync(join(tmpdir(), 'fitcheck-content-'))
   try {
@@ -1456,6 +1458,7 @@ async function runContentInFakeDom() {
     const makeEl = (tag) => {
       const e = {
         tagName: String(tag).toUpperCase(), children: [], className: '', hidden: false, disabled: false, style: {},
+        set innerHTML(v) { throw new Error('innerHTML 사용 금지') }, set outerHTML(v) { throw new Error('outerHTML 사용 금지') }, insertAdjacentHTML() { throw new Error('insertAdjacentHTML 사용 금지') },
         _text: '', set textContent(v) { this._text = String(v); texts.push(this._text) }, get textContent() { return this._text },
         append(...n) { this.children.push(...n) }, appendChild(n) { this.children.push(n); return n }, replaceChildren() { this.children = [] },
         setAttribute() {}, getAttribute() { return null }, addEventListener(type, fn) { (this._l ||= {})[type] = fn },
@@ -1464,10 +1467,11 @@ async function runContentInFakeDom() {
       return e
     }
     const created = []
+    const pageDoc = pageHtml ? fakeDocument(pageHtml) : null
     const doc = {
       readyState: 'complete', body: makeEl('body'), documentElement: makeEl('html'),
       createElement(tag) { const e = makeEl(tag); created.push(e); return e },
-      querySelectorAll() { return [] }, querySelector() { return null }, execCommand() { return false },
+      querySelectorAll(sel) { return pageDoc ? pageDoc.querySelectorAll(sel) : [] }, querySelector(sel) { return pageDoc ? pageDoc.querySelector(sel) : null }, execCommand() { return false },
     }
     const win = { scrollX: 0, scrollY: 0, scrollTo() {} }
     const profile = buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular', measurements: {} }).profile
@@ -1490,16 +1494,106 @@ async function runContentInFakeDom() {
       const f = created.find((e) => e.className === 'fab')
       if (f && !f.disabled && f.textContent === '내 사이즈 찾기') break
     }
-    return texts
+    return { texts, created }
   } finally {
     rmSync(outDir, { recursive: true, force: true })
   }
 }
 
 await atest('content.js(가짜 DOM, vm): 분석 실행 경로에서 ReferenceError 없이 끝난다', async () => {
-  const texts = await runContentInFakeDom()
+  const { texts } = await runContentInFakeDom()
   assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')), '오류 카드가 나오면 안 돼요')
   assert.ok(texts.some((t) => t.includes('내 사이즈 찾기')), '실행이 끝나 버튼이 돌아와야 해요')
+})
+
+// ---- 리뷰 원문·사이즈표 원본 표시 (전부 직접 만든 가짜 HTML과 가짜 DOM이에요. 실제 무신사·크롬에서 확인한 것이 아니에요) ----
+const LONG_REVIEW = '키 175 몸무게 70 1 (M) 사이즈로 샀어요 정사이즈예요 ' + '소재가 부드럽고 어깨 라인이 깔끔하게 떨어져서 마음에 들어요. '.repeat(4)
+const VIEW_REVIEWS = [
+  LONG_REVIEW,
+  '키 174 몸무게 69 1 (M) 사이즈 구매 잘 맞아요',
+  '키 150 몸무게 45 0 (S) 사이즈 구매 커요',
+  'ZQOTHER 체형은 안 적었지만 M 사이즈 구매 정사이즈로 잘 맞아요',
+  '&lt;img src=x onerror=alert(1)&gt; 키 175 몸무게 70 M 사이즈 구매 정사이즈',
+]
+const VIEW_HTML = (chartHtml) =>
+  wrapBody(`${optionsHtml}${chartHtml}${VIEW_REVIEWS.map((t) => `<div class="review-item">${t}</div>`).join('')}`)
+
+test('가짜 HTML: 분석 결과에 리뷰 원문(읽은 키·몸무게·사이즈·핏)과 사이즈표 원본이 들어 있다', () => {
+  const r = analyzePage(fakeDocument(VIEW_HTML(chartTable(OPTION_LIST_LABELS()))), '', fakeProfile)
+  assert.equal(r.status, 'ok')
+  const rv = r.reviewViews
+  assert.ok(rv.matched.length >= 2 && rv.matchedTotal === rv.matched.length)
+  assert.ok(rv.matched.every((x) => x.similarity >= 55))
+  const first = rv.matched.find((x) => x.text.startsWith('키 175 몸무게 70 1 (M)'))
+  assert.equal(first.text, LONG_REVIEW.replace(/\s+/g, ' ').trim()) // 페이지에서 읽은 글 그대로
+  assert.deepEqual([first.height, first.weight, first.size, first.fit, first.fitLabel], [175, 70, '1 (M)', 'true', '잘 맞아요'])
+  const other = rv.others.find((x) => x.text.startsWith('ZQOTHER'))
+  assert.deepEqual([other.height, other.weight], [null, null]) // 못 읽은 항목은 null -> 화면에서 '못 읽음'
+  assert.ok(other.size === 'M' || other.size === '1 (M)')
+  const v = r.chartView
+  assert.deepEqual(v.headers, ['총장', '어깨', '가슴', '소매'])
+  assert.equal(v.rows.length, 5)
+  assert.equal(v.flipped, false)
+  assert.ok(v.rows.some((row) => row.label === v.recommended), '추천 사이즈 행이 표 안에 있어야 해요')
+  const chest = v.rows[0].cells[2] // 가슴 52 -> 단면으로 보고 둘레 104로 환산
+  assert.deepEqual([chest.raw, chest.value, chest.converted], ['52', 104, true])
+  const len = v.rows[0].cells[0]
+  assert.deepEqual([len.raw, len.converted], ['67', false])
+})
+
+test('가짜 HTML: 뒤집어 읽은 사이즈표는 chartView.flipped와 원문 머리글을 유지한다', () => {
+  const r = analyzePage(fakeDocument(VIEW_HTML(flippedTable([0, 1, 2, 3, 4]))), '', fakeProfile)
+  assert.equal(r.chartView.flipped, true)
+  assert.deepEqual(r.chartView.headers, ['총장', '어깨너비', '가슴단면', '소매길이'])
+  assert.equal(r.chartView.rows[0].shown, '0 (S)')
+  assert.equal(r.chartView.rows[0].cells[2].converted, true)
+})
+
+test('가짜 HTML: 사이즈표를 못 읽으면 chartView는 null이고 리뷰 원문은 그대로 있다', () => {
+  const r = analyzePage(fakeDocument(wrapBody(NOCHART_HTML)), '', fakeProfile)
+  assert.equal(r.status, 'ok')
+  assert.equal(r.chartView, null)
+  assert.ok(r.reviewViews.matched.length + r.reviewViews.others.length >= 3)
+})
+
+test('진단 리포트에는 리뷰 원문이 들어가지 않는다 (카드 표시와 별개)', () => {
+  const doc = fakeDocument(VIEW_HTML(chartTable(OPTION_LIST_LABELS())))
+  const rep = formatReport(analyzePage(doc, 'https://shop.example/p/1', fakeProfile).diagnostics)
+  for (const piece of ['ZQOTHER', '소재가 부드럽고', 'onerror']) assert.ok(!rep.includes(piece), piece)
+})
+
+test('content.js 소스: innerHTML·outerHTML·insertAdjacentHTML·document.write를 쓰지 않는다', () => {
+  const src = readFileSync(new URL('../extension/content.js', import.meta.url), 'utf8')
+  assert.ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\.write|createContextualFragment|DOMParser/.test(src))
+})
+
+await atest('content.js(가짜 DOM, vm): 리뷰 원문·사이즈표 구역이 오류 없이 그려지고 페이지 글은 텍스트로만 들어간다', async () => {
+  const { texts, created } = await runContentInFakeDom(VIEW_HTML(chartTable(OPTION_LIST_LABELS())))
+  assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')), '오류 카드가 나오면 안 돼요')
+  const has = (s) => texts.some((t) => t.includes(s))
+  assert.ok(has('리뷰 원문 (비슷한 체형'), '리뷰 구역 제목')
+  assert.ok(has('읽은 사이즈표 (페이지 그대로)'), '사이즈표 구역 제목')
+  assert.ok(has('(추천)'), '추천 행 표시')
+  assert.ok(texts.some((t) => /^→ \d/.test(t)), '환산값 표시')
+  assert.ok(has('키 175cm') && has('몸무게 70kg') && has('구매 사이즈 1 (M)') && has('핏 평가 잘 맞아요'))
+  // 긴 리뷰는 미리보기 + 더보기
+  const preview = LONG_REVIEW.replace(/\s+/g, ' ').trim().slice(0, 120)
+  assert.ok(texts.includes(`${preview}…`), '긴 리뷰 미리보기')
+  const more = created.find((e) => e.className === 'lnk')
+  assert.ok(more, '더보기 버튼')
+  more._l.click()
+  assert.ok(texts.includes(LONG_REVIEW.replace(/\s+/g, ' ').trim()), '더보기를 누르면 전체 글')
+  // 나머지 리뷰 구역은 처음엔 비어 있다가 열면 그려진다
+  assert.ok(!has('ZQOTHER'))
+  for (const d of created.filter((e) => e.tagName === 'DETAILS')) {
+    d.open = true
+    d._l?.toggle?.()
+  }
+  assert.ok(has('ZQOTHER'), '나머지 리뷰')
+  assert.ok(texts.some((t) => t.includes('키 못 읽음') && t.length < 20), '못 읽은 항목 표시')
+  // 페이지 글에 든 <img ...> 는 요소가 아니라 글자로만 들어간다
+  assert.ok(has('<img src=x onerror=alert(1)>'))
+  assert.ok(!created.some((e) => e.tagName === 'IMG' || e.tagName === 'SCRIPT'))
 })
 
 test('formatReport: 오류 위치와 식별자 줄은 검증된 값만 보인다', () => {
