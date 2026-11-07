@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { generateFitComment } from '../lib/fitEngine.js'
 import { CATEGORY_LABEL } from '../data/measurements.js'
+import { trimNote } from '../lib/storage.js'
 import { makeWardrobeItem } from '../lib/wardrobe.js'
 import FitComment from './FitComment.jsx'
 import MeasureMatch from './MeasureMatch.jsx'
@@ -32,7 +33,7 @@ export default function ResultView({ product, profile, calibration, feedbackCoun
     const item = makeWardrobeItem({ product, size: selectedSize, verdicts, image: shot.image, imageKind: shot.kind })
     const res = onSaveWardrobe?.(item)
     setSaving(false)
-    setSaveNote(res?.trimmed ? '옷장에 담았어요. 저장 공간이 부족해 오래된 이미지 일부를 뺐어요.' : '옷장에 담았어요. 위쪽 ‘옷장’에서 비교할 수 있어요.')
+    setSaveNote(res?.trimmed ? `옷장에 담았어요. ${trimNote(res) || '저장 공간이 부족해 오래된 이미지 일부를 뺐어요.'}` : '옷장에 담았어요. 위쪽 ‘옷장’에서 비교할 수 있어요.')
   }
 
   return (

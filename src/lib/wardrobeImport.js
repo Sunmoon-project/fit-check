@@ -56,7 +56,9 @@ function sanitizeMeasures(raw) {
   if (raw == null) return null
   if (!isObj(raw)) return undefined
   const out = {}
-  for (const k of Object.keys(raw).slice(0, LIMITS.parts)) {
+  // 키 이름 검사를 먼저 하고 그 뒤에 개수를 자릅니다 (버려질 키가 유효한 키를 밀어내지 않게).
+  for (const k of Object.keys(raw)) {
+    if (Object.keys(out).length >= LIMITS.parts) break
     if (!/^[A-Za-z]{1,20}$/.test(k)) continue
     const n = inRange(raw[k], 0, 1000)
     if (n != null) out[k] = n
@@ -83,7 +85,10 @@ function sanitizeVerdicts(raw) {
 function sanitizeReview(r) {
   if (!isObj(r)) return null
   const text = str(r.text, LIMITS.review) || ''
-  const photos = Array.isArray(r.photos) ? r.photos.map(safeUrl).filter(Boolean).slice(0, LIMITS.photosPerReview) : []
+  // 리뷰 사진은 https 주소만, 같은 주소는 한 번만 남깁니다.
+  const photos = Array.isArray(r.photos)
+    ? [...new Set(r.photos.map(safeUrl).filter((u) => u && /^https:\/\//i.test(u)))].slice(0, LIMITS.photosPerReview)
+    : []
   if (!text && photos.length === 0) return null
   return {
     nick: str(r.nick, LIMITS.nick) || '',
@@ -187,8 +192,12 @@ export function parseImportText(text, { now = Date.now() } = {}) {
   return { ok: true, item }
 }
 
-// 가져온 항목을 맨 앞에 넣습니다. 같은 상품·같은 사이즈는 새 항목으로 바꿔요. 개수 제한은 saveWardrobe가 지킵니다.
+// 가져온 항목을 맨 앞에 넣습니다. 같은 상품·같은 사이즈가 이미 있으면 그 항목의 id·합성 이미지·종류는 이어받고
+// 확장에서 온 정보(치수·판정·리뷰)만 새 값으로 바꿔요. 개수 제한은 saveWardrobe가 지킵니다.
 export function addImportedItem(list, item) {
-  const rest = (list || []).filter((w) => !(item.product.url && w.product?.url === item.product.url && w.size === item.size))
-  return [item, ...rest]
+  const same = (w) => item.product.url && w.product?.url === item.product.url && w.size === item.size
+  const prev = (list || []).find(same)
+  const rest = (list || []).filter((w) => !same(w))
+  const next = prev ? { ...item, id: prev.id, image: prev.image ?? null, imageKind: prev.imageKind ?? null } : item
+  return [next, ...rest]
 }

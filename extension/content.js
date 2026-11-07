@@ -429,15 +429,20 @@ function reviewsBlock(rvs) {
   list.setAttribute('aria-label', '리뷰 보기')
   const panel = el('div', 'tp')
   panel.setAttribute('role', 'tabpanel')
+  panel.id = 'fc-tabpanel'
+  panel.tabIndex = 0
   const btns = []
   const built = []
   const select = (i, focus) => {
     btns.forEach((b, j) => {
       b.setAttribute('aria-selected', j === i ? 'true' : 'false')
+      b.setAttribute('aria-controls', 'fc-tabpanel')
+      b.id = `fc-tab-${j}`
       b.tabIndex = j === i ? 0 : -1
       b.className = j === i ? 'tab on' : 'tab'
     })
     cancelAnim()
+    panel.setAttribute('aria-labelledby', `fc-tab-${i}`)
     if (!built[i]) built[i] = tabs[i].compare ? compareTab(rvs, all) : { node: tabs[i].build() }
     panel.replaceChildren(built[i].node)
     if (built[i].play) built[i].play()

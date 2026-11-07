@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { CATEGORY_LABEL } from '../data/measurements.js'
 import { findSimilar, describeDiff } from '../lib/wardrobe.js'
 import { parseImportText, LIMITS } from '../lib/wardrobeImport.js'
+import { trimNote } from '../lib/storage.js'
 import ReviewTab from './ReviewTab.jsx'
 
 const MAX_COMPARE = 4
@@ -56,7 +57,7 @@ function ImportPanel({ onImport }) {
     const saved = onImport(res.item)
     if (saved?.failed) setMsg({ error: true, text: '저장 공간이 부족해서 저장하지 못했어요. 오래된 옷을 지운 뒤 다시 해주세요.' })
     else {
-      setMsg({ error: false, text: `‘${res.item.product.name}’을 옷장에 담았어요.` })
+      setMsg({ error: false, text: `‘${res.item.product.name}’을 옷장에 담았어요. ${trimNote(saved)}`.trim() })
       setText('')
     }
   }

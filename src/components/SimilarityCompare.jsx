@@ -73,12 +73,12 @@ export default function SimilarityCompare({ profile, reviews }) {
     <div className="card">
       <div className="section-head">
         <h3>체형 비교</h3>
-        <button type="button" className="btn text" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <button type="button" className="btn text" aria-expanded={open} aria-controls="sim-compare-panel" onClick={() => setOpen((v) => !v)}>
           {open ? '접기' : '내 체형과 비교하기'}
         </button>
       </div>
       {open && (
-        <>
+        <div id="sim-compare-panel">
           <p className="muted small">
             내 체형: {profile.height}cm {profile.weight}kg{GENDER_TEXT[profile.gender] ? ` · ${GENDER_TEXT[profile.gender]}` : ''}
           </p>
@@ -97,11 +97,12 @@ export default function SimilarityCompare({ profile, reviews }) {
                   </span>
                   <Bar label="키" unit="cm" m={c.height} />
                   <Bar label="몸무게" unit="kg" m={c.weight} />
+                  {c.gender.state === 'diff' && <p className="muted small">성별이 달라 유사도는 0%예요. 막대는 키·몸무게만 비교한 거예요.</p>}
                 </li>
               )
             })}
           </ul>
-        </>
+        </div>
       )}
     </div>
   )
