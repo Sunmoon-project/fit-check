@@ -27,3 +27,9 @@ export const CATEGORY_PARTS = {
 export const TOP_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL']
 export const BOTTOM_SIZES = [24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 36, 38, 40]
 export const SHOE_SIZES = Array.from({ length: 17 }, (_, i) => 220 + i * 5)
+
+/** 신체 치수 값이 BODY_FIELDS 범위 안인지 (발길이는 210~310mm, 신발 사이즈는 230부터 시작해도 포함됨) */
+export function inFieldRange(key, value) {
+  const f = BODY_FIELDS.find((x) => x.key === key)
+  return !!f && Number.isFinite(value) && value >= f.min && value <= f.max
+}
