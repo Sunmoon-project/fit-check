@@ -316,7 +316,7 @@ function renderResult(r) {
     card.append(el('h3', null, r.headline), el('p', null, r.body))
     card.append(loadMoreBlock(r))
     if (r.loadInfo) card.append(el('p', 'note', r.loadInfo))
-    card.append(el('p', 'note', '이 페이지에 불러와진 리뷰만 읽어요. 더 많은 리뷰를 반영하려면 아래 '리뷰 더 불러오기'를 눌러 보세요. 누를 때만 리뷰 영역을 스크롤하고 리뷰의 '더보기' 버튼만 눌러요(끝나면 원래 위치로 돌아와요).'))
+    card.append(el('p', 'note', '이 페이지에 불러와진 리뷰만 읽어요. 더 많은 리뷰를 반영하려면 아래 [리뷰 더 불러오기]를 눌러 보세요. 누를 때만 리뷰 영역을 스크롤하고 리뷰의 더보기 버튼만 눌러요(끝나면 원래 위치로 돌아와요).'))
     card.append(el('p', 'note', '확신도는 후기·사이즈표 근거가 얼마나 있는지로 나눈 참고 단계예요. 정확도를 측정한 값이 아니에요.'))
     if (r.sizeChartMissing && r.diagnostics) card.append(manualForm(r))
     if (r.diagnostics) {
