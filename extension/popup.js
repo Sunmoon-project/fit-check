@@ -15,7 +15,7 @@ function readForm() {
   const fd = new FormData(form)
   const measurements = {}
   for (const k of MEASURE_KEYS) measurements[k] = fd.get(`m-${k}`)
-  return { gender: fd.get('gender'), height: fd.get('height'), weight: fd.get('weight'), preferredFit: fd.get('preferredFit'), measurements }
+  return { gender: fd.get('gender'), height: fd.get('height'), weight: fd.get('weight'), preferredFit: fd.get('preferredFit'), footWidth: fd.get('footWidth'), measurements }
 }
 
 function fillForm(p) {
@@ -25,6 +25,7 @@ function fillForm(p) {
   form.elements.height.value = p.height ?? ''
   form.elements.weight.value = p.weight ?? ''
   form.elements.preferredFit.value = p.preferredFit || 'regular'
+  form.elements.footWidth.value = p.footWidth || ''
   for (const k of MEASURE_KEYS) form.elements[`m-${k}`].value = p.measurements?.[k] ?? ''
 }
 

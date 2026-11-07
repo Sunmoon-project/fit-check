@@ -8,6 +8,7 @@ import { trimNote } from '../lib/storage.js'
 import { makeWardrobeItem } from '../lib/wardrobe.js'
 import FitComment from './FitComment.jsx'
 import MeasureMatch from './MeasureMatch.jsx'
+import ShoeCompare from './ShoeCompare.jsx'
 import MatchedReviews from './MatchedReviews.jsx'
 import SimilarityCompare from './SimilarityCompare.jsx'
 import SizeChart from './SizeChart.jsx'
@@ -32,6 +33,7 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
   const selectedSize = picked || result.recommendedSize || result.perSize[0]?.size || null
   const verdicts = result.perSize.find((p) => p.size === selectedSize)?.verdicts || []
   const isLive = product.source === 'live'
+  const isShoes = product.category === 'shoes'
   // 지금 보는 옷 (옷장 비교용)
   const currentTarget = useMemo(
     () => ({ ...makeWardrobeItem({ product, size: selectedSize, verdicts, now: 0 }), id: 'current' }),
@@ -77,15 +79,21 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
 
       <FitComment result={result} />
 
-      <SizeSummary compare={compare} recommendedSize={result.recommendedSize} category={product.category} />
+      {isShoes ? (
+        <ShoeCompare product={product} profile={profile} selectedSize={picked} onSelect={setPicked} />
+      ) : (
+        <>
+          <SizeSummary compare={compare} recommendedSize={result.recommendedSize} category={product.category} />
 
-      <MeasureMatch
-        perSize={result.perSize}
-        selectedSize={selectedSize}
-        recommendedSize={result.recommendedSize}
-        compare={compare}
-        onSelect={setPicked}
-      />
+          <MeasureMatch
+            perSize={result.perSize}
+            selectedSize={selectedSize}
+            recommendedSize={result.recommendedSize}
+            compare={compare}
+            onSelect={setPicked}
+          />
+        </>
+      )}
 
       <TryOnPanel product={product} profile={profile} selectedSize={selectedSize} verdicts={verdicts} captureRef={captureRef} />
 
@@ -100,7 +108,7 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
 
       <MatchedReviews matched={result.matched} others={result.otherReviews} />
 
-      <SimilarityCompare profile={profile} reviews={[...result.matched, ...result.otherReviews]} />
+      {!isShoes && <SimilarityCompare profile={profile} reviews={[...result.matched, ...result.otherReviews]} />}
 
       <SizeChart chart={product.sizeChart} compare={compare} onSelect={setPicked} recommendedSize={result.recommendedSize} selectedSize={selectedSize} />
 

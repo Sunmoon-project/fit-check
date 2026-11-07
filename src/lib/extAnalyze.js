@@ -5,6 +5,7 @@ import { collectDiagnostics, diagnosticLines } from './diagnose.js'
 import { generateFitComment, describeEvidence, bodyValuesForProfile, CONFIDENCE_LABEL, FIT_LABEL } from './fitEngine.js'
 import { compareSizes, compactCompare } from './sizeCompare.js'
 import { summarizeSizeChart } from './sizeSummary.js'
+import { shoeViewFor, feelSizeText } from './shoeFit.js'
 // 사용자가 직접 적은 사이즈표: 열 이름(예: 어깨 가슴 총장)과 줄(예: M 50 57 68) → buildSizeChart 입력 모양.
 // 저장하지 않고 이번 분석에만 씁니다. 잘못된 줄은 버려요.
 export function manualChartRows(columnsText, linesText) {
@@ -45,6 +46,19 @@ function reviewView(r, disp = (x) => x) {
     fit: r.fit ?? null,
     fitLabel: r.fit ? FIT_LABEL[r.fit] || null : null,
     similarity: Number.isFinite(r.similarity) ? r.similarity : null,
+    shoe: shoeReviewView(r),
+  }
+}
+
+// 신발 리뷰의 구매 옵션·체감·발볼 (신발 리뷰가 아니면 null)
+function shoeReviewView(r) {
+  const f = r.view?.shoeFeel
+  if (!f) return null
+  return {
+    option: r.view.option || '',
+    sizeFeel: f.size ? feelSizeText(f) : null,
+    width: f.width ? { narrow: '좁음', normal: '적당', wide: '넓음' }[f.width] : null,
+    extras: (f.extras || []).slice(0, 6).map((e) => ({ label: e.label, value: e.value })),
   }
 }
 
@@ -104,7 +118,8 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
   }
 
   const result = generateFitComment(profile, product)
-  const cmpView = compareView(product, profile, result)
+  const shoe = product.category === 'shoes' ? shoeViewFor(product, profile) : null
+  const cmpView = shoe ? { view: null, failed: false } : compareView(product, profile, result)
   // 사이즈표의 표시 이름('1 (M)')이 있으면 그 이름으로 보여줍니다.
   const disp = (x) => product.sizeChart?.display?.[String(x).replace(/\s/g, '').toUpperCase()] || x
   const view = (r) => reviewView(r, disp)
@@ -118,8 +133,8 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     categoryEvidence: product.categoryEvidence,
     categoryCandidates: (product.categoryCandidates || []).map((c) => ({ key: c, label: CATEGORY_LABEL[c] || c })),
     categoryOverridden: product.categoryOverridden === true,
-    recommendedSize: result.recommendedSize,
-    recommendedLabel: result.recommendedLabel,
+    recommendedSize: shoe?.recommended ? String(shoe.recommended.mm) : result.recommendedSize,
+    recommendedLabel: shoe?.recommended ? shoe.recommended.label : result.recommendedLabel,
     reviewsLoaded: product.reviews.length,
     reviewTotalOnPage: product.reviewTotalOnPage ?? null,
     sizeChartMissing: !product.sizeChart,
@@ -127,13 +142,15 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     reviewViews: {
       matched: (result.matched || []).slice(0, MAX_SHOWN.matched).map(view),
       others: (result.otherReviews || []).slice(0, MAX_SHOWN.others).map(view),
+      isShoes: !!shoe,
       me: { gender: profile.gender === 'male' || profile.gender === 'female' ? profile.gender : null, height: profile.height, weight: profile.weight },
       matchedTotal: (result.matched || []).length,
       othersTotal: (result.otherReviews || []).length,
     },
     exportData: exportData(product, pageUrl, result),
     compareView: cmpView.view,
-    sizeSummary: summarizeSizeChart({ sizes: cmpView.view?.sizes, recommended: result.recommendedSize, category: product.category }),
+    shoeView: shoe,
+    sizeSummary: shoe ? null : summarizeSizeChart({ sizes: cmpView.view?.sizes, recommended: result.recommendedSize, category: product.category }),
     chartView: product.sizeChart?.view ? { ...product.sizeChart.view, recommended: result.recommendedSize ?? null } : null,
     confidence: result.confidence,
     confidenceLabel: CONFIDENCE_LABEL[result.confidence],
