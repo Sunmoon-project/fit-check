@@ -2782,7 +2782,11 @@ await atest('content.js(가짜 DOM, vm): 체형 비교는 키·몸무게를 한 
   assert.ok(rows.length >= 2)
   const groups = created.filter((e) => e.className === 'cgrp')
   assert.equal(groups.length, rows.length, '후기마다 키·몸무게 묶음 하나')
-  assert.ok(groups.every((g) => g.children.length === 2), '나 / 후기 두 칸')
+  assert.ok(groups.every((g) => g.children.length === 1), '후기 체형 한 칸만')
+  const labels = created.filter((e) => e.className === 'ccl').map((e) => e.textContent)
+  assert.equal(labels.length, rows.length)
+  assert.ok(labels.every((t) => t === '후기 체형'), '내 값 칸(나) 없이 후기 체형만')
+  assert.ok(created.filter((e) => e.className === 'ccv').every((e) => /^\d+cm · \d+kg$/.test(e.textContent)), '후기 키·몸무게 값')
   assert.equal(created.filter((e) => e.className === 'cbf').length, rows.length, '퍼센트 막대는 후기마다 하나')
   assert.equal(created.filter((e) => /^cb (high|mid|low)$/.test(e.className)).length, rows.length, '구간 색 클래스')
   assert.ok(created.every((e) => e.className !== 'cbl' || e.children.length === 2))
@@ -2800,6 +2804,7 @@ test('체형 비교: 유사도 구간과 차이 문구 (순수 함수, 가짜 �
   assert.ok(Object.keys(TIER_LABEL).length === 3)
   const web = readFileSync(new URL('../src/components/SimilarityCompare.jsx', import.meta.url), 'utf8')
   assert.ok(web.includes('<BodyPair') && web.includes('<SimBar') && !web.includes('<Bar '), '웹도 묶음 + 막대 하나')
+  assert.ok(!web.includes('c.height.me') && !web.includes('c.weight.me'), '웹도 내 값 칸 없음')
 })
 
 test('사이즈표 회귀 방지: 95/100·S/M 같은 묶음 옵션은 표 줄 이름을 바꾸지 않고, 옵션만으로 의류를 신발로 만들지 않는다 (가짜 표)', () => {

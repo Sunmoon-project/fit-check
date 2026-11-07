@@ -43,14 +43,13 @@ function useCountUp(targets, active) {
   return { shown, grown }
 }
 
-// 키·몸무게를 나와 후기 두 칸으로 묶어 한 번에 보여줘요.
+// 후기 작성자의 키·몸무게만 보여줘요 (내 체형은 위쪽 한 줄에 있어요).
 function BodyPair({ c }) {
   const dt = diffText(c)
   return (
     <>
       <div className="cmp-pair">
-        <div className="cmp-col"><span className="cmp-who">나</span><span className="cmp-val">{c.height.me}cm · {c.weight.me}kg</span></div>
-        <div className="cmp-col"><span className="cmp-who">후기</span><span className="cmp-val">{c.height.review}cm · {c.weight.review}kg</span></div>
+        <div className="cmp-col"><span className="cmp-who">후기 체형</span><span className="cmp-val">{c.height.review}cm · {c.weight.review}kg</span></div>
       </div>
       {dt && <p className="cmp-diff">{dt}</p>}
     </>
