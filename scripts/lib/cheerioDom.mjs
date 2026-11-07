@@ -8,6 +8,19 @@ export function fakeDocument(html) {
     get textContent() {
       return $(node).text()
     },
+    get children() {
+      return $(node).children().toArray().map(wrap)
+    },
+    get parentElement() {
+      const p = $(node).parent()
+      return p.length && p[0].type === 'tag' ? wrap(p[0]) : null
+    },
+    get tagName() {
+      return String(node.name || '').toUpperCase()
+    },
+    get className() {
+      return $(node).attr('class') ?? ''
+    },
     getAttribute: (n) => $(node).attr(n) ?? null,
     querySelectorAll: (sel) => $(node).find(sel).toArray().map(wrap),
     querySelector: (sel) => {

@@ -25,7 +25,8 @@ import {
 import { PRODUCTS } from '../src/data/mockData.js'
 import { parseProductHtml } from '../server/productParser.js'
 import { parsePage, isProductPage } from '../src/lib/pageParser.js'
-import { analyzePage } from '../src/lib/extAnalyze.js'
+import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
+import { collectDiagnostics, formatReport, REPORT_MAX } from '../src/lib/diagnose.js'
 import { buildProfile, isUsableProfile } from '../src/lib/extProfile.js'
 import { fakeDocument } from './lib/cheerioDom.mjs'
 import { checkManifest } from './checkExtension.mjs'
@@ -974,6 +975,121 @@ test('확장 프로필: 입력 검증과 치수 정리', () => {
   assert.deepEqual(profile.measurements, { chest: 88 })
   assert.ok(isUsableProfile(profile))
   assert.ok(!isUsableProfile(null))
+})
+
+// ---------- 크롬 확장: <table>이 아닌 사이즈표 (전부 직접 만든 가짜 HTML, 실제 무신사 DOM이 아님) ----------
+const TABLE_CHART_HTML = '<html><body><h1>오버핏 후드 티셔츠</h1><table><tr><th>사이즈</th><th>어깨너비</th><th>가슴단면</th><th>총장</th></tr><tr><td>M</td><td>50</td><td>57</td><td>68</td></tr><tr><td>L</td><td>52</td><td>60</td><td>70</td></tr></table></body></html>'
+const wrapBody = (inner) => `<html><head><meta property="og:title" content="오버핏 후드 티셔츠"></head><body><h1>오버핏 후드 티셔츠</h1>${inner}</body></html>`
+const refMeasures = parsePage(fakeDocument(TABLE_CHART_HTML), '').sizeChart.measures
+const measuresOf = (html) => parsePage(fakeDocument(wrapBody(html)), '').sizeChart?.measures
+
+test('가짜 HTML: class만 있는 div/grid 사이즈표가 table과 같은 measures를 만든다', () => {
+  const html = `<section><h3>사이즈 정보</h3><div class="sz-grid">
+<div class="sz-row"><span class="c">사이즈</span><span class="c">어깨너비</span><span class="c">가슴단면</span><span class="c">총장</span></div>
+<div class="sz-row"><span class="c">M</span><span class="c">50</span><span class="c">57</span><span class="c">68</span></div>
+<div class="sz-row"><span class="c">L</span><span class="c">52</span><span class="c">60</span><span class="c">70</span></div></div></section>`
+  assert.deepEqual(measuresOf(html), refMeasures)
+})
+
+test('가짜 HTML: 칸이 한 줄로 늘어선 CSS grid도 읽는다', () => {
+  const cells = ['사이즈', '어깨너비', '가슴단면', '총장', 'M', '50', '57', '68', 'L', '52', '60', '70'].map((c) => `<div>${c}</div>`).join('')
+  assert.deepEqual(measuresOf(`<div class="g">${cells}</div>`), refMeasures)
+})
+
+test('가짜 HTML: role=table/row/cell 사이즈표가 table과 같은 measures를 만든다', () => {
+  const row = (cs, role = 'cell') => `<div role="row">${cs.map((c) => `<div role="${role}">${c}</div>`).join('')}</div>`
+  const html = `<div role="table">${row(['사이즈', '어깨너비', '가슴단면', '총장'], 'columnheader')}${row(['M', '50', '57', '68'])}${row(['L', '52', '60', '70'])}</div>`
+  assert.deepEqual(measuresOf(html), refMeasures)
+})
+
+test('가짜 HTML: 세로 방향(한 줄이 한 항목) 사이즈표를 뒤집어 읽는다', () => {
+  const line = (cs) => `<ul class="m">${cs.map((c) => `<li>${c}</li>`).join('')}</ul>`
+  const html = `<div class="chart">${line(['사이즈', 'M', 'L'])}${line(['어깨너비', '50', '52'])}${line(['가슴단면', '57', '60'])}${line(['총장', '68', '70'])}</div>`
+  assert.deepEqual(measuresOf(html), refMeasures)
+})
+
+test('가짜 HTML: 한 열이 한 사이즈인 열 단위 구조도 읽는다', () => {
+  const col = (cs) => `<div class="col">${cs.map((c) => `<span>${c}</span>`).join('')}</div>`
+  const html = `<div class="cols">${col(['사이즈', '어깨너비', '가슴단면', '총장'])}${col(['M', '50', '57', '68'])}${col(['L', '52', '60', '70'])}</div>`
+  assert.deepEqual(measuresOf(html), refMeasures)
+})
+
+test('가짜 HTML: 숨겨진(display:none, hidden, aria-hidden) 사이즈표도 읽는다', () => {
+  const chart = `<div class="sz"><div class="r"><b>사이즈</b><b>어깨너비</b><b>가슴단면</b><b>총장</b></div><div class="r"><b>M</b><b>50</b><b>57</b><b>68</b></div><div class="r"><b>L</b><b>52</b><b>60</b><b>70</b></div></div>`
+  for (const attrs of ['style="display:none"', 'hidden', 'aria-hidden="true"']) {
+    assert.deepEqual(measuresOf(`<div ${attrs}>${chart}</div>`), refMeasures, attrs)
+  }
+})
+
+test('가짜 HTML: 단위가 따로 붙은 칸과 Free/95/100(M)/(cm) 머리글을 허용한다', () => {
+  const row = (cs) => `<div class="r">${cs.map((c) => `<i>${c}</i>`).join('')}</div>`
+  const html = `<div>${row(['사이즈', '어깨(cm)', '가슴단면(cm)', '총장(cm)'])}${row(['Free', '50', '57', '68'])}${row(['95', '51', '58', '69'])}${row(['100(M)', '52', '60', '70'])}${row(['M cm', '53', '61', '71'])}</div>`
+  const m = measuresOf(html)
+  assert.deepEqual(Object.keys(m).sort(), ['100(M)', '95', 'FREE', 'M'])
+  assert.equal(m.FREE.shoulder, 50)
+})
+
+test('가짜 HTML: 나중에 그려지는 사이즈표는 그려지기 전엔 없고 후엔 읽힌다', () => {
+  const before = '<div class="sz-area"><h3>사이즈 정보</h3></div>'
+  const chart = '<div class="r"><b>사이즈</b><b>어깨너비</b><b>가슴단면</b><b>총장</b></div><div class="r"><b>M</b><b>50</b><b>57</b><b>68</b></div>'
+  assert.equal(parsePage(fakeDocument(wrapBody(before)), '').sizeChart, null)
+  assert.ok(parsePage(fakeDocument(wrapBody(`<div class="sz-area"><h3>사이즈 정보</h3><div>${chart}</div></div>`)), '').sizeChart)
+})
+
+const PLANT = { name: '비밀상품이름XYZ', review: '리뷰본문비밀문장 키 171 몸무게 63 M 사이즈 정사이즈예요', profile: '체형값987654' }
+const IMG_HTML = `<html><head><meta property="og:title" content="${PLANT.name}"></head><body><h1>${PLANT.name}</h1>
+<section class="size-info"><h3>사이즈 정보</h3><img src="a.jpg"></section>
+<div class="review-item">${PLANT.review}</div><div class="x">${PLANT.profile}</div></body></html>`
+
+test('가짜 HTML: 이미지뿐인 사이즈표는 차트 없이 진단 개수를 던지지 않고 만든다', () => {
+  const root = fakeDocument(IMG_HTML)
+  assert.equal(parsePage(root, '').sizeChart, null)
+  const d = collectDiagnostics(root, 'https://shop.example/p/1?a=1#h', '0.1.0')
+  assert.equal(d.chartRowCount, 0)
+  assert.equal(d.imageNearHeading, true)
+  assert.equal(d.tableCount, 0)
+  assert.equal(d.reviewsKept, 1)
+})
+
+test('가짜 HTML: 진단 리포트에 프로필·리뷰 글·상품명·쿼리·해시가 없다', () => {
+  const d = collectDiagnostics(fakeDocument(IMG_HTML), 'https://shop.example/p/1?token=SECRETQ#frag', '0.1.0')
+  d.errorName = 'TypeError'
+  d.errorMessage = 'x failed at https://shop.example/p/1?token=SECRETQ'
+  const rep = formatReport(d)
+  for (const bad of [PLANT.name, PLANT.profile, '리뷰본문비밀문장', 'SECRETQ', 'frag', '171']) assert.ok(!rep.includes(bad), bad)
+  assert.ok(rep.includes('https://shop.example/p/1'))
+  assert.ok(rep.includes('0.1.0'))
+})
+
+test('가짜 HTML: 진단 리포트 길이는 상한을 넘지 않는다', () => {
+  const rows = Array.from({ length: 300 }, (_, i) => `<div class="r${i}"><b>사이즈</b><b>어깨</b><b>M</b></div>`).join('')
+  const rep = formatReport(collectDiagnostics(fakeDocument(wrapBody(`<div class="big">${rows}</div>`)), 'https://shop.example/p/' + 'a'.repeat(5000)))
+  assert.ok(rep.length <= REPORT_MAX)
+})
+
+test('가짜 HTML: 데이터가 없을 때 analyzePage 메시지와 details에 구체적인 개수가 있다', () => {
+  const r = analyzePage(fakeDocument(IMG_HTML), 'https://shop.example/p/1', { height: 175, weight: 70 }, '0.1.0')
+  assert.equal(r.status, 'no-data')
+  assert.ok(r.message.includes('이미지'))
+  assert.ok(r.details.some((l) => /table 0개/.test(l)))
+  assert.ok(r.details.some((l) => /리뷰 후보 \d+개/.test(l)))
+  assert.equal(r.recommendedSize, undefined)
+  assert.ok(r.diagnostics && typeof r.diagnostics.gridCandidateCount === 'number')
+})
+
+test('가짜 HTML: 직접 입력한 사이즈표로 분석을 다시 할 수 있다', () => {
+  const extraRows = manualChartRows('어깨 가슴 총장', 'M 50 57 68\nL 52 60 70\n잘못된 줄 1')
+  assert.equal(extraRows[0].length, 3)
+  const r = analyzePage(fakeDocument(IMG_HTML), 'https://shop.example/p/1', { height: 175, weight: 70 }, '', { extraRows })
+  assert.equal(r.status, 'ok')
+  assert.deepEqual(manualChartRows('', 'M 1'), [])
+})
+
+test('확장 소스와 diagnose.js에 네트워크 호출이 없다 (새 코드 포함)', () => {
+  for (const f of ['src/lib/diagnose.js', 'src/lib/pageParser.js', 'src/lib/extAnalyze.js', 'extension/content.js']) {
+    const code = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8')
+    assert.ok(!/\b(fetch|XMLHttpRequest|sendBeacon|WebSocket)\b/.test(code), f)
+  }
 })
 
 // ---------- 크롬 확장: manifest ----------

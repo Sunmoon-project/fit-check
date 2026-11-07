@@ -1,10 +1,13 @@
 // 상품 페이지에 "내 사이즈 찾기" 버튼과 결과 카드를 띄웁니다.
 // 페이지 데이터는 이 브라우저 안에서만 읽고, 어디로도 보내지 않아요. 네트워크 호출이 없습니다.
 import { isProductPage } from '../src/lib/pageParser.js'
-import { analyzePage } from '../src/lib/extAnalyze.js'
+import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
+import { collectDiagnostics, formatReport } from '../src/lib/diagnose.js'
 import { EXT_PROFILE_KEY, isUsableProfile } from '../src/lib/extProfile.js'
 
 const WAIT_MS = 4000 // 늦게 그려지는 표·리뷰를 기다리는 최대 시간
+const RETRY_DELAYS = [1500, 2500] // 못 찾았을 때 다시 읽기 전 기다림. 전체 대기는 약 8초 이내
+const EXT_VERSION = (typeof chrome !== 'undefined' && chrome.runtime?.getManifest?.().version) || ''
 const QUIET_MS = 500 // 이 시간 동안 화면 변화가 없으면 다 그려졌다고 봅니다
 
 const CSS = `
@@ -23,6 +26,10 @@ const CSS = `
 .why{margin:6px 0 0;padding-left:16px;color:#555;font-size:12px}
 h3{margin:10px 0 2px;font-size:14px}
 p{margin:0}
+.det{margin:8px 0 0;padding-left:16px;color:#555;font-size:11px}
+.btn{margin-top:8px;border:1px solid #111;border-radius:8px;background:#fff;color:#111;padding:6px 10px;font-size:12px;cursor:pointer}
+.ok{margin-top:6px;font-size:12px;color:#0a7a3c}
+.inp{width:100%;margin-top:6px;border:1px solid #d4d4d4;border-radius:6px;padding:6px;font-size:12px;font-family:inherit}
 .note{margin-top:10px;font-size:11px;color:#8a8a8e}
 `
 
@@ -84,10 +91,88 @@ function showCard(build) {
   panel.append(card)
 }
 
+// 진단 리포트 복사: 클립보드 API가 막히면 textarea + execCommand로 대신해요. 어디로도 전송하지 않습니다.
+function copyText(text) {
+  const fallback = () => {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    shadow.appendChild(ta)
+    ta.select()
+    let ok = false
+    try {
+      ok = document.execCommand('copy')
+    } catch {
+      ok = false
+    }
+    ta.remove()
+    return ok
+  }
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text).then(() => true, () => fallback())
+  return Promise.resolve(fallback())
+}
+
+function reportBlock(report) {
+  const box = el('div')
+  const btn = el('button', 'btn', '진단 리포트 복사')
+  btn.type = 'button'
+  const done = el('p', 'ok')
+  btn.addEventListener('click', async () => {
+    done.textContent = (await copyText(report)) ? '복사했어요' : '복사하지 못했어요. 브라우저 권한을 확인해주세요.'
+  })
+  box.append(btn, done)
+  box.append(el('p', 'note', '리포트에는 주소(쿼리·해시 제외), 확장 버전, 찾은 개수, 화면 구조 모양(글자는 L/N/T 기호)만 들어 있어요. 키·몸무게 등 체형 정보, 리뷰 글, 상품명은 들어 있지 않아요.'))
+  return box
+}
+
+// 사이즈표를 직접 입력하는 작은 양식 (상의·하의, cm). 저장하지 않고 이번 분석에만 써요.
+function manualForm(r) {
+  const box = el('div')
+  const open = el('button', 'btn', '사이즈표 직접 입력')
+  open.type = 'button'
+  open.addEventListener('click', () => {
+    open.remove()
+    const cols = el('input', 'inp')
+    cols.placeholder = '열 순서 예: 어깨 가슴 총장'
+    cols.setAttribute('aria-label', '열 순서')
+    const lines = el('textarea', 'inp')
+    lines.rows = 4
+    lines.placeholder = '줄마다 사이즈와 숫자 예:\nM 50 57 68\nL 52 60 70'
+    lines.setAttribute('aria-label', '사이즈별 실측 (cm)')
+    const go = el('button', 'btn', '이 표로 다시 분석')
+    go.type = 'button'
+    const msg = el('p', 'ok')
+    go.addEventListener('click', async () => {
+      const extraRows = manualChartRows(cols.value, lines.value)
+      if (!extraRows.length) {
+        msg.textContent = '열 순서와 줄의 숫자 개수가 맞는지 확인해주세요.'
+        return
+      }
+      const profile = await readProfile()
+      if (!isUsableProfile(profile)) {
+        msg.textContent = '먼저 확장 프로그램 아이콘을 눌러 체형 정보를 저장해주세요.'
+        return
+      }
+      renderResult(analyzePage(document, location.href, profile, EXT_VERSION, { extraRows }))
+    })
+    box.append(cols, lines, go, msg, el('p', 'note', '입력한 표는 저장하거나 전송하지 않고 이번 분석에만 써요.'))
+  })
+  box.append(open)
+  return box
+}
+
 function renderResult(r) {
   showCard((card) => {
     if (r.status !== 'ok') {
       card.append(el('p', null, r.message))
+      if (r.details?.length) {
+        const ul = el('ul', 'det')
+        for (const t of r.details) ul.append(el('li', null, t))
+        card.append(ul)
+      }
+      if (r.diagnostics) {
+        card.append(manualForm(r))
+        card.append(reportBlock(formatReport(r.diagnostics)))
+      }
       return
     }
     const conf = el('span', 'badge', r.confidenceLabel.text)
@@ -143,9 +228,25 @@ async function run() {
       return
     }
     await waitForRender()
-    renderResult(analyzePage(document, location.href, profile))
-  } catch {
-    renderResult({ status: 'error', message: '분석 중 문제가 생겼어요. 페이지를 새로고침한 뒤 다시 눌러주세요.' })
+    // 사이즈표를 못 찾으면 짧게 기다렸다가 다시 읽어요. 클릭·스크롤은 하지 않고 화면 글만 읽습니다.
+    let result = analyzePage(document, location.href, profile, EXT_VERSION)
+    for (const delay of RETRY_DELAYS) {
+      if (result.status !== 'no-data') break
+      await new Promise((r) => setTimeout(r, delay))
+      result = analyzePage(document, location.href, profile, EXT_VERSION)
+    }
+    renderResult(result)
+  } catch (err) {
+    // 오류는 이름과 메시지만 리포트에 넣습니다 (스택 제외, 주소는 메시지에서 제거).
+    let diagnostics = null
+    try {
+      diagnostics = collectDiagnostics(document, location.href, EXT_VERSION)
+      diagnostics.errorName = String(err?.name || 'Error')
+      diagnostics.errorMessage = String(err?.message || '')
+    } catch {
+      diagnostics = null
+    }
+    renderResult({ status: 'error', message: '분석 중 문제가 생겼어요. 페이지를 새로고침한 뒤 다시 눌러주세요.', diagnostics })
   } finally {
     fab.disabled = false
     fab.textContent = '내 사이즈 찾기'
