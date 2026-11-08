@@ -678,12 +678,13 @@ function reviewsBlock(rvs) {
 }
 
 // 발 정보 비교 탭(신발): 후기마다 구매 사이즈·사이즈 체감·발볼을 보여줘요. 신발 후기에는 키·몸무게가 없는 경우가 많아서 체형 유사도는 쓰지 않아요.
+// 다른 탭 build()처럼 요소 하나를 돌려줘요.
 function footCompare(all) {
   const box = el('div')
   const rows = all.filter((r) => r.shoe || r.size != null).slice(0, COMPARE_MAX)
   if (!rows.length) {
     box.append(el('p', 'note', '구매 사이즈나 사이즈 체감을 읽은 리뷰가 없어요.'))
-    return { node: box, play() {} }
+    return box
   }
   const ul = el('ul', 'shr')
   for (const r of rows) {
@@ -694,7 +695,9 @@ function footCompare(all) {
     ul.append(li)
   }
   box.append(ul)
-  return { node: box, play() {} }
+  // 탭 build()는 요소를 돌려줘야 해요. { node, play } 객체를 돌려주면 탭 쪽에서 한 번 더 감싸 replaceChildren에 객체가 들어가고
+  // 실제 DOM은 그것을 글자로 바꿔 '[object Object]'를 보여줘요.
+  return box
 }
 
 // 체형 비교 탭: 후기마다 성별·키·몸무게를 내 값과 나란히 보여주고, 유사도 숫자가 0에서 올라가요.

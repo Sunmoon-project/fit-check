@@ -1500,12 +1500,19 @@ async function runContentInFakeDom(pageHtml = null, extra = {}, measurements = {
     const code = readFileSync(join(outDir, 'content.js'), 'utf8')
     const texts = []
     const listeners = {}
+    const asNode = (n) => {
+      if (n && typeof n === 'object' && typeof n.tagName === 'string') return n
+      const t = String(n)
+      texts.push(t)
+      return { nodeType: 3, textContent: t }
+    }
     const makeEl = (tag) => {
       const e = {
         tagName: String(tag).toUpperCase(), children: [], className: '', hidden: false, disabled: false, style: {},
         set innerHTML(v) { throw new Error('innerHTML 사용 금지') }, set outerHTML(v) { throw new Error('outerHTML 사용 금지') }, insertAdjacentHTML() { throw new Error('insertAdjacentHTML 사용 금지') },
         _text: '', set textContent(v) { this._text = String(v); texts.push(this._text) }, get textContent() { return this._text },
-        append(...n) { this.children.push(...n) }, appendChild(n) { this.children.push(n); return n }, replaceChildren(...n) { this.children = [...n] },
+        // 실제 DOM처럼 요소가 아닌 값은 String()으로 바꾼 글자 노드로 넣어요 (객체를 넣으면 '[object Object]'가 보여요).
+        append(...n) { this.children.push(...n.map(asNode)) }, appendChild(n) { this.children.push(n); return n }, replaceChildren(...n) { this.children = n.map(asNode) },
         setAttribute() {}, getAttribute() { return null }, addEventListener(type, fn) { (this._l ||= {})[type] = fn }, click() { this._l?.click?.() },
         classList: {
           contains: (c) => e.className.split(' ').includes(c),
@@ -3672,6 +3679,16 @@ await atest('content.js(가짜 DOM, vm): 가짜 HTML 신발 페이지는 신발 
   assert.ok(texts.some((t) => t.includes('휴리스틱')))
   assert.ok(texts.includes('발 정보 비교'))
   assert.ok(!texts.includes('체형 비교'))
+})
+
+await atest('content.js(가짜 DOM, vm): 신발 발 정보 비교 탭을 열어도 카드 어디에도 [object Object]가 없다', async () => {
+  const { texts, created } = await runContentInFakeDom(shoePage(SHOE_CARDS))
+  const tab = created.find((e) => e.tagName === 'BUTTON' && e.textContent === '발 정보 비교')
+  assert.ok(tab, '발 정보 비교 탭이 있어야 해요')
+  tab._l.click()
+  assert.ok(!texts.some((t) => t.includes('[object Object]')), `[object Object]가 보여요: ${texts.filter((t) => t.includes('[object')).join('|')}`)
+  assert.ok(texts.some((t) => t.startsWith('사이즈 ') && t.includes('작아요')), '사이즈 체감 줄')
+  assert.ok(texts.some((t) => t.startsWith('발볼 ')), '발볼 줄')
 })
 
 await atest('content.js(가짜 DOM, vm): 신발 사이즈표에 발볼 열이 있으면 확장 신발 비교에 발볼 한 줄과 사이즈별 발볼이 나온다', async () => {
