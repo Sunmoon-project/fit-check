@@ -4392,4 +4392,141 @@ await atest('content.js(가짜 DOM, vm): 맞는 사이즈가 없으면 안내문
   assert.ok(texts.includes('맞는 사이즈가 없어요'))
 })
 
+// ---------- 상품 대상 성별 ----------
+import { classifyTargetGender, targetGenderNotice, genderFromText } from '../src/lib/targetGender.js'
+import { shoeGender } from '../src/lib/shoeFit.js'
+
+const tgOpts = (a) => a.map(String)
+const tgPage = (name, opts, extraHead = '') =>
+  `<html><head><title>${name}</title>${extraHead}</head><body><h1>${name}</h1>` +
+  // 가짜 상품 페이지: 사이즈는 선택 목록(select/option)으로 둬요 (li 안의 맨 숫자는 '리뷰 250' 오인 방지로 읽지 않아요)
+  `<select class="opts">${opts.map((o) => `<option>${o}</option>`).join('')}</select></body></html>`
+const SHOE_ISH = '러닝 스니커즈'
+
+test('대상 성별: 여성 표기 이름 → female, 남성 → male, Unisex/공용/남녀 → unisex', () => {
+  assert.equal(classifyTargetGender({ name: '우먼스 에어 스니커즈' }).gender, 'female')
+  assert.equal(classifyTargetGender({ name: 'W Air Max (WMNS)' }).gender, 'female')
+  assert.equal(classifyTargetGender({ name: '남성 데님 팬츠' }).gender, 'male')
+  assert.equal(classifyTargetGender({ name: 'Men Classic Shirt' }).gender, 'male')
+  assert.equal(classifyTargetGender({ name: 'Unisex Hoodie' }).gender, 'unisex')
+  assert.equal(classifyTargetGender({ name: '남녀공용 후드' }).gender, 'unisex')
+  assert.equal(classifyTargetGender({ name: '공용 러닝화' }).gender, 'unisex')
+  assert.equal(classifyTargetGender({ name: '남성 여성 겸용 티셔츠' }).gender, 'unisex')
+  assert.equal(classifyTargetGender({ name: 'Men & Women Tee' }).gender, 'unisex')
+})
+
+test('대상 성별: women이 men을 포함해도 혼동하지 않는다', () => {
+  assert.equal(genderFromText("Women's Runner"), 'female')
+  assert.equal(genderFromText("Men's Runner"), 'male')
+  assert.equal(genderFromText('womens sneaker'), 'female')
+  assert.equal(genderFromText('mens sneaker'), 'male')
+  assert.equal(genderFromText('Fitment Element Cement'), null)
+  assert.equal(classifyTargetGender({ name: 'Women Jacket' }).scores.male, 0)
+})
+
+test('대상 성별: 신발 옵션 220~250 → 여성, 260~290 → 남성, 옷은 옵션 범위를 근거로 쓰지 않는다', () => {
+  const f = classifyTargetGender({ isShoes: true, optionLabels: tgOpts([220, 230, 240, 250]) })
+  assert.equal(f.gender, 'female')
+  assert.equal(f.optionRangeText, '220~250')
+  assert.deepEqual(f.evidences.map((e) => e.kind), ['option'])
+  const m = classifyTargetGender({ isShoes: true, optionLabels: tgOpts([260, 270, 280, 290]) })
+  assert.equal(m.gender, 'male')
+  assert.equal(classifyTargetGender({ isShoes: true, optionLabels: tgOpts([230, 240, 250, 260, 270]) }).gender, null, '넓은 범위는 모름')
+  assert.equal(classifyTargetGender({ isShoes: false, optionLabels: tgOpts([220, 230, 240, 250]) }).gender, null)
+  assert.equal(classifyTargetGender({ isShoes: true, optionLabels: ['250 (250-255)'] }).gender, null, '옵션 1개는 범위 근거가 아니다')
+})
+
+test('대상 성별: 근거가 충돌하면 모름, 근거가 없으면 null, 결과에 상품명 원문은 없다', () => {
+  const conflict = classifyTargetGender({ name: '남성 스니커즈', isShoes: true, optionLabels: tgOpts([230, 240, 250]) })
+  assert.equal(conflict.gender, null)
+  assert.equal(conflict.confidence, null)
+  assert.ok(conflict.evidences.length === 2)
+  const none = classifyTargetGender({ name: '클래식 스니커즈', isShoes: true, optionLabels: [] })
+  assert.equal(none.gender, null)
+  assert.equal(classifyTargetGender().gender, null)
+  // 이름 + 옵션이 같은 쪽이면 더 높은 확신
+  const both = classifyTargetGender({ name: '여성용 스니커즈', isShoes: true, optionLabels: tgOpts([230, 240, 250]) })
+  assert.equal(both.gender, 'female')
+  assert.equal(both.confidence, 'high')
+  const secret = '아주특별한상품명여성'
+  const r = classifyTargetGender({ name: secret, breadcrumb: '신발 여성', jsonLdGender: 'female' })
+  assert.ok(!JSON.stringify(r).includes(secret) && !JSON.stringify(r).includes('신발 여성'))
+  assert.deepEqual(r.evidences.map((e) => `${e.kind}:${e.score}`), ['name:3', 'breadcrumb:2', 'jsonld:3'])
+})
+
+test('대상 성별: parsePage가 이름·옵션·JSON-LD로 product.targetGender를 채운다 (가짜 HTML)', () => {
+  const f = parsePage(fakeDocument(tgPage(SHOE_ISH, ['230', '240', '250'])), '')
+  assert.equal(f.category, 'shoes')
+  assert.equal(f.targetGender.gender, 'female')
+  assert.equal(f.targetGender.optionRangeText, '230~250')
+  const ld = `<script type="application/ld+json">${JSON.stringify({ '@type': 'Product', name: '빈티지 자켓', audience: { '@type': 'PeopleAudience', suggestedGender: 'female' } })}</script>`
+  const j = parsePage(fakeDocument(tgPage('빈티지 자켓', [], ld)), '')
+  assert.equal(j.targetGender.gender, 'female')
+  assert.equal(j.targetGender.isShoes, false)
+  const u = parsePage(fakeDocument(tgPage('Unisex 러닝 스니커즈', ['230', '240', '250'])), '')
+  assert.equal(u.targetGender.gender, 'unisex')
+  const n = parsePage(fakeDocument(tgPage('빈티지 자켓', [])), '')
+  assert.equal(n.targetGender.gender, null)
+})
+
+test('대상 성별: 프로필 성별과 다를 때만 안내 문구, 신발은 mm 기준 문구 포함', () => {
+  const tg = { gender: 'female', optionRangeText: '230~250', isShoes: true }
+  const n = targetGenderNotice(tg, 'male')
+  assert.equal(n.mismatch, true)
+  assert.equal(n.gender, 'female')
+  assert.ok(n.text.startsWith('여성용으로 보이는 상품이에요(옵션 230~250)'))
+  assert.ok(n.text.includes('판정은 발길이(mm) 기준이에요'))
+  assert.equal(targetGenderNotice(tg, 'female'), null)
+  assert.equal(targetGenderNotice({ gender: 'unisex' }, 'male'), null)
+  assert.equal(targetGenderNotice({ gender: null }, 'male'), null)
+  assert.equal(targetGenderNotice(tg, ''), null)
+  const clothes = targetGenderNotice({ gender: 'male', optionRangeText: '', isShoes: false }, 'female')
+  assert.equal(clothes.text, '남성용으로 보이는 상품이에요.')
+  // shoeViewFor: 프로필 남성 + 여성용 상품
+  const prod = parsePage(fakeDocument(tgPage(SHOE_ISH, ['230', '240', '250'])), '')
+  const v = shoeViewFor(prod, shoeProfile())
+  assert.equal(v.targetGender.mismatch, true)
+  assert.ok(v.targetGender.text.includes('여성용으로 보이는 상품이에요(옵션 230~250)'))
+  assert.equal(shoeViewFor(prod, shoeProfile({ gender: 'female' })).targetGender, null)
+  // 판정은 성별과 무관: 같은 발길이면 같은 추천/판정
+  const a = shoeViewFor(prod, shoeProfile({ gender: 'male' }))
+  const b = shoeViewFor(prod, shoeProfile({ gender: 'female' }))
+  assert.deepEqual(a.rows, b.rows)
+})
+
+test('대상 성별: US/UK 환산은 상품 대상 성별을 우선 쓴다', () => {
+  assert.equal(shoeGender('male', '', 'female'), 'female')
+  assert.equal(shoeGender('female', '', 'male'), 'male')
+  assert.equal(shoeGender('male', '', 'unisex'), 'male')
+  assert.equal(shoeGender('male', '', null), 'male')
+  assert.equal(shoeGender(null, '여성 부츠', null), 'female')
+  assert.equal(shoeSizeToMm('US 8', { gender: 'male', targetGender: 'female' }).mm, 250)
+  assert.equal(shoeSizeToMm('US 8', { gender: 'male' }).mm, 260)
+  const w = shoeWardrobeFields({ product: { name: 'x', targetGender: { gender: 'female' } }, size: 'US 8', profile: shoeProfile({ gender: 'male' }) })
+  assert.equal(w.measures.footLength, 250)
+})
+
+test('웹 렌더: ShoeCompare·ResultView(옷)에 대상 성별 안내 한 줄이 나온다', () => {
+  const product = { ...parsePage(fakeDocument(tgPage(SHOE_ISH, ['230', '240', '250'])), ''), mall: 'shop', url: 'https://shop.example/s' }
+  const view = shoeViewFor(product, shoeProfile())
+  const html = render(WEB.ShoeCompare, { view, selectedSize: null, onSelect: noop })
+  assert.ok(html.includes('target-gender'))
+  assert.ok(textOf(html).includes('여성용으로 보이는 상품이에요(옵션 230~250)'))
+  const same = render(WEB.ShoeCompare, { view: shoeViewFor(product, shoeProfile({ gender: 'female' })), selectedSize: null, onSelect: noop })
+  assert.ok(!same.includes('target-gender'))
+  const clothing = { ...PRODUCTS['https://shop-a.example.com/goods/12345'], source: 'demo', name: '여성 크롭 니트', targetGender: classifyTargetGender({ name: '여성 크롭 니트' }) }
+  const rv = render(WEB.ResultView, { product: clothing, profile: shoeProfile({ gender: 'male' }), calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop })
+  assert.ok(rv.includes('target-gender') && textOf(rv).includes('여성용으로 보이는 상품이에요.'))
+  assert.ok(!textOf(rv).includes('판정은 발길이'))
+  const rv2 = render(WEB.ResultView, { product: clothing, profile: shoeProfile({ gender: 'female' }), calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop })
+  assert.ok(!rv2.includes('target-gender'))
+})
+
+await atest('content.js(가짜 DOM, vm): 프로필 남성 + 여성용 신발이면 카드 상단에 안내 한 줄이 나온다 (가짜 데이터)', async () => {
+  const { texts } = await runContentInFakeDom(tgPage(SHOE_ISH, ['230', '240', '250']))
+  assert.ok(texts.some((t) => t.startsWith('여성용으로 보이는 상품이에요(옵션 230~250)') && t.includes('판정은 발길이(mm) 기준이에요')))
+  const unisex = await runContentInFakeDom(tgPage('Unisex 러닝 스니커즈', ['230', '240', '250']))
+  assert.ok(!unisex.texts.some((t) => t.includes('로 보이는 상품이에요')))
+})
+
 console.log(`\n${passed}개 통과`)

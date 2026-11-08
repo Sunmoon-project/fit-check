@@ -1,6 +1,7 @@
 // 신발 전용 사이즈 비교 (순수 함수). 확장과 웹이 함께 써요.
 // 옵션 'NNN (NNN-NNN)' 읽기, 리뷰 '만족도' 문구 읽기, 발길이·발볼 기준 추천, 구매 사이즈별 리뷰 집계.
 // 추천 규칙은 일반적인 착용감을 바탕으로 한 휴리스틱이고, 정확도를 측정한 값이 아니에요.
+import { targetGenderNotice } from './targetGender.js'
 import { EASE_RULES, SHOE_WINDOW, SHOE_VERDICTS, FIT_PREF_LABEL, classifyEase, classifyShoeEase, bodyValuesForProfile } from './fitEngine.js'
 
 export const FOOT_WIDTH_LABEL = { narrow: '좁은 편', normal: '보통', wide: '넓은 편' }
@@ -363,7 +364,10 @@ export function shoeViewFor(product, profile) {
   if (options.length === 0) options = parseShoeOptions(Object.keys(product?.sizeChart?.measures || {}))
   if (options.length === 0) return null
   const { values, measured } = bodyValuesForProfile(profile)
-  return recommendShoe({
+  // 상품 대상 성별 안내(프로필 성별과 다를 때만). 판정은 성별과 무관하게 발길이(mm) 기준이에요.
+  const tg = targetGenderNotice(product?.targetGender, profile?.gender)
+  return {
+    ...recommendShoe({
     options,
     footLength: values.footLength,
     footLengthEstimated: !measured.has('footLength'),
@@ -371,7 +375,9 @@ export function shoeViewFor(product, profile) {
     preferredFit: profile.preferredFit,
     reviews: product.reviews,
     sizeWidths: chartWidthsByMm(product?.sizeChart),
-  })
+    }),
+    targetGender: tg,
+  }
 }
 
 /** 신발 카드의 요약·추천 이유 글. 옷용 문구(generateFitComment)를 쓰지 않고 신발 판정에서 만들어요. */
@@ -405,8 +411,9 @@ const MM_MIN = 220
 const MM_MAX = 310
 const round5 = (v) => Math.round(v / 5) * 5
 
-/** 프로필 성별, 없으면 상품 이름에서 남/여를 찾아요. 모르면 null. */
-export function shoeGender(profileGender, productName) {
+/** US/UK 환산용 성별: 상품 대상 성별(있으면) > 프로필 성별 > 상품 이름의 남/여. 모르면 null. 판정은 이 값과 무관하게 mm 기준이에요. */
+export function shoeGender(profileGender, productName, targetGender = null) {
+  if (targetGender === 'male' || targetGender === 'female') return targetGender
   if (profileGender === 'male' || profileGender === 'female') return profileGender
   const n = String(productName ?? '').toLowerCase()
   if (/여성|우먼|women|woman|wmns|ladies|걸즈/.test(n)) return 'female'
@@ -419,7 +426,7 @@ export function shoeGender(profileGender, productName) {
  * US/UK는 성별(남/여)을 알아야 하고, EU는 남녀 공통이에요. 환산할 수 없으면 null.
  * 이미 mm인 이름은 여기서 다루지 않아요 (parseShoeOption).
  */
-export function shoeSizeToMm(name, { gender = null, productName = '' } = {}) {
+export function shoeSizeToMm(name, { gender = null, productName = '', targetGender = null } = {}) {
   const t = String(name ?? '').trim().replace(/\s+/g, ' ')
   let m = t.match(/^(US|UK|EU)\s*([0-9]{1,2}(?:\.5)?)$/i) || t.match(/^([0-9]{1,2}(?:\.5)?)\s*(US|UK|EU)$/i)
   let sys
@@ -437,7 +444,7 @@ export function shoeSizeToMm(name, { gender = null, productName = '' } = {}) {
     mm = round5((20 / 3) * num - 10) // EU 40 ≈ 255mm
     if (num < 35 || num > 48) return null
   } else {
-    const g = shoeGender(gender, productName)
+    const g = shoeGender(gender, productName, targetGender)
     if (!g) return null
     // 남성 US 7 = 250mm, 여성 US 8 = 250mm (한 사이즈 10mm). UK는 남성 US-1, 여성 US-2.
     if (sys === 'US') mm = g === 'male' ? 250 + (num - 7) * 10 : 250 + (num - 8) * 10
@@ -464,7 +471,7 @@ export function resolveShoeSizeMm(size, opts = {}) {
  */
 export function shoeWardrobeFields({ product, size, verdicts = [], profile = null }) {
   if (verdicts.length) return { verdicts, measures: null, status: null, note: '' }
-  const r = size == null || size === '' ? null : resolveShoeSizeMm(size, { gender: profile?.gender, productName: product?.name })
+  const r = size == null || size === '' ? null : resolveShoeSizeMm(size, { gender: profile?.gender, productName: product?.name, targetGender: product?.targetGender?.gender })
   if (!r) return { verdicts: [], measures: null, status: 'unsupported', note: SHOE_UNSUPPORTED_NOTE }
   const foot = profile ? bodyValuesForProfile(profile).values.footLength : null
   const base = { measures: { footLength: r.mm }, status: r.converted ? 'converted' : null, note: r.text }

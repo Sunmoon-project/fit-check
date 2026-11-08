@@ -5,6 +5,7 @@ import { collectDiagnostics, diagnosticLines } from './diagnose.js'
 import { generateFitComment, describeEvidence, bodyValuesForProfile, CONFIDENCE_LABEL, FIT_LABEL } from './fitEngine.js'
 import { compareSizes, compactCompare } from './sizeCompare.js'
 import { summarizeSizeChart } from './sizeSummary.js'
+import { targetGenderNotice } from './targetGender.js'
 import { shoeViewFor, shoeCardText, feelSizeText } from './shoeFit.js'
 // 사용자가 직접 적은 사이즈표: 열 이름(예: 어깨 가슴 총장)과 줄(예: M 50 57 68) → buildSizeChart 입력 모양.
 // 저장하지 않고 이번 분석에만 씁니다. 잘못된 줄은 버려요.
@@ -155,6 +156,8 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     exportData: exportData(product, pageUrl, result),
     compareView: cmpView.view,
     shoeView: shoe,
+    // 상품 대상 성별이 프로필 성별과 다를 때만 { gender, text, mismatch } (옷에도 같은 함수)
+    targetGender: shoe ? shoe.targetGender : targetGenderNotice(product.targetGender, profile.gender),
     sizeSummary: shoe ? null : summarizeSizeChart({ sizes: cmpView.view?.sizes, recommended: result.recommendedSize, category: product.category }),
     chartView: product.sizeChart?.view ? { ...product.sizeChart.view, recommended: result.recommendedSize ?? null } : null,
     confidence: result.confidence,

@@ -8,6 +8,7 @@ export default function ShoeCompare({ view: sv, selectedSize, onSelect }) {
         <h3>신발 사이즈 비교</h3>
         <span className="count-badge">발 정보 비교</span>
       </div>
+      {sv.targetGender?.mismatch && <p className="small target-gender" role="note">{sv.targetGender.text}</p>}
       <p className="small">
         {sv.footLength
           ? `내 발길이 ${sv.footLength}mm${sv.footLengthEstimated ? ' (키로 추정)' : ''} · 발볼 ${sv.footWidthLabel || '입력 안 함'}`
