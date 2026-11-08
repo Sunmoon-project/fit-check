@@ -2,8 +2,12 @@ import { CONFIDENCE_LABEL, describeEvidence } from '../lib/fitEngine.js'
 
 // 추천 사이즈 카드 (후기 투표 + 실측 비교 종합)
 export default function FitComment({ result }) {
-  const conf = CONFIDENCE_LABEL[result.confidence]
-  const evidence = result.evidence ? describeEvidence(result.evidence, result.confidence) : null
+  const isShoes = result.isShoes === true
+  // 신발은 옷용 근거 문구 대신 신발 판정에서 만든 근거 한 줄과 이유를 써요.
+  const conf = result.confidenceLabel || CONFIDENCE_LABEL[result.confidence]
+  const evidence = isShoes
+    ? { summary: result.shoeSummary, reasons: result.shoeReasons || [] }
+    : result.evidence ? describeEvidence(result.evidence, result.confidence) : null
 
   return (
     <div className="card reco-card tone-reco">
@@ -19,7 +23,7 @@ export default function FitComment({ result }) {
         <div className="evidence">
           <p className="evidence-summary">{evidence.summary}</p>
           {evidence.reasons.length > 0 && (
-            <ul className="evidence-why" aria-label="확신도가 더 높지 않은 이유">
+            <ul className="evidence-why" aria-label={isShoes ? '추천 이유' : '확신도가 더 높지 않은 이유'}>
               {evidence.reasons.map((r) => <li key={r}>{r}</li>)}
             </ul>
           )}
@@ -35,6 +39,7 @@ export default function FitComment({ result }) {
 
       <h3 className="fit-headline">{result.headline}</h3>
       <p className="fit-body">{result.body}</p>
+      {isShoes && !result.recommendedSize && <p className="muted small">추천할 사이즈가 없어요. 아래 사이즈별 판정은 참고로만 봐주세요.</p>}
       <p className="muted small disclaimer">확신도는 후기·사이즈표 근거가 얼마나 있는지로 나눈 참고 단계예요. 정확도를 측정한 값이 아니에요.</p>
       <p className="muted small disclaimer">{result.note}</p>
     </div>
