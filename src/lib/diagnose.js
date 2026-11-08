@@ -1,7 +1,7 @@
 // 사이즈표를 못 찾았을 때 "무엇을 찾고 무엇을 못 찾았는지" 알려주는 진단.
 // 숫자와 참/거짓만 모으고, 페이지 글은 모양 기호(L/N/T)로 바꿔서 담아요.
 // 프로필, 리뷰 글, 상품명, 주소의 쿼리·해시는 보고서에 들어가지 않습니다. 네트워크 호출은 없어요.
-import { findGridCandidates, readTables, parsePage, MEASURE_RE, REVIEW_SELECTOR } from './pageParser.js'
+import { findGridCandidates, readTables, tableShapes, readGeometryRows, parsePage, MEASURE_RE, REVIEW_SELECTOR } from './pageParser.js'
 import { shapeOfCell } from './productCore.js'
 import { cleanCategoryInfo, categoryEvidenceLine } from './categoryClassifier.js'
 
@@ -146,8 +146,30 @@ export function collectDiagnostics(root, pageUrl = '', extVersion = '', extra = 
     scroll: cleanScroll(extra?.scroll),
     compareFailed: extra?.compareFailed === true,
     structure,
+    chartShape: chartShape(root, tables),
   }
 }
+
+// 사이즈표 후보의 모양(칸 글자는 미리 정한 실측 항목 이름만 남김, 개수 제한). 리뷰·닉네임·체형은 담지 않아요.
+const CELL_OK_RE = /^(?:\d{0,2}\s*)(?:cm|mm|사이즈|총장|기장|어깨너비|어깨|가슴단면|가슴|소매길이|소매부리단면|소매|밑단단면|밑단|암홀|허리|허벅지|엉덩이|밑위|신발\s?길이|신발\s?너비|발\s?길이|굽\/?솔?\s?높이)$/
+function chartShape(root, tables) {
+  const sh = tableShapes(root)
+  const cand = tables.find((rows) => rows.some((r) => r.some((c) => MEASURE_RE.test(c) || /길이|너비|높이/.test(c)))) || []
+  const cells = cand
+    .slice(0, 3)
+    .flatMap((r) => r.slice(0, 10))
+    .filter((c) => CELL_OK_RE.test(c))
+    .slice(0, 24)
+  let geo = null
+  try {
+    const g = readGeometryRows(root)
+    geo = { leaves: smallInt(g.leaves), positioned: smallInt(g.positioned), rows: smallInt(g.rowCount), used: !!g.rows }
+  } catch {
+    geo = null
+  }
+  return { ...sh, cells, geometry: geo }
+}
+
 
 // 사이즈표 후보를 어떻게 판단했는지: 개수·종류·모양 분류·참/거짓만 담아요. 페이지 글은 담지 않아요.
 function chartJudgment(m) {
@@ -156,7 +178,7 @@ function chartJudgment(m) {
     considered: meta.considered || 0,
     withHeader: meta.withHeader || 0,
     selectedIndex: Number.isInteger(meta.selectedIndex) ? meta.selectedIndex : null,
-    selectedKind: ['table', 'grid', 'transposed', 'manual'].includes(meta.selectedKind) ? meta.selectedKind : null,
+    selectedKind: ['table', 'grid', 'transposed', 'manual', 'geometry'].includes(meta.selectedKind) ? meta.selectedKind : null,
     rowCount: meta.rowCount || 0,
     labelCount: meta.labelCount || 0,
     labelClass: ['paren', 'alpha', 'numeric', 'mixed', 'none'].includes(meta.labelClass) ? meta.labelClass : 'none',
@@ -189,7 +211,7 @@ const CAND_REASON_TEXT = {
 }
 const NAMES_FROM_TEXT = { table: '같은 표', 'other-table': '다른 표', options: '구매 옵션 순서', 'normal-retry': '정상 표로 재시도(첫 열이 증가하는 정수)' }
 const SHAPE_RE = /^[LNT_ ]{0,40}$/
-const KINDS = ['table', 'grid', 'transposed', 'manual']
+const KINDS = ['table', 'grid', 'transposed', 'manual', 'geometry']
 const smallInt = (v) => (Number.isInteger(v) && v >= 0 && v <= 999 ? v : 0)
 function cleanCandidates(list) {
   return (Array.isArray(list) ? list : []).slice(0, 6).map((c) => ({
@@ -219,8 +241,19 @@ export function diagnosticLines(d) {
     `사이즈 제목 근처에 이미지: ${yn(d.imageNearHeading)}`,
     ...(categoryEvidenceLine(d.category) ? [categoryEvidenceLine(d.category)] : []),
     ...chartLines(d),
+    ...shapeLines(d),
     ...reviewStatLines(d),
   ]
+}
+
+function shapeLines(d) {
+  const s = d.chartShape
+  if (!s) return []
+  const out = s.tables.map((t, i) => `표 ${i + 1}: ${t.rows}줄 x ${t.cols}칸, thead ${yn(t.thead)}, tbody ${yn(t.tbody)}, colspan ${t.colspan}개`)
+  out.push(`머리글/본문 표 이어 붙이기: 시도 ${s.mergeAttempted}회, 성공 ${s.merged}회`)
+  if (s.cells.length) out.push(`사이즈표 후보 칸 글자: ${s.cells.join(' | ')}`)
+  if (s.geometry) out.push(`화면 위치 읽기: 글자 요소 ${s.geometry.leaves}개 중 위치 있음 ${s.geometry.positioned}개, ${s.geometry.rows}줄, ${s.geometry.used ? '사용' : '미사용'}`)
+  return out
 }
 
 function reviewStatLines(d) {

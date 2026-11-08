@@ -25,7 +25,7 @@ import {
 import { PRODUCTS } from '../src/data/mockData.js'
 import { parseReviewText, analyzeSizeCharts, stripColumnNumbers } from '../src/lib/productCore.js'
 import { parseProductHtml } from '../server/productParser.js'
-import { readOptionLabels, parsePage, isProductPage, splitSentences, extractCardView, parseGender } from '../src/lib/pageParser.js'
+import { setRectProvider, readOptionLabels, parsePage, isProductPage, splitSentences, extractCardView, parseGender } from '../src/lib/pageParser.js'
 import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
 import { collectDiagnostics, diagnosticLines, formatReport, REPORT_MAX } from '../src/lib/diagnose.js'
 import { buildExportEnvelope, parseEnvelopeData, parseImportText, sanitizeItem, addImportedItem, LIMITS as IMPORT_LIMITS } from '../src/lib/wardrobeImport.js'
@@ -4614,5 +4614,117 @@ await atest('content.js(가짜 DOM, vm): 프로필 남성 + 여성용 신발이�
   const unisex = await runContentInFakeDom(tgPage('Unisex 러닝 스니커즈', ['230', '240', '250']))
   assert.ok(!unisex.texts.some((t) => t.includes('로 보이는 상품이에요')))
 })
+
+
+// ---------- 사이즈표: 머리글 표와 본문 표가 나뉜 구조 (무신사 스크린샷 모양의 가짜 HTML, 실제 무신사 DOM이 아님) ----------
+{
+  const th2 = (n, name) => `<th><span>${n}</span><br><span>${name}</span></th>`
+  const td = (c) => `<td>${c}</td>`
+  const clothHead = `<tr><th>cm</th>${['총장', '어깨너비', '가슴단면', '소매길이', '밑단단면', '소매부리단면', '암홀'].map((n, i) => th2(i + 1, n)).join('')}</tr>`
+  const clothData = [['0 (S)', 67, 50.5, 59.5, 60.5], ['1 (M)', 69, 52, 62, 62], ['2 (L)', 71, 53.5, 64.5, 63.5], ['3 (XL)', 73, 55, 67, 65], ['4 (2XL)', 75, 56.5, 69.5, 66.5]]
+    .map((r) => `<tr>${[...r, '-', '-', '-'].map(td).join('')}</tr>`)
+    .join('')
+  const myRow = '<tr><td colspan="1">내 사이즈</td><td colspan="7">사이즈를 직접 입력해주세요</td></tr>'
+  const fitTable = '<table><tr><th>핏</th><td>오버사이즈</td></tr><tr><th>계절감</th><td>봄 가을</td></tr></table>'
+  const clothOpts = `<ul>${['0 (S)', '1 (M)', '2 (L)', '3 (XL)', '4 (2XL)'].map((o) => `<li>${o}</li>`).join('')}</ul>`
+  const readCloth = (inner) => parsePage(fakeDocument(wrapBody(`<h1>코튼 재킷 아우터</h1>${clothOpts}${inner}`)), '')
+  const splitCloth = `<div class="sz"><div class="head"><table><thead>${clothHead}</thead></table></div><div class="body"><table><tbody>${myRow}${clothData}</tbody></table></div></div>${fitTable}`
+  const expectCloth = (p) => {
+    assert.ok(p.sizeChart, '사이즈표를 읽어야 해요')
+    assert.deepEqual(p.sizeChart.rows.map((r) => r[0]), ['0(S)', '1(M)', '2(L)', '3(XL)', '4(2XL)'])
+    assert.equal(p.sizeChart.measures['0(S)'].outerLength ?? p.sizeChart.measures['0(S)'].topLength, 67)
+    assert.equal(p.sizeChart.measures['0(S)'].shoulder, 50.5)
+    assert.equal(p.sizeChart.measures['0(S)'].chest, 119) // 가슴단면 59.5 -> 둘레 119
+    assert.equal(p.sizeChart.measures['0(S)'].arm, 60.5)
+    assert.equal(p.sizeChart.measures['4(2XL)'].outerLength ?? p.sizeChart.measures['4(2XL)'].topLength, 75)
+    assert.equal(p.sizeChartMeta.flipped, 0)
+    assert.notEqual(p.sizeChartMeta.namesFrom, 'options')
+  }
+
+  test('가짜 HTML(무신사 스크린샷 구조): 머리글 표와 본문 표가 따로 있어도 하나로 이어 옷 사이즈표를 읽는다', () => {
+    expectCloth(readCloth(splitCloth))
+  })
+  test('가짜 HTML(무신사 스크린샷 구조): <th><span>1</span><span>총장</span></th> 열 번호를 떼고, 내 사이즈 줄이 없어도 읽는다', () => {
+    const noMy = `<table>${clothHead}</table><table>${clothData}</table>`
+    expectCloth(readCloth(noMy))
+  })
+  test('가짜 HTML(무신사 스크린샷 구조): 한 표에 모두 있고 내 사이즈 줄이 끼어 있어도 읽는다', () => {
+    expectCloth(readCloth(`<table>${clothHead}${myRow}${clothData}</table>${fitTable}`))
+  })
+  test('가짜 HTML(무신사 스크린샷 구조): 뒤에 오는 핏/계절감 표는 사이즈표로 오인하지 않는다', () => {
+    const p = readCloth(splitCloth)
+    assert.ok(!p.sizeChart.headers.some((h) => /계절|오버/.test(h)))
+  })
+
+  const shoeHead = `<tr><th>cm</th>${[['신발 길이'], ['신발 너비'], ['발 길이'], ['굽/솔 높이']].map(([n], i) => th2(i + 1, n)).join('')}</tr>`
+  const shoeData = [['230 (230-235)', 25.3, 8, '-', 2], ['240 (240-245)', 26.3, 8.3, '-', 2], ['250 (250-255)', 27.3, 8.6, '-', 2]].map((r) => `<tr>${r.map(td).join('')}</tr>`).join('')
+  const shoeMy = '<tr><td>내 사이즈</td><td colspan="4">사이즈를 직접 입력해주세요</td></tr>'
+  const shoeOpts = `<ul>${['230 (230-235)', '240 (240-245)', '250 (250-255)'].map((o) => `<li>${o}</li>`).join('')}</ul>`
+  const readShoe = (inner) => parsePage(fakeDocument(wrapBody(`<h1>러닝화 스니커즈</h1>${shoeOpts}${inner}`)), '')
+  const expectShoe = (p) => {
+    assert.ok(p.sizeChart, '신발 사이즈표를 읽어야 해요')
+    assert.equal(p.category, 'shoes')
+    const m = p.sizeChart.measures
+    const key = Object.keys(m)
+    assert.equal(key.length, 3)
+    assert.deepEqual(key.map((k) => m[k].shoeLength), [253, 263, 273])
+    assert.deepEqual(key.map((k) => m[k].footWidth), [80, 83, 86])
+    assert.deepEqual(key.map((k) => m[k].heelHeight), [2, 2, 2])
+    assert.ok(key.every((k) => m[k].footLength == null), '신발 길이는 발길이로 쓰지 않아요')
+    assert.ok(key.every((k) => k.startsWith('230') || k.startsWith('240') || k.startsWith('250')))
+    assert.notEqual(p.sizeChartMeta.namesFrom, 'options')
+    assert.equal(p.sizeChartMeta.flipped, 0)
+  }
+  test('가짜 HTML(무신사 스크린샷 구조): 신발 cm 표(머리글 표 + 본문 표)를 신발 길이 253/263/273, 너비 80/83/86mm로 읽는다', () => {
+    expectShoe(readShoe(`<div><table>${shoeHead}</table><table>${shoeMy}${shoeData}</table></div>`))
+  })
+  test('가짜 HTML(무신사 스크린샷 구조): 신발 표 한 개일 때도 같은 값, 뒤집어 읽지 않는다', () => {
+    const p = readShoe(`<table>${shoeHead}${shoeMy}${shoeData}</table>`)
+    expectShoe(p)
+    const rep = formatReport(collectDiagnostics(fakeDocument(wrapBody(`<h1>러닝화</h1>${shoeOpts}<table>${shoeHead}${shoeMy}${shoeData}</table>`)), ''))
+    assert.ok(!rep.includes('뒤집어 읽음'))
+  })
+  test('가짜 HTML(무신사 스크린샷 구조): 진단 리포트에 표별 줄/칸/colspan, 이어 붙이기 결과, 칸 글자가 있고 페이지의 다른 글은 없다', () => {
+    const secret = 'ZZ비밀리뷰글'
+    const html = wrapBody(`<h1>러닝화</h1>${shoeOpts}<table>${shoeHead}</table><table>${shoeMy}${shoeData}</table><p>${secret} 닉네임 키 170</p>`)
+    const d = collectDiagnostics(fakeDocument(html), '')
+    assert.equal(d.chartShape.merged, 1)
+    assert.equal(d.chartShape.tables[1].colspan, 3)
+    const rep = formatReport(d)
+    assert.match(rep, /표 1: 1줄 x 5칸, thead (?:예|아니요), tbody (?:예|아니요), colspan 0개/)
+    assert.match(rep, /이어 붙이기: 시도 1회, 성공 1회/)
+    assert.match(rep, /신발 길이/)
+    assert.ok(!rep.includes(secret))
+  })
+  test('가짜 HTML(무신사 스크린샷 구조): 표 구조가 아닌 div 나열도 화면 위치(가짜 rect)로 줄·칸을 맞춰 읽는다', () => {
+    const cellsH = ['cm', '1', '신발 길이', '2', '신발 너비', '3', '발 길이', '4', '굽/솔 높이']
+    const doc = fakeDocument(
+      wrapBody(`<h1>러닝화 스니커즈</h1>${shoeOpts}<div id="g">${[...cellsH, '230 (230-235)', '25.3', '8', '-', '2', '240 (240-245)', '26.3', '8.3', '-', '2', '250 (250-255)', '27.3', '8.6', '-', '2'].map((t) => `<span>${t}</span>`).join('')}</div>`),
+    )
+    const spans = doc.querySelectorAll('#g span')
+    const pos = new Map()
+    // 머리글: 5열, 번호(y=0)와 이름(y=14)이 두 줄. 본문은 y=40, 60, 80
+    const xs = [0, 100, 200, 300, 400]
+    pos.set(spans[0], { left: xs[0], top: 7, width: 30, height: 14 })
+    ;[1, 3, 5, 7].forEach((i, c) => {
+      pos.set(spans[i], { left: xs[c + 1] + 20, top: 0, width: 10, height: 14 })
+      pos.set(spans[i + 1], { left: xs[c + 1], top: 14, width: 50, height: 14 })
+    })
+    for (let r = 0; r < 3; r++) for (let c = 0; c < 5; c++) pos.set(spans[9 + r * 5 + c], { left: xs[c], top: 40 + r * 20, width: 50, height: 14 })
+    const withRects = (fn) => {
+      setRectProvider((el) => pos.get(el) || { left: 0, top: 0, width: 0, height: 0 })
+      try {
+        return fn()
+      } finally {
+        setRectProvider(null)
+      }
+    }
+    // 위치 제공자가 없으면 위치 기반 후보는 만들지 않는다
+    assert.notEqual(parsePage(doc, '').sizeChartMeta?.selectedKind, 'geometry')
+    const p = withRects(() => parsePage(doc, ''))
+    expectShoe(p)
+    assert.equal(p.sizeChartMeta.selectedKind, 'geometry')
+  })
+}
 
 console.log(`\n${passed}개 통과`)
