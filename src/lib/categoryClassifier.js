@@ -106,7 +106,14 @@ const isType = (n, t) => (Array.isArray(n?.['@type']) ? n['@type'].includes(t) :
 export function ldCategoryHints(nodes) {
   const cat = []
   const crumbs = []
+  const gen = []
   for (const n of nodes || []) {
+    if (isType(n, 'Product')) {
+      // 대상 성별: audience.suggestedGender 또는 gender (문자열/배열/{name})
+      for (const v of [n.audience?.suggestedGender, n.audience?.name, n.gender]) {
+        for (const x of Array.isArray(v) ? v : [v]) if (x) gen.push(String(typeof x === 'object' ? x.name ?? '' : x))
+      }
+    }
     if (isType(n, 'Product') && n.category) cat.push(String(Array.isArray(n.category) ? n.category.join(' ') : n.category))
     if (isType(n, 'BreadcrumbList') && Array.isArray(n.itemListElement)) {
       for (const it of n.itemListElement) {
@@ -116,7 +123,7 @@ export function ldCategoryHints(nodes) {
     }
   }
   const trim = (a) => a.join(' ').replace(/\s+/g, ' ').trim().slice(0, 300)
-  return { jsonLdCategory: trim(cat), breadcrumb: trim(crumbs) }
+  return { jsonLdCategory: trim(cat), breadcrumb: trim(crumbs), jsonLdGender: trim(gen) }
 }
 
 // 진단 리포트용 한 줄 ('분류 근거: 상품명 +3 · 옵션 +3 → 신발 (높음)'). 근거 종류와 점수만 쓰고 원문은 쓰지 않아요.

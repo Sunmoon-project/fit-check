@@ -2,6 +2,7 @@
 // document 대신 querySelectorAll / textContent / getAttribute만 쓰는 최소 인터페이스를 받아서
 // 브라우저 DOM이 아니어도(테스트용 어댑터) 같은 코드로 읽을 수 있어요.
 // 표 해석과 리뷰 문장 해석은 서버 파서와 같은 productCore.js를 씁니다.
+import { classifyTargetGender } from './targetGender.js'
 import { classifyCategory, userChosen, categoryInfo, ldCategoryHints, CATEGORY_ORDER } from './categoryClassifier.js'
 import { guessCategory, analyzeSizeCharts, parseReviewText, CATEGORY_EMOJI, SIZE_LABEL_RE } from './productCore.js'
 import { parseShoeFeel } from './shoeFit.js'
@@ -821,6 +822,8 @@ export function parsePage(root, pageUrl = '', opts = {}) {
     categoryEvidence: categoryInfo({ ...cls, category }).evidence,
     categoryCandidates: cls.candidates,
     categoryOverridden: cls.overridden === true,
+    // 대상 성별은 최종 카테고리가 신발일 때만 옵션 범위를 근거로 써요 (근거 종류와 점수만 담고 원문은 담지 않아요)
+    targetGender: classifyTargetGender({ name, breadcrumb: classifyInput.breadcrumb, jsonLdGender: classifyInput.jsonLdGender, optionLabels: [...optionLabels, ...shoeOptionLabels], isShoes: category === 'shoes' }),
     emoji: CATEGORY_EMOJI[category],
     sizeChart: sizeChart
       ? {

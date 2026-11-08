@@ -28,6 +28,7 @@ const CSS = `
 .hd{position:sticky;top:-12px;background:#fff;z-index:1;padding-bottom:2px}
 .hd .close{margin-left:6px}
 .tiny{margin:2px 0 0;font-size:11px;color:#6b6b70}
+.tiny.tg{margin:6px 0 0;color:#8a5a00;font-weight:600}
 .row{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .eyebrow{font-size:11px;color:#6b6b70}
 .cats{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:6px}
@@ -1141,6 +1142,7 @@ function renderResult(r) {
     card.append(row)
     const chips = categoryChips(r)
     if (chips) card.append(chips)
+    if (r.targetGender?.mismatch) card.append(el('p', 'tiny tg', r.targetGender.text))
     const noticeBox = categoryNoticeBlock(r)
     if (noticeBox) card.append(noticeBox)
     if (r.recommendedSize) card.append(el('div', 'size', r.recommendedLabel || r.recommendedSize))

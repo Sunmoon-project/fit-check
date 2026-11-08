@@ -9,6 +9,7 @@ import { makeWardrobeItem } from '../lib/wardrobe.js'
 import FitComment from './FitComment.jsx'
 import MeasureMatch from './MeasureMatch.jsx'
 import ShoeCompare from './ShoeCompare.jsx'
+import { targetGenderNotice, classifyTargetGender } from '../lib/targetGender.js'
 import { shoeViewFor, withShoeRecommendation } from '../lib/shoeFit.js'
 import MatchedReviews from './MatchedReviews.jsx'
 import SimilarityCompare from './SimilarityCompare.jsx'
@@ -35,6 +36,11 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
   // 신발은 옵션(mm)을 읽을 수 있을 때만 신발 비교를 쓰고, 못 읽으면 기존 비교로 돌아가요.
   const shoe = useMemo(() => (product.category === 'shoes' ? shoeViewFor(product, profile) : null), [product, profile])
   const isShoes = !!shoe
+  // 상품 대상 성별 안내 (신발 비교 카드는 자체 안내를 가져서 옷일 때만 여기서 보여줘요)
+  const targetGender = useMemo(
+    () => targetGenderNotice(product.targetGender || classifyTargetGender({ name: product.name, optionLabels: product.shoeOptionLabels, isShoes: product.category === 'shoes' }), profile?.gender),
+    [product, profile],
+  )
   // 신발이면 추천 사이즈를 신발 추천으로 통일해요 (추천 카드, 선택 기본값, 옷장, 입어보기가 같은 사이즈를 가리킴).
   const shownResult = useMemo(() => withShoeRecommendation(result, shoe), [result, shoe])
   const selectedSize = picked || shownResult.recommendedSize || (shoe?.noFit ? String(shoe.noFit.size) : null) || result.perSize[0]?.size || null
@@ -81,6 +87,8 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
           {product.notes.map((n) => <p key={n} className="small">{n}</p>)}
         </div>
       )}
+
+      {!isShoes && targetGender && <p className="info-box small target-gender" role="note">{targetGender.text}</p>}
 
       <FitComment result={shownResult} />
 
