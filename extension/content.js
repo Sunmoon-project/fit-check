@@ -1164,7 +1164,8 @@ function renderResult(r) {
     fold.append(why.det)
 
     if (r.reviewViews) {
-      const rv = section(`리뷰 원문 (비슷한 체형 ${r.reviewViews.matchedTotal}건 / 불러온 ${r.reviewsLoaded}건)`)
+      // 신발은 키·몸무게 기준 '비슷한 체형' 판정을 추천에 쓰지 않으므로 제목에도 쓰지 않아요.
+      const rv = section(r.reviewViews.isShoes ? `리뷰 원문 (불러온 ${r.reviewsLoaded}건)` : `리뷰 원문 (비슷한 체형 ${r.reviewViews.matchedTotal}건 / 불러온 ${r.reviewsLoaded}건)`)
       rv.body.append(reviewsBlock(r.reviewViews))
       fold.append(rv.det)
     }

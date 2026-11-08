@@ -1489,7 +1489,7 @@ test('diagnose: 리뷰 불러오기 멈춘 이유(시간 한도·중단)가 리�
 })
 
 // 확장 content.js를 임시 폴더에 IIFE로 빌드해 가짜 DOM(node:vm)에서 fab 클릭(run) 경로를 실행합니다. 실제 무신사·크롬이 아니에요.
-async function runContentInFakeDom(pageHtml = null, extra = {}) {
+async function runContentInFakeDom(pageHtml = null, extra = {}, measurements = {}) {
   const root = resolvePath(import.meta.dirname, '..')
   const outDir = mkdtempSync(join(tmpdir(), 'fitcheck-content-'))
   try {
@@ -1524,7 +1524,7 @@ async function runContentInFakeDom(pageHtml = null, extra = {}) {
       querySelectorAll(sel) { return pageDoc ? pageDoc.querySelectorAll(sel) : [] }, querySelector(sel) { return pageDoc ? pageDoc.querySelector(sel) : null }, execCommand() { return false },
     }
     const win = { scrollX: 0, scrollY: 0, scrollTo() {} }
-    const profile = buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular', measurements: {} }).profile
+    const profile = buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular', measurements }).profile
     const sandbox = {
       URL, document: doc, window: win, location: { href: 'https://shop.example/products/1' }, navigator: {},
       MutationObserver: class { observe() {} disconnect() {} },
@@ -3721,7 +3721,8 @@ test('가짜 데이터: 웹 신발 추천은 엔진 결과를 신발 추천 사�
   const base = { recommendedSize: 'M', headline: 'h', body: 'b', perSize: [] }
   const out = withShoeRecommendation(base, sv)
   assert.equal(out.recommendedSize, String(sv.recommended.mm))
-  assert.ok(out.headline.includes(sv.recommended.label))
+  // 헤드라인은 옷용 '추천해요' 문구 대신 '<mm>이 딱 맞아요' 형태라 옵션 라벨 전체가 아니라 mm 숫자로 확인한다 (FEAT-003)
+  assert.ok(out.headline.includes(String(sv.recommended.mm)))
   assert.equal(withShoeRecommendation(base, null), base)
   // cm 단위 표(25.0)는 mm 옵션으로 읽을 수 없어 null: 웹은 기존 비교로 돌아간다
   assert.equal(shoeViewFor({ sizeChart: { measures: { '25.0': {}, '25.5': {} } }, reviews: [] }, shoeProfile()), null)
@@ -4190,7 +4191,7 @@ test('웹 렌더: TryOnPanel 신발 분기 - 미지원/발길이 모름/환산 �
 
 // ---------- 신발 허용 구간 (발 기준 -5 ~ +10mm, 휴리스틱) ----------
 import { classifyEase as classifyEaseShoe, EASE_RULES as EASE_RULES_SHOE, SHOE_WINDOW } from '../src/lib/fitEngine.js'
-import { shoeOptionVerdict, shoeCardText } from '../src/lib/shoeFit.js'
+import { shoeOptionVerdict, shoeCardText, shoeComment } from '../src/lib/shoeFit.js'
 
 const winOpts = (mms) => parseShoeOptions(mms.map(String))
 const verdictsOf = (r) => Object.fromEntries(r.rows.map((x) => [x.mm, x.verdict]))
@@ -4361,7 +4362,9 @@ test('신발 구간: analyzePage 카드 글은 옷용 문구 대신 신발 판�
   assert.ok(noFit.reasons.some((t) => t.includes('265~280mm')))
   const ok = analyzePage(fakeDocument(shoePage([])), '', shoeProfile({ measurements: { footLength: '245' } }))
   assert.equal(ok.recommendedSize, '250')
-  assert.ok(ok.summary.includes('250 (250-255) 추천'))
+  // 요약 한 줄은 '<라벨> 추천' 대신 신발 근거 한 줄(발길이 출처 · 옵션 수 · 리뷰 수)로 바뀌었다 (FEAT-003). 추천 사이즈는 recommendedLabel/큰 사이즈 칸이 보여준다.
+  assert.ok(ok.summary.includes('발길이 직접 입력 · 사이즈 옵션 3개 · 리뷰 '))
+  assert.equal(ok.recommendedLabel, '250 (250-255)')
   assert.ok(!ok.reasons.some((t) => t.includes('무난')))
 })
 
@@ -4390,6 +4393,89 @@ await atest('content.js(가짜 DOM, vm): 맞는 사이즈가 없으면 안내문
   assert.ok(texts.includes('부적합'))
   assert.ok(!texts.some((t) => t.includes('가장 가까워요') || t.includes('무난') || (/추천$/.test(t) && t !== '핏체크 · 내 체형 추천')))
   assert.ok(texts.includes('맞는 사이즈가 없어요'))
+})
+
+// ---------- 신발 추천 이유 글 (FEAT-003) ----------
+// 가짜 상품 페이지: 사이즈는 선택 목록(select/option)으로 둬요 (li 안의 맨 숫자는 '리뷰 250' 오인 방지로 읽지 않아요)
+const OPT_PAGE = (name, opts) => `<html><head><title>${name}</title></head><body><h1>${name}</h1><select class="opts">${opts.map((o) => `<option>${o}</option>`).join('')}</select></body></html>`
+const CLOTHING_PHRASES = ['슬림 핏 기준', '비슷한 체형의 후기가 없어요', '무난해요']
+
+test('신발 글: shoeComment 헤드라인(딱 맞음/여유/애매)·확신도·옷용 문구 없음', () => {
+  const mk = (opts, foot, extra = {}) => recommendShoe({ options: winOpts(opts), footLength: foot, ...extra })
+  const fit = shoeComment(mk([260, 270, 290], 270))
+  assert.equal(fit.headline, '270이 딱 맞아요')
+  assert.equal(fit.confidence, 'medium')
+  assert.ok(fit.summary.startsWith('발길이 직접 입력 · 사이즈 옵션 3개 · 리뷰 0건'))
+  assert.ok(fit.reasons.some((t) => t.includes('265~280mm')))
+  assert.equal(shoeComment(mk([280], 270)).headline, '280이 여유 있게 맞아요')
+  assert.equal(shoeComment(mk([265], 270)).headline, '265가 작게 맞을 수 있어요(애매)')
+  // 키로 추정한 발길이는 확신도 낮음 + 추정 안내
+  const est = shoeComment(mk([270], 270, { footLengthEstimated: true }))
+  assert.equal(est.confidence, 'low')
+  assert.ok(est.reasons.some((t) => t.includes('키로 추정')))
+  // 맞는 사이즈가 없으면 해당 없음
+  const none = shoeComment(mk([230, 240, 250], 270))
+  assert.equal(none.headline, '맞는 사이즈가 없어요')
+  assert.equal(none.confidenceLabel.text, '해당 없음')
+  assert.equal(none.confidence, 'low')
+  for (const c of [fit, est, none]) assert.ok(!CLOTHING_PHRASES.some((p) => JSON.stringify(c).includes(p)))
+  // withShoeRecommendation은 옷용 근거(evidence)와 추천을 신발 결과로 덮어쓴다
+  const out = withShoeRecommendation({ recommendedSize: 'M', headline: 'h', body: 'b', evidence: { x: 1 }, confidence: 'high', note: 'n', perSize: [] }, mk([230, 240, 250], 270))
+  assert.equal(out.recommendedSize, null)
+  assert.equal(out.evidence, null)
+  assert.equal(out.confidence, 'low')
+  assert.equal(out.headline, '맞는 사이즈가 없어요')
+})
+
+test('신발 글: analyzePage 확신도·요약이 신발 결과이고 옷 카드 글은 그대로다', () => {
+  const ok = analyzePage(fakeDocument(OPT_PAGE('러닝 스니커즈', ['260', '270', '290'])), '', shoeProfile({ measurements: { footLength: '270' } }))
+  assert.equal(ok.headline, '270이 딱 맞아요')
+  assert.equal(ok.confidence, 'medium')
+  assert.equal(ok.recommendedSize, '270')
+  assert.ok(!CLOTHING_PHRASES.some((p) => JSON.stringify([ok.summary, ok.reasons, ok.headline, ok.body, ok.note]).includes(p)))
+  assert.equal(ok.reviewViews.isShoes, true)
+  const none = analyzePage(fakeDocument(OPT_PAGE('러닝 스니커즈', ['230', '240', '250'])), '', shoeProfile({ measurements: { footLength: '270' } }))
+  assert.equal(none.confidenceLabel.text, '해당 없음')
+  assert.equal(none.recommendedSize, null)
+  // 옷 상품은 기존 옷용 판정 글을 그대로 쓴다 (회귀)
+  const cloth = analyzePage(fakeDocument(EXT_HTML), 'https://shop.example/p/1', profile)
+  assert.equal(cloth.status, 'ok')
+  assert.ok(!cloth.reviewViews.isShoes)
+  assert.ok(cloth.confidenceLabel.text.startsWith('확신도'))
+})
+
+await atest('content.js(가짜 DOM, vm): 발 270 + 옵션 230/240/250이면 옷용 문구 없이 맞는 사이즈가 없어요 안내, 큰 사이즈 칸 없음 (가짜 데이터)', async () => {
+  const { texts, created } = await runContentInFakeDom(OPT_PAGE('러닝 스니커즈', ['230', '240', '250']), {}, { footLength: '270' })
+  assert.ok(texts.includes('맞는 사이즈가 없어요'))
+  assert.ok(texts.includes('해당 없음'))
+  assert.ok(!texts.some((t) => CLOTHING_PHRASES.some((p) => t.includes(p))))
+  assert.ok(!created.some((e) => e.className === 'size'), '추천이 없으면 큰 사이즈 칸을 만들지 않는다')
+})
+
+await atest('content.js(가짜 DOM, vm): 발 270 + 옵션 260/270/290이면 270이 딱 맞아요 헤드라인과 신발 근거 한 줄 (가짜 데이터)', async () => {
+  const { texts } = await runContentInFakeDom(OPT_PAGE('러닝 스니커즈', ['260', '270', '290']), {}, { footLength: '270' })
+  assert.ok(texts.includes('270이 딱 맞아요'))
+  assert.ok(texts.some((t) => t.startsWith('발길이 직접 입력 · 사이즈 옵션 3개')))
+  assert.ok(!texts.some((t) => CLOTHING_PHRASES.some((p) => t.includes(p))))
+})
+
+test('웹 렌더: ResultView(신발) 추천 이유 글은 신발 결과이고, 맞는 사이즈가 없으면 사이즈 칸 없이 안내 + 옷장 판정 부적합', () => {
+  const mkProduct = (opts) => ({ ...parsePage(fakeDocument(OPT_PAGE('러닝 스니커즈', opts)), ''), mall: 'shop', url: 'https://shop.example/s' })
+  const prof = shoeProfile({ measurements: { footLength: '270' } })
+  const props = { calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop }
+  const okHtml = render(WEB.ResultView, { product: mkProduct(['260', '270', '290']), profile: prof, ...props })
+  const okTxt = textOf(okHtml)
+  assert.ok(okTxt.includes('270이 딱 맞아요'))
+  assert.ok(okHtml.includes('reco-size'))
+  assert.ok(!CLOTHING_PHRASES.some((p) => okTxt.includes(p)))
+  const noHtml = render(WEB.ResultView, { product: mkProduct(['230', '240', '250']), profile: prof, ...props })
+  const noTxt = textOf(noHtml)
+  assert.ok(noTxt.includes('맞는 사이즈가 없어요') && noTxt.includes('해당 없음'))
+  assert.ok(!noHtml.includes('reco-size'), '추천이 없으면 추천 사이즈 칸이 없다')
+  assert.ok(!CLOTHING_PHRASES.some((p) => noTxt.includes(p)))
+  // 옷장에 담으면 판정은 부적합 (FEAT-001의 같은 구간 판정)
+  const item = makeWardrobeItem({ product: mkProduct(['230', '240', '250']), size: '250', profile: prof })
+  assert.equal(item.verdicts[0].verdict, '부적합')
 })
 
 // ---------- 상품 대상 성별 ----------

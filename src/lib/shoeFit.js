@@ -2,7 +2,7 @@
 // 옵션 'NNN (NNN-NNN)' 읽기, 리뷰 '만족도' 문구 읽기, 발길이·발볼 기준 추천, 구매 사이즈별 리뷰 집계.
 // 추천 규칙은 일반적인 착용감을 바탕으로 한 휴리스틱이고, 정확도를 측정한 값이 아니에요.
 import { targetGenderNotice } from './targetGender.js'
-import { EASE_RULES, SHOE_WINDOW, SHOE_VERDICTS, FIT_PREF_LABEL, classifyEase, classifyShoeEase, bodyValuesForProfile } from './fitEngine.js'
+import { EASE_RULES, SHOE_WINDOW, SHOE_VERDICTS, FIT_PREF_LABEL, CONFIDENCE_LABEL, classifyEase, classifyShoeEase, bodyValuesForProfile } from './fitEngine.js'
 
 export const FOOT_WIDTH_LABEL = { narrow: '좁은 편', normal: '보통', wide: '넓은 편' }
 export const FOOT_WIDTHS = Object.keys(FOOT_WIDTH_LABEL)
@@ -380,27 +380,88 @@ export function shoeViewFor(product, profile) {
   }
 }
 
-/** 신발 카드의 요약·추천 이유 글. 옷용 문구(generateFitComment)를 쓰지 않고 신발 판정에서 만들어요. */
-export function shoeCardText(shoe) {
+// 숫자 뒤 조사: 0 1 3 6 7 8로 끝나면 받침이 있는 읽기(영·일·삼·육·칠·팔)라 '이', 나머지는 '가'
+const josaI = (n) => (/[013678]$/.test(String(n)) ? '이' : '가')
+const fmtEase = (e) => `${e > 0 ? '+' : ''}${e}mm`
+const SHOE_CONF_NONE = { text: '해당 없음', color: '#8a877f' }
+
+/**
+ * 신발 카드·웹 추천 카드의 글을 신발 판정에서 만들어요. 옷용 문구('슬림 핏 기준', '비슷한 체형의 후기가 없어요', 'X 사이즈가 무난해요')를 쓰지 않아요.
+ * 반환: { headline, body, summary, reasons, note, confidence('low'|'medium'), confidenceLabel({text,color}) }
+ * 확신도: 발길이를 직접 입력했고 허용 사이즈가 있으면 보통, 추천이 없거나 발길이가 없거나 키로 추정한 값이면 낮음(noFit은 '해당 없음').
+ */
+export function shoeComment(shoe) {
+  const direct = shoe.footLength != null && !shoe.footLengthEstimated
+  const evidenceLine = [
+    shoe.footLength == null ? '발길이 모름' : direct ? '발길이 직접 입력' : '발길이 키로 추정',
+    `사이즈 옵션 ${shoe.rows.length}개`,
+    `리뷰 ${shoe.reviewTotal}건`,
+  ].join(' · ')
+  const tg = shoe.targetGender?.mismatch ? shoe.targetGender.text : ''
+  const note = shoe.heuristicNote
+  const uniq = (arr) => arr.filter((t, i) => t && arr.indexOf(t) === i)
   if (shoe.noFit) {
-    return { headline: '맞는 사이즈가 없어요', body: shoe.noFit.message, summary: shoe.noFit.message, reasons: [shoe.windowText].filter(Boolean) }
+    return {
+      headline: '맞는 사이즈가 없어요',
+      body: [shoe.noFit.message, shoe.windowText].filter(Boolean).join(' '),
+      summary: shoe.noFit.message,
+      reasons: uniq([shoe.windowText, tg, ...shoe.notes]),
+      note,
+      confidence: 'low',
+      confidenceLabel: SHOE_CONF_NONE,
+    }
   }
   const rec = shoe.recommended
-  if (!rec) return { headline: '추천할 수 없어요', body: shoe.notes[0] || '', summary: shoe.notes[0] || '발길이를 알 수 없어 추천하지 않았어요.', reasons: [] }
+  if (!rec) {
+    const why = shoe.notes[0] || '발길이를 알 수 없어 추천하지 않았어요.'
+    return {
+      headline: '추천할 수 없어요',
+      body: why,
+      summary: why,
+      reasons: uniq([tg, ...shoe.notes.slice(1)]),
+      note,
+      confidence: 'low',
+      confidenceLabel: CONFIDENCE_LABEL.low,
+    }
+  }
+  const tail = rec.verdict === '딱 맞음' ? '딱 맞아요' : rec.verdict === '여유' ? '여유 있게 맞아요' : '작게 맞을 수 있어요(애매)'
+  const confidence = direct ? 'medium' : 'low'
   return {
-    headline: `${rec.label} 사이즈를 추천해요`,
-    body: shoe.heuristicNote,
-    summary: `${rec.label} 추천 · 내 발길이 ${shoe.footLength}mm 기준 ${rec.verdict}(여유 ${rec.ease > 0 ? '+' : ''}${rec.ease}mm)`,
-    reasons: [...shoe.reasons, shoe.widthLine].filter(Boolean),
+    headline: `${rec.mm}${josaI(rec.mm)} ${tail}`,
+    body: `내 발길이 ${shoe.footLength}mm 기준 ${rec.label}은(는) ${rec.verdict}(여유 ${fmtEase(rec.ease)})이에요. ${shoe.windowText} ${shoe.widthLine || ''}`.trim(),
+    summary: evidenceLine,
+    reasons: uniq([...shoe.reasons, shoe.widthLine, tg, ...shoe.notes]),
+    note,
+    confidence,
+    confidenceLabel: CONFIDENCE_LABEL[confidence],
   }
 }
 
-/** 엔진 결과를 신발 추천으로 통일해요 (추천 카드·선택 기본값·옷장·입어보기가 같은 사이즈를 가리킴). 신발 추천이 없으면 그대로 돌려줘요. */
+/** 신발 카드의 요약·추천 이유 글 (shoeComment의 글 부분). */
+export function shoeCardText(shoe) {
+  const { headline, body, summary, reasons } = shoeComment(shoe)
+  return { headline, body, summary, reasons }
+}
+
+/** 엔진 결과를 신발 추천으로 통일해요 (추천 카드·선택 기본값·옷장·입어보기가 같은 사이즈를 가리킴). 옷용 근거(evidence)·확신도는 신발 결과로 바꿔요. */
 export function withShoeRecommendation(result, shoe) {
-  if (shoe?.noFit) return { ...result, recommendedSize: null, recommendedLabel: null, headline: '맞는 사이즈가 없어요', body: [shoe.noFit.message, shoe.windowText].filter(Boolean).join(' ') }
-  const rec = shoe?.recommended
-  if (!rec) return result
-  return { ...result, recommendedSize: String(rec.mm), headline: `${rec.label} 사이즈를 추천해요`, body: [...shoe.reasons, shoe.widthLine].filter(Boolean).join(' ') || result.body }
+  if (!shoe) return result
+  const c = shoeComment(shoe)
+  const rec = shoe.recommended
+  return {
+    ...result,
+    recommendedSize: rec ? String(rec.mm) : null,
+    recommendedLabel: rec ? rec.label : null,
+    headline: c.headline,
+    body: c.body,
+    note: c.note,
+    confidence: c.confidence,
+    confidenceLabel: c.confidenceLabel,
+    evidence: null,
+    isShoes: true,
+    shoeSummary: c.summary,
+    shoeReasons: c.reasons,
+  }
 }
 
 // ---- 사이즈 이름이 mm가 아닌 신발 (US/UK/EU, S/M/L, FREE) ----

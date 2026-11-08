@@ -6,7 +6,7 @@ import { generateFitComment, describeEvidence, bodyValuesForProfile, CONFIDENCE_
 import { compareSizes, compactCompare } from './sizeCompare.js'
 import { summarizeSizeChart } from './sizeSummary.js'
 import { targetGenderNotice } from './targetGender.js'
-import { shoeViewFor, shoeCardText, feelSizeText } from './shoeFit.js'
+import { shoeViewFor, shoeComment, feelSizeText } from './shoeFit.js'
 // 사용자가 직접 적은 사이즈표: 열 이름(예: 어깨 가슴 총장)과 줄(예: M 50 57 68) → buildSizeChart 입력 모양.
 // 저장하지 않고 이번 분석에만 씁니다. 잘못된 줄은 버려요.
 export function manualChartRows(columnsText, linesText) {
@@ -127,7 +127,7 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
   // 사이즈표의 표시 이름('1 (M)')이 있으면 그 이름으로 보여줍니다.
   const disp = (x) => product.sizeChart?.display?.[String(x).replace(/\s/g, '').toUpperCase()] || x
   const view = (r) => reviewView(r, disp)
-  const shoeText = shoe ? shoeCardText(shoe) : null
+  const shoeText = shoe ? shoeComment(shoe) : null
   const evidence = result.evidence ? describeEvidence(result.evidence, result.confidence) : null
   return {
     status: 'ok',
@@ -139,8 +139,8 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     categoryCandidates: (product.categoryCandidates || []).map((c) => ({ key: c, label: CATEGORY_LABEL[c] || c })),
     categoryOverridden: product.categoryOverridden === true,
     categoryNotice: product.categoryNotice || null,
-    recommendedSize: shoe?.recommended ? String(shoe.recommended.mm) : shoe?.noFit ? null : result.recommendedSize,
-    recommendedLabel: shoe?.recommended ? shoe.recommended.label : shoe?.noFit ? null : result.recommendedLabel,
+    recommendedSize: shoe ? (shoe.recommended ? String(shoe.recommended.mm) : null) : result.recommendedSize,
+    recommendedLabel: shoe ? (shoe.recommended ? shoe.recommended.label : null) : result.recommendedLabel,
     reviewsLoaded: product.reviews.length,
     reviewTotalOnPage: product.reviewTotalOnPage ?? null,
     sizeChartMissing: !product.sizeChart,
@@ -160,14 +160,15 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     targetGender: shoe ? shoe.targetGender : targetGenderNotice(product.targetGender, profile.gender),
     sizeSummary: shoe ? null : summarizeSizeChart({ sizes: cmpView.view?.sizes, recommended: result.recommendedSize, category: product.category }),
     chartView: product.sizeChart?.view ? { ...product.sizeChart.view, recommended: result.recommendedSize ?? null } : null,
-    confidence: result.confidence,
-    confidenceLabel: CONFIDENCE_LABEL[result.confidence],
+    // 신발은 확신도도 신발 결과(발길이 직접 입력 여부, 허용 사이즈 유무)로 정해요.
+    confidence: shoeText ? shoeText.confidence : result.confidence,
+    confidenceLabel: shoeText ? shoeText.confidenceLabel : CONFIDENCE_LABEL[result.confidence],
     // 신발은 옷용 문구('무난해요', '슬림 핏 기준')를 쓰지 않고 신발 판정에서 만든 글을 써요.
     summary: shoeText ? shoeText.summary : evidence?.summary || '',
     reasons: shoeText ? shoeText.reasons : evidence?.reasons || [],
     headline: shoeText ? shoeText.headline : result.headline,
     body: shoeText ? shoeText.body : result.body,
-    note: result.note,
+    note: shoeText ? shoeText.note : result.note,
     notes: product.notes,
   }
 }
