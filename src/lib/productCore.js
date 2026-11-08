@@ -23,7 +23,10 @@ export function mapHeader(header, category) {
   if (/밑위|rise/i.test(h)) return { key: 'rise' }
   if (/밑단|헴|hem/i.test(h)) return { key: 'hem', flat, flatBelow: 30 }
   if (/무릎|knee/i.test(h)) return { key: 'knee', flat, flatBelow: 30 }
-  if (/발볼|footwidth/i.test(h)) return { key: 'footWidth', scaleBelow: 30 }
+  // 신발 표(무신사 모양): '신발 길이'는 신발 바깥 길이(cm→mm)라 참고용 shoeLength로만 두고 발길이로 쓰지 않아요.
+  // '신발 너비'는 cm→mm로 바꿔 발볼(footWidth)로 써요. '발 길이'는 권장 발길이(mm), '굽/솔 높이'는 cm예요.
+  if (/신발길이|신발전장|shoelength/i.test(h)) return { key: 'shoeLength', scaleBelow: 60 }
+  if (/발볼|footwidth|신발너비|신발폭|신발발볼/i.test(h)) return { key: 'footWidth', scaleBelow: 30 }
   if (/굽|heel/i.test(h)) return { key: 'heelHeight', divideFrom: 30 }
   if (/어깨|shoulder/i.test(h)) return { key: 'shoulder' }
   if (/가슴|품|chest|bust/i.test(h)) return { key: 'chest', flat, flatBelow: 75 }
@@ -31,7 +34,7 @@ export function mapHeader(header, category) {
   if (/엉덩이|힙|hip/i.test(h)) return { key: 'hip', flat, flatBelow: 70 }
   if (/허리|waist/i.test(h)) return { key: 'waist', flat, flatBelow: 55 }
   if (/소매|팔|화장|sleeve/i.test(h)) return { key: 'arm', minValue: 40 }
-  if (/발길이|발사이즈|footlength|footsize/i.test(h)) return { key: 'footLength' }
+  if (/발길이|발사이즈|footlength|footsize/i.test(h)) return { key: 'footLength', scaleBelow: 40 }
   if (/총장|기장|총기장|전체길이|전장|length/i.test(h)) return LENGTH_KEY[category] ? { key: LENGTH_KEY[category] } : null
   return null
 }
@@ -278,7 +281,18 @@ function shoeMmChart(rowsList, options, category) {
  * meta.candidates: 후보별 머리글 모양(L/N/T 기호)과 선택/버린 사유. 페이지 글은 담지 않아요.
  * @returns {{ chart: object|null, meta: object }}
  */
-export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
+// 신발 사이즈 이름 '230 (230-235)'(대표 mm + 범위)는 대표 mm('230')를 표 라벨로 쓰고, 화면에는 원문을 그대로 보여줘요.
+const SHOE_RANGE_CELL_RE = /^(2[2-9]\d|3[01]\d)\s*\(\s*\d{3}\s*-\s*\d{3}\s*\)$/
+export function analyzeSizeCharts(rowsListIn, category, optionLabels = []) {
+  const rangeShown = {}
+  const rowsList = rowsListIn.map((rows) =>
+    rows.map((r) => {
+      const m = r.length >= 2 ? String(r[0]).trim().match(SHOE_RANGE_CELL_RE) : null
+      if (!m) return r
+      rangeShown[m[1]] = displayText(r[0])
+      return [m[1], ...r.slice(1)]
+    }),
+  )
   const options = (optionLabels || []).map(displayText).filter(Boolean)
   const meta = {
     considered: rowsList.length,
@@ -496,6 +510,7 @@ export function analyzeSizeCharts(rowsList, category, optionLabels = []) {
       ignored: ignored.slice(0, 3),
     },
   }
+  for (const k of Object.keys(rangeShown)) if (rows.some((r) => r[0] === k)) display[k] = rangeShown[k]
   if (Object.keys(display).length) chart.display = display
   if (Object.keys(widthLevels).length) chart.widthLevels = widthLevels
   return { chart, meta }

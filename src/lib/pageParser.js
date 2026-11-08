@@ -41,15 +41,107 @@ function collectJsonLd(root) {
 
 const isType = (n, t) => (Array.isArray(n['@type']) ? n['@type'].includes(t) : n['@type'] === t)
 
-export function readTables(root) {
-  return all(root, 'table').map((table) => {
-    const rows = []
-    for (const tr of all(table, 'tr')) {
-      const cells = all(tr, 'th,td').map((c) => clean(c.textContent))
-      if (cells.length) rows.push(cells)
+// 칸 글자: 요소 경계와 <br>에서 띄어쓰기를 넣어 '1'+'신발 길이'가 '1신발 길이'로 붙어도 읽을 수 있게 하고, 공백은 하나로 줄여요.
+// (textContent 그대로 쓰면 '<span>1</span><br>신발' 같은 줄바꿈이 사라져 단어가 붙어요. 열 번호 떼기는 productCore가 해요.)
+function cellTextOf(c) {
+  const kids = c.childNodes ? Array.from(c.childNodes) : null
+  if (!kids || kids.length === 0) return clean(c.textContent)
+  const parts = []
+  const walk = (n) => {
+    if (n.nodeType === 3) return void parts.push(n.nodeValue || n.textContent || '')
+    if (n.nodeType !== 1) return
+    if (String(n.tagName).toUpperCase() === 'BR') return void parts.push(' ')
+    const inner = n.childNodes ? Array.from(n.childNodes) : null
+    if (!inner || inner.length === 0) return void parts.push(n.textContent || '')
+    inner.forEach(walk)
+    parts.push(' ')
+  }
+  kids.forEach(walk)
+  return clean(parts.join(''))
+}
+
+const colspanOf = (c) => {
+  const n = Number.parseInt(c.getAttribute ? c.getAttribute('colspan') : '', 10)
+  return Number.isFinite(n) && n >= 1 && n <= 50 ? n : 1
+}
+
+// 표 하나를 줄 배열과 칸 수(colspan 포함)로 읽어요.
+function readTableDetail(table) {
+  const rows = []
+  const widths = []
+  for (const tr of all(table, 'tr')) {
+    const cs = all(tr, 'th,td')
+    const cells = cs.map(cellTextOf)
+    if (cells.length) {
+      rows.push(cells)
+      widths.push(cs.reduce((a, c) => a + colspanOf(c), 0))
     }
-    return rows
-  })
+  }
+  return { el: table, rows, widths, colspan: widths.reduce((a, w, i) => a + (w - rows[i].length), 0) }
+}
+
+const HEAD_WORD_RE = /어깨|가슴|총장|기장|허리|허벅지|엉덩이|소매|발길이|발 길이|단면|길이|너비|높이|암홀/
+const hasHeadWord = (rows) => rows.some((r) => r.some((c) => HEAD_WORD_RE.test(c)))
+const NUM_CELL_RE = /^-?\d+(?:\.\d+)?(?:\s*\([^)]*\))?(?:\s*cm)?$/i
+const hasNumberRow = (rows) => rows.some((r) => r.filter((c) => NUM_CELL_RE.test(c)).length >= 2)
+function commonAncestorDepth(a, b) {
+  const chain = new Set()
+  for (let e = a, i = 0; e && i < 12; e = e.parentElement, i++) chain.add(e)
+  for (let e = b, i = 0; e && i < 12; e = e.parentElement, i++) if (chain.has(e)) return i
+  return -1
+}
+
+/**
+ * 같은 열 수의 표가 머리글 표 + 본문 표로 나뉘어 있으면 하나의 표로 이어 붙여요.
+ * 머리글 표: 실측 항목 글자가 있고 숫자 줄이 없음. 본문 표: 실측 글자 없이 숫자 줄이 있고 칸 수(colspan 포함)가 같음.
+ * 가장 가까운 공통 조상이 4단계 안일 때만 이어요. 실제 사이트로는 확인하지 못했어요.
+ * @returns {{ rows: string[][], merged: boolean }[]} 이어 붙인 표 목록과, 원래 표 목록 (diag용으로 info도 돌려줌)
+ */
+export function mergeSplitTables(details) {
+  const merged = []
+  const info = { attempted: 0, merged: 0 }
+  for (let i = 0; i + 1 < details.length; i++) {
+    const a = details[i]
+    const b = details[i + 1]
+    if (!a.rows.length || !b.rows.length) continue
+    if (!hasHeadWord(a.rows) || hasNumberRow(a.rows)) continue
+    if (hasHeadWord(b.rows) || !hasNumberRow(b.rows)) continue
+    info.attempted++
+    const wa = Math.max(...a.widths)
+    const wb = Math.max(...b.widths)
+    if (wa !== wb || wa < 3) continue
+    const depth = commonAncestorDepth(a.el, b.el)
+    if (depth < 0 || depth > 4) continue
+    merged.push({ rows: [...a.rows, ...b.rows], from: [i, i + 1] })
+    info.merged++
+  }
+  return { merged, info }
+}
+
+export function readTables(root) {
+  const details = all(root, 'table').map(readTableDetail)
+  const tables = details.map((d) => d.rows)
+  // 머리글 표와 본문 표가 따로 있는 경우: 이어 붙인 표를 뒤에 더해요(원래 표는 그대로 둠).
+  if (details.length >= 2) for (const m of mergeSplitTables(details).merged) tables.push(m.rows)
+  return tables
+}
+
+/** 진단용: 표별 줄·칸 수, thead/tbody 유무, colspan 수, 이어 붙이기 시도 결과. 페이지 글은 담지 않아요. */
+export function tableShapes(root) {
+  const els = all(root, 'table')
+  const details = els.map(readTableDetail)
+  const { info } = details.length >= 2 ? mergeSplitTables(details) : { info: { attempted: 0, merged: 0 } }
+  return {
+    tables: details.slice(0, 6).map((d, i) => ({
+      rows: d.rows.length,
+      cols: Math.max(0, ...d.widths),
+      thead: all(els[i], 'thead').length > 0,
+      tbody: all(els[i], 'tbody').length > 0,
+      colspan: d.colspan,
+    })),
+    mergeAttempted: info.attempted,
+    merged: info.merged,
+  }
 }
 
 // ---------- <table>이 아닌 사이즈표 (div/grid, role=table, 세로 방향 등) ----------
@@ -149,9 +241,75 @@ export function readSizeGrids(root) {
   return findGridCandidates(root).map((c) => c.rows)
 }
 
-/** 표 + 표가 아닌 반복 구조에서 읽은 사이즈표 후보 전체 */
-export function readAllSizeRows(root) {
-  return [...readTables(root), ...readSizeGrids(root)]
+// ---------- 화면 위치(geometry)로 다시 맞춘 사이즈표 ----------
+// DOM 구조(표 분리, div 나열)로 줄이 안 맞을 때의 마지막 후보예요. 글자만 가진 요소의 화면 위치(rectOf)를 받아
+// 실측 항목 글자가 있는 제목 줄을 찾고, 그 아래 글자들을 y로 줄, x로 칸을 맞춰요.
+// rectOf가 없거나 위치가 모두 0이면(숨김·테스트 DOM) 아무것도 만들지 않습니다. 실제 사이트로는 확인하지 못했어요.
+const ROW_TOL = 6
+let rectProvider = null
+/** 화면 위치 제공자 등록(확장에서 el => el.getBoundingClientRect()). null이면 위치 기반 읽기를 쓰지 않아요. */
+export function setRectProvider(fn) {
+  rectProvider = typeof fn === 'function' ? fn : null
+}
+export function readGeometryRows(root, rectOfIn) {
+  const rectOf = rectOfIn || rectProvider
+  const result = { rows: null, leaves: 0, positioned: 0, rowCount: 0 }
+  if (typeof rectOf !== 'function') return result
+  const leaves = []
+  for (const e of all(root, '*')) {
+    if (childrenOf(e).length > 0) continue
+    const text = clean(e.textContent)
+    if (!text || text.length > 40) continue
+    result.leaves++
+    let r = null
+    try {
+      r = rectOf(e)
+    } catch {
+      r = null
+    }
+    if (!r || !(r.width > 0 || r.height > 0)) continue
+    result.positioned++
+    leaves.push({ text, x: r.left ?? r.x ?? 0, y: r.top ?? r.y ?? 0, w: r.width || 0, h: r.height || 0 })
+  }
+  // 위 줄의 짧은 숫자('1')가 바로 아래 글자('신발 길이')와 같은 칸이면 한 칸으로 합쳐요 (열 번호 + 항목명).
+  const used = new Set()
+  const merged = []
+  for (const n of leaves) {
+    if (!/^\d{1,2}$/.test(n.text)) continue
+    const below = leaves.find((m) => m !== n && !used.has(m) && m.y > n.y && m.y - n.y < 40 && Math.abs(m.x + m.w / 2 - (n.x + n.w / 2)) < Math.max(12, m.w / 2) && HEAD_WORD_RE.test(m.text))
+    if (below) {
+      used.add(n)
+      used.add(below)
+      merged.push({ ...below, text: `${n.text}${below.text}`, y: (n.y + below.y) / 2 })
+    }
+  }
+  const cells = [...leaves.filter((n) => !used.has(n)), ...merged].sort((a, b) => a.y - b.y || a.x - b.x)
+  const lines = []
+  for (const c of cells) {
+    const last = lines[lines.length - 1]
+    if (last && Math.abs(c.y - last.y) <= ROW_TOL) last.cells.push(c)
+    else lines.push({ y: c.y, cells: [c] })
+  }
+  const rows = lines.map((l) => l.cells.sort((a, b) => a.x - b.x).map((c) => c.text.replace(/^(-?\d+(?:\.\d+)?)\s*(cm|mm)$/i, '$1')))
+  const headIdx = rows.findIndex((r) => r.length >= 3 && r.filter((c) => MEASURE_RE.test(c) || HEAD_WORD_RE.test(c)).length >= 2)
+  if (headIdx < 0) return result
+  const width = rows[headIdx].length
+  const body = []
+  for (let i = headIdx + 1; i < rows.length; i++) {
+    const r = rows[i]
+    if (r.length === width || (r.length < width && /^(?:내사이즈|MY)/i.test(r[0].replace(/\s/g, '')))) body.push(r)
+    else if (body.length) break
+  }
+  const out = [rows[headIdx], ...body]
+  result.rowCount = out.length
+  if (out.length >= 3) result.rows = out
+  return result
+}
+
+/** 표 + 표가 아닌 반복 구조에서 읽은 사이즈표 후보 전체. opts.rectOf가 있으면 화면 위치로 맞춘 후보를 뒤에 더해요. */
+export function readAllSizeRows(root, opts = {}) {
+  const geo = readGeometryRows(root, opts.rectOf).rows
+  return [...readTables(root), ...readSizeGrids(root), ...(geo ? [geo] : [])]
 }
 
 // ---------- 구매 옵션 이름 ('0 (S)', '1 (M)' ...) ----------
@@ -700,6 +858,7 @@ export function parsePage(root, pageUrl = '', opts = {}) {
   const extra = opts.extraRows || []
   const tables = readTables(root)
   const grids = findGridCandidates(root)
+  const geo = readGeometryRows(root, opts.rectOf).rows
   // 카테고리: 상품명·JSON-LD·이동경로·옵션·머리글 근거를 합산해 정해요. 사용자가 고른 값이 있으면 그걸 우선합니다.
   const shoeOptionLabels = readShoeRangeOptions(root)
   const classifyInput = {
@@ -711,8 +870,8 @@ export function parsePage(root, pageUrl = '', opts = {}) {
   const auto = classifyCategory(classifyInput)
   const forced = CATEGORY_ORDER.includes(opts.categoryOverride) ? opts.categoryOverride : null
   const preCategory = forced || auto.category
-  const kinds = [...tables.map(() => 'table'), ...grids.map((c) => c.kind), ...extra.map(() => 'manual')]
-  const chartRowsList = [...tables, ...grids.map((c) => c.rows), ...extra]
+  const kinds = [...tables.map(() => 'table'), ...grids.map((c) => c.kind), ...(geo ? ['geometry'] : []), ...extra.map(() => 'manual')]
+  const chartRowsList = [...tables, ...grids.map((c) => c.rows), ...(geo ? [geo] : []), ...extra]
   const { chart: builtChart, meta: chartMeta } = analyzeSizeCharts(chartRowsList, preCategory, optionLabels)
   // 사용자가 고른 종류가 사이즈표 종류(신발 mm표 ↔ 옷 실측표)와 어긋나면, 고른 종류는 따르되 맞지 않는 표는 비교에 쓰지 않고 안내해요.
   let categoryNotice = null
