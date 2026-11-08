@@ -5,7 +5,7 @@ import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
 import { buildExportEnvelope } from '../src/lib/wardrobeImport.js'
 import { SYNC_QUEUE_KEY, WEB_APP_OPEN_URL, enqueue } from '../src/lib/wardrobeSync.js'
 import { collectDiagnostics, formatReport } from '../src/lib/diagnose.js'
-import { shouldStop, isSafeMoreButton, toReportStop, STOP_LABEL } from '../src/lib/reviewLoader.js'
+import { shouldStop, isSafeMoreButton, isReviewTab, isInnerScroller, loadTarget, loadResultText, toReportStop, AUTO_TARGET, MORE_STEP, MAX_MS } from '../src/lib/reviewLoader.js'
 import { compareBody, countUpValue, similarityTier, TIER_LABEL, diffText, buySizeText } from '../src/lib/similarityBreakdown.js'
 import { EXT_PROFILE_KEY, isUsableProfile } from '../src/lib/extProfile.js'
 
@@ -18,7 +18,6 @@ const EXT_VERSION = (typeof chrome !== 'undefined' && chrome.runtime?.getManifes
 const QUIET_MS = 500 // 이 시간 동안 화면 변화가 없으면 다 그려졌다고 봅니다
 const STEP_QUIET_MS = 600 // 리뷰 더 불러오기 한 단계 뒤 화면이 잠잠해질 때까지 기다리는 시간
 const STEP_WAIT_MS = 2500 // 한 단계에서 기다리는 최대 시간
-const REVIEW_BOX = '[class*="review" i],[id*="review" i],[data-testid*="review" i]' // 리뷰 영역으로 보는 조상
 
 const CSS = `
 :host{all:initial}
@@ -168,7 +167,7 @@ let panel = null
 let fab = null
 let wrapEl = null
 let busy = false
-let loader = null // 리뷰 더 불러오기 진행 상태 { aborted }
+let loader = null // 리뷰 불러오기 진행 상태 { aborted, wake }
 
 function ensureUi() {
   if (host) return
@@ -890,12 +889,66 @@ function reviewElements() {
   return cards.length > 0 ? cards : Array.from(document.querySelectorAll(REVIEW_SELECTOR))
 }
 
-// 리뷰 영역 안의 '더보기' 버튼 중 허용 목록에 맞는 것 하나만 찾습니다.
+// 리뷰 영역 안인지: 조상의 class·id·data-testid에 review가, 또는 aria-label에 리뷰·후기가 들어 있어요.
+// (closest 대신 직접 올라가며 봐서, 테스트용 가짜 DOM에서도 같은 규칙으로 동작해요)
+function inReviewBox(e) {
+  for (let cur = e, i = 0; cur && i < 30; cur = cur.parentElement, i++) {
+    const attr = (n) => String(cur.getAttribute?.(n) || '')
+    if (/review/i.test(`${attr('class')} ${attr('id')} ${attr('data-testid')}`) || /리뷰|후기/.test(attr('aria-label'))) return true
+  }
+  return false
+}
+
+const PAGE_ACTIVE_RE = /(?:^|[\s_-])(?:active|on|current|selected|is-active)(?:$|[\s_-])/i
+
+// 리뷰 영역의 쪽 번호 중 지금 쪽 (aria-current 또는 active·on 같은 클래스가 붙은 숫자). 모르면 null
+function currentReviewPage() {
+  for (const e of document.querySelectorAll('[aria-current], [aria-selected="true"], button, [role="button"], a, strong')) {
+    const t = String(e.textContent || '').trim()
+    if (!/^\d{1,3}$/.test(t) || !inReviewBox(e)) continue
+    const cur = e.getAttribute('aria-current')
+    if ((cur && cur !== 'false') || e.getAttribute('aria-selected') === 'true' || PAGE_ACTIVE_RE.test(String(e.getAttribute('class') || ''))) return Number(t)
+  }
+  return null
+}
+
+// 리뷰 영역 안의 버튼 중 허용 목록에 맞는 것 하나만 찾습니다. '더보기' 종류를 먼저, 그다음 '다음', 마지막으로 바로 다음 쪽 번호예요.
 function findMoreButton() {
-  const cands = document.querySelectorAll('button, [role="button"]')
-  for (const b of cands) {
-    if (b.disabled || b.getAttribute('aria-disabled') === 'true') continue
-    if (isSafeMoreButton(b.textContent, { inReviewContainer: !!b.closest(REVIEW_BOX) })) return b
+  const cands = Array.from(document.querySelectorAll('button, [role="button"]')).filter(
+    (b) => !b.disabled && b.getAttribute('aria-disabled') !== 'true' && inReviewBox(b),
+  )
+  if (!cands.length) return null
+  const text = (b) => String(b.textContent || '').replace(/\s+/g, ' ').trim()
+  const currentPage = currentReviewPage()
+  const ok = cands.filter((b) => isSafeMoreButton(text(b), { inReviewContainer: true, currentPage }))
+  return ok.find((b) => /보기$/.test(text(b))) || ok.find((b) => /^다음/.test(text(b))) || ok[0] || null
+}
+
+// '스냅·후기' 같은 리뷰 탭. 탭이라고 화면이 직접 밝힌 것(role="tab" 또는 role="tablist" 안)이고,
+// 글 전체가 리뷰 탭 이름 모양이고, 아직 열리지 않았고, 다른 페이지로 가는 링크가 아닐 때만 찾아요(isReviewTab).
+// 탭은 같은 페이지 안에서 보이는 영역만 바꾸고 구매·저장 같은 상태를 바꾸지 않아서 이 경우에만 눌러요.
+function findReviewTab() {
+  for (const e of document.querySelectorAll('[role="tab"], [role="tablist"] button, [role="tablist"] a, [role="tablist"] li')) {
+    let inTablist = false
+    for (let cur = e.parentElement, i = 0; cur && i < 6; cur = cur.parentElement, i++) if (cur.getAttribute?.('role') === 'tablist') inTablist = true
+    const info = { role: e.getAttribute('role'), inTablist, selected: e.getAttribute('aria-selected') === 'true', href: e.getAttribute('href') }
+    if (isReviewTab(e.textContent, info)) return e
+  }
+  return null
+}
+
+// 리뷰 목록이 페이지가 아니라 안쪽 상자(모달·패널)에서 스크롤되는 경우 그 상자를 찾아요. 없으면 null
+function innerScroller(e) {
+  if (typeof getComputedStyle !== 'function') return null
+  for (let cur = e?.parentElement, i = 0; cur && i < 20; cur = cur.parentElement, i++) {
+    if (cur === document.body || cur === document.documentElement) return null
+    let overflowY = ''
+    try {
+      overflowY = getComputedStyle(cur).overflowY
+    } catch {
+      return null
+    }
+    if (isInnerScroller({ overflowY, scrollHeight: cur.scrollHeight, clientHeight: cur.clientHeight })) return cur
   }
   return null
 }
@@ -920,25 +973,49 @@ function quietWait(quietMs, maxMs, state) {
   })
 }
 
-// 사용자가 누를 때만 실행: 마지막 리뷰 쪽으로 스크롤하고, 허용된 '더보기'를 단계마다 최대 한 번 누릅니다.
-// 한도(횟수·시간·정체)나 중단 버튼으로 멈추고, 끝나면 항상 원래 스크롤 위치로 돌아옵니다.
-async function loadMoreReviews(onProgress) {
+// '내 사이즈 찾기'(mode 'auto', AUTO_TARGET건까지)나 '리뷰 더 불러오기'(mode 'more', 지금 + MORE_STEP건)를 누를 때만 실행해요.
+// 마지막 리뷰 쪽으로 스크롤하고(안쪽 스크롤 상자가 있으면 그 상자도 끝까지), 허용된 '더보기'·'다음'·다음 쪽 번호를 단계마다 최대 한 번 누릅니다.
+// 더보기 버튼이 안 보이면 처음 한 번만 '스냅·후기' 같은 리뷰 탭을 눌러 리뷰 영역을 열어요(findReviewTab 조건일 때만).
+// 목표 건수·한도(횟수·시간·정체)·중단 버튼으로 멈추고, 끝나면 항상 원래 스크롤 위치로 돌아옵니다.
+async function loadMoreReviews(mode, onProgress) {
   const { scrollX, scrollY } = window
   const state = { aborted: false, wake: null }
   loader = state
   const startedAt = Date.now()
+  const scrollers = new Map() // 안쪽 스크롤 상자 → 원래 scrollTop
   let steps = 0
   let stalls = 0
+  let clicked = false
   let count = reviewElements().length
+  const startCount = count
+  const target = loadTarget(count, mode)
   let reason = null
   const total = readReviewTotal(document) // 못 찾으면 null
+  onProgress(count)
   try {
-    while (!(reason = shouldStop({ steps, elapsedMs: Date.now() - startedAt, stalls, aborted: state.aborted, count, total }))) {
+    if (count < target && !findMoreButton()) {
+      const tab = findReviewTab()
+      if (tab) {
+        tab.click()
+        await quietWait(STEP_QUIET_MS, STEP_WAIT_MS, state)
+        count = reviewElements().length
+        onProgress(count)
+      }
+    }
+    while (!(reason = shouldStop({ steps, elapsedMs: Date.now() - startedAt, stalls, aborted: state.aborted, count, total, target }))) {
       const list = reviewElements()
-      const target = list[list.length - 1]
-      if (target) target.scrollIntoView({ block: 'center' })
+      const last = list[list.length - 1]
+      if (last && typeof last.scrollIntoView === 'function') last.scrollIntoView({ block: 'center' })
+      const box = innerScroller(last)
+      if (box) {
+        if (!scrollers.has(box)) scrollers.set(box, box.scrollTop)
+        box.scrollTop = box.scrollHeight
+      }
       const btn = findMoreButton()
-      if (btn) btn.click()
+      if (btn) {
+        btn.click()
+        clicked = true
+      }
       await quietWait(STEP_QUIET_MS, STEP_WAIT_MS, state)
       steps += 1
       const next = reviewElements().length
@@ -947,10 +1024,36 @@ async function loadMoreReviews(onProgress) {
       onProgress(count)
     }
   } finally {
+    for (const [box, top] of scrollers) box.scrollTop = top
     window.scrollTo({ left: scrollX, top: scrollY, behavior: 'instant' }) // smooth 스크롤 설정을 무시
     loader = null
   }
-  return reason
+  return { reason, clicked, grewOnPage: count > startCount }
+}
+
+// 불러온 뒤 다시 분석하고 결과 한 줄과 진단 값을 붙여요. before는 불러오기 전 카드에 보이던 리뷰 수예요.
+function reanalyzeAfterLoad(profile, before, res) {
+  const next = analyzePage(document, location.href, profile, EXT_VERSION, { categoryOverride: chosenCategory, ...(chosenExtraRows ? { extraRows: chosenExtraRows } : {}) })
+  if (chosenExtraRows) next.manual = true
+  if (next.status === 'ok') {
+    const scroll = { before, after: next.reviewsLoaded ?? 0, stop: toReportStop(res.reason) }
+    next.diagnostics = collectDiagnostics(document, location.href, EXT_VERSION, { scroll })
+    next.loadInfo = loadResultText({ before, after: scroll.after, reason: res.reason, clicked: res.clicked, grewOnPage: res.grewOnPage })
+  }
+  return next
+}
+
+// 중단 버튼: 진행 중인 불러오기를 멈추고 기다리던 것을 바로 끝내요.
+function stopButton() {
+  const stop = el('button', 'btn', '중단')
+  stop.type = 'button'
+  stop.addEventListener('click', () => {
+    if (loader) {
+      loader.aborted = true
+      if (loader.wake) loader.wake()
+    }
+  })
+  return stop
 }
 
 // 사이즈표 요약: 사이즈 목록, 추천 사이즈 핵심 실측, 위·아래 사이즈 차이, 한 줄 판정. targets는 이동할 구역(details)과 직접 입력 양식이에요.
@@ -1022,38 +1125,23 @@ function loadMoreBlock(r) {
   const box = el('div')
   const btn = el('button', 'btn', '리뷰 더 불러오기')
   btn.type = 'button'
-  const stop = el('button', 'btn', '중단')
-  stop.type = 'button'
+  const stop = stopButton()
   stop.hidden = true
   const prog = el('p', 'prog')
   prog.setAttribute('role', 'status')
-  stop.addEventListener('click', () => {
-    if (loader) {
-      loader.aborted = true
-      if (loader.wake) loader.wake()
-    }
-  })
   btn.addEventListener('click', async () => {
     if (busy) return
     busy = true
     btn.disabled = true
     stop.hidden = false
     fab.disabled = true
-    prog.textContent = '불러온 리뷰 0건'
-    let reason = 'aborted'
     try {
-      reason = await loadMoreReviews((n) => {
+      const res = await loadMoreReviews('more', (n) => {
         prog.textContent = `불러온 리뷰 ${n}건`
       })
       const profile = await readProfile()
       if (!isUsableProfile(profile)) throw new Error('no-profile')
-      const next = analyzePage(document, location.href, profile, EXT_VERSION, { categoryOverride: chosenCategory, ...(chosenExtraRows ? { extraRows: chosenExtraRows } : {}) })
-      if (chosenExtraRows) next.manual = true
-      const scroll = { before: r.reviewsLoaded ?? 0, after: next.reviewsLoaded ?? 0, stop: toReportStop(reason) }
-      if (next.status === 'ok') {
-        next.diagnostics = collectDiagnostics(document, location.href, EXT_VERSION, { scroll })
-        next.loadInfo = `리뷰 ${scroll.before}건에서 ${scroll.after}건으로 늘렸어요. ${STOP_LABEL[reason]}.`
-      }
+      const next = reanalyzeAfterLoad(profile, r.reviewsLoaded ?? 0, res)
       busy = false
       renderResult(next)
     } catch {
@@ -1066,11 +1154,26 @@ function loadMoreBlock(r) {
       fab.disabled = false
     }
   })
-  btn.setAttribute('title', '누를 때만 동작해요. 리뷰 영역을 스크롤하며 리뷰의 더보기 버튼만 누르고, 최대 약 30초 뒤 멈춰요. 끝나면 원래 위치로 돌아와요.')
+  btn.setAttribute('title', `누를 때마다 리뷰를 ${MORE_STEP}건씩 더 불러와요. 리뷰 영역을 스크롤하며 리뷰의 더보기·다음 버튼만 누르고, 최대 약 ${Math.round(MAX_MS / 1000)}초 뒤 멈춰요. 끝나면 원래 위치로 돌아와요.`)
   const btns = el('div', 'btns')
   btns.append(btn, stop)
   box.append(btns, prog)
   return box
+}
+
+// '내 사이즈 찾기' 직후 리뷰를 AUTO_TARGET건까지 자동으로 불러오는 동안 보이는 카드 (진행 건수와 중단 버튼)
+function showAutoLoading() {
+  const prog = el('p', 'prog', '불러온 리뷰 0건')
+  prog.setAttribute('role', 'status')
+  showCard((card) => {
+    card.append(el('p', null, `리뷰를 ${AUTO_TARGET}건까지 불러오는 중이에요. 끝나면 원래 위치로 돌아와요.`))
+    const btns = el('div', 'btns')
+    btns.append(stopButton())
+    card.append(btns, prog)
+  })
+  return (n) => {
+    prog.textContent = `불러온 리뷰 ${n}건`
+  }
 }
 
 // 사용자가 고른 옷 종류 (이 페이지에서만 기억하고 저장하지 않아요). 자동 분류보다 우선합니다.
@@ -1242,12 +1345,21 @@ async function run() {
     stage = 'wait'
     await waitForRender()
     stage = 'analyze'
-    // 사이즈표를 못 찾으면 짧게 기다렸다가 다시 읽어요. 클릭·스크롤은 하지 않고 화면 글만 읽습니다.
+    // 사이즈표를 못 찾으면 짧게 기다렸다가 다시 읽어요. 이 단계에서는 클릭·스크롤 없이 화면 글만 읽습니다.
     let result = analyzePage(document, location.href, profile, EXT_VERSION, { categoryOverride: chosenCategory })
     for (const delay of RETRY_DELAYS) {
       if (result.status !== 'no-data' && result.status !== 'no-product') break
       await new Promise((r) => setTimeout(r, delay))
       result = analyzePage(document, location.href, profile, EXT_VERSION, { categoryOverride: chosenCategory })
+    }
+    // 리뷰가 AUTO_TARGET건보다 적으면 자동으로 더 불러온 뒤 다시 분석해요 (상품 페이지로 읽힌 경우만).
+    if ((result.status === 'ok' || result.status === 'no-data') && (result.reviewsLoaded ?? 0) < AUTO_TARGET) {
+      stage = 'load'
+      fab.textContent = '리뷰 불러오는 중…'
+      const res = await loadMoreReviews('auto', showAutoLoading())
+      stage = 'analyze'
+      const next = reanalyzeAfterLoad(profile, result.reviewsLoaded ?? 0, res)
+      if (next.status === 'ok' || result.status !== 'ok') result = next
     }
     stage = 'render'
     renderResult(result)

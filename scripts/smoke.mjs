@@ -56,7 +56,7 @@ import { bodySimilarity, splitReviews, matchReviews, BODY_SIM } from '../src/lib
 import { runHfTryOn, parseSse, spaceBaseUrl, isValidSpaceId, clearTryOnCache, garmentDescription, isTryOnSupported, DEFAULT_SPACE } from '../server/hfTryOn.js'
 
 import { toContribution, toBand, toDomain, contributionKey, ALLOWED_DOMAINS, SCHEMA_VERSION } from '../src/lib/contribution.js'
-import { MAX_STEPS, MAX_MS, STALL_LIMIT, STOP_REASONS, shouldStop, isSafeMoreButton, toReportStop } from '../src/lib/reviewLoader.js'
+import { MAX_STEPS, MAX_MS, STALL_LIMIT, STOP_REASONS, AUTO_TARGET, MORE_STEP, shouldStop, isSafeMoreButton, isReviewTab, isInnerScroller, loadTarget, loadResultText, toReportStop } from '../src/lib/reviewLoader.js'
 import { CONSENT_SUMMARY, CONSENT_VERSION } from '../src/data/consent.js'
 import { loadConsent, purgeStaleConsent, saveConsent, enqueueContribution, loadContribQueue, recordsForUpload } from '../src/lib/storage.js'
 
@@ -1424,7 +1424,7 @@ test('content.js: 더보기 후보는 button으로 좁고, 중단은 대기를 �
   assert.ok(!src.includes('javascript:'))
   assert.ok(src.includes(`querySelectorAll('button, [role="button"]')`))
   assert.ok(src.includes('quietWait(STEP_QUIET_MS, STEP_WAIT_MS, state)') && src.includes('loader.wake()'))
-  assert.ok(src.includes('count, total }') && !src.includes('total: null'))
+  assert.ok(src.includes('count, total, target }') && !src.includes('total: null'))
   assert.ok(src.includes(`behavior: 'instant'`))
 })
 
@@ -1468,6 +1468,9 @@ test('reviewLoader.shouldStop: 한도·중단·전체 수·정체를 정해진 �
   assert.equal(shouldStop({ stalls: STALL_LIMIT }), 'no-more')
   assert.equal(shouldStop({ steps: MAX_STEPS }), 'limit-steps')
   assert.equal(shouldStop({ elapsedMs: MAX_MS }), 'limit-time')
+  assert.equal(shouldStop({ count: 30, target: 30 }), 'reached-target')
+  assert.equal(shouldStop({ count: 29, target: 30 }), null)
+  assert.equal(toReportStop('reached-target'), 'limit')
   for (const reason of STOP_REASONS) assert.ok(['reached-end', 'no-growth', 'limit', 'limit-time', 'aborted'].includes(toReportStop(reason)))
   assert.equal(toReportStop('이상한 값'), 'not-run')
 })
@@ -1479,6 +1482,58 @@ test('reviewLoader.isSafeMoreButton: 리뷰 영역의 더보기만 허용한다'
     assert.equal(isSafeMoreButton(t, inReview), false, t)
   assert.equal(isSafeMoreButton('더보기', { inReviewContainer: false }), false)
   assert.equal(isSafeMoreButton('더보기', null), false)
+})
+
+test('reviewLoader: 자동은 30건까지, 더 불러오기는 누를 때마다 지금 + 10건이 목표다', () => {
+  assert.equal(AUTO_TARGET, 30)
+  assert.equal(MORE_STEP, 10)
+  assert.equal(loadTarget(11, 'auto'), 30)
+  assert.equal(loadTarget(11, 'more'), 21)
+  assert.equal(loadTarget(30, 'more'), 40)
+  assert.equal(loadTarget(null, 'more'), 10)
+})
+
+test('reviewLoader.isSafeMoreButton: 후기·리뷰 더보기, 다음, 바로 다음 쪽 번호만 허용하고 구매·쿠폰 같은 버튼은 막는다', () => {
+  const inReview = { inReviewContainer: true, currentPage: 1 }
+  for (const t of ['후기 더보기', '리뷰 더보기', '리뷰 더 보기', '더보기', '다음', '다음 페이지', '2'])
+    assert.equal(isSafeMoreButton(t, inReview), true, t)
+  for (const t of ['구매하기', '장바구니', '좋아요', '쿠폰 받기', '주문하기', '결제', '찜하기', '공유', '댓글 3', '3', '1', '0', '다음 쿠폰', '쿠폰 더보기', '이전', '후기 작성'])
+    assert.equal(isSafeMoreButton(t, inReview), false, t)
+  assert.equal(isSafeMoreButton('2', { inReviewContainer: true }), false, '지금 쪽을 모르면 쪽 번호는 누르지 않아요')
+  assert.equal(isSafeMoreButton('2', { inReviewContainer: false, currentPage: 1 }), false, '리뷰 영역 밖 쪽 번호')
+  assert.equal(isSafeMoreButton('다음', { inReviewContainer: false }), false, '리뷰 영역 밖 다음')
+  assert.equal(isSafeMoreButton('4', { inReviewContainer: true, currentPage: 3 }), true)
+})
+
+test('reviewLoader.isReviewTab: 탭이라고 밝힌 아직 안 열린 리뷰 탭만 누른다', () => {
+  for (const t of ['스냅·후기', '스냅 · 후기', '후기', '리뷰', '후기 1,234', '스냅·후기(733)', '리뷰 (12)'])
+    assert.equal(isReviewTab(t, { role: 'tab' }), true, t)
+  assert.equal(isReviewTab('스냅·후기', { inTablist: true, href: '#review' }), true)
+  assert.equal(isReviewTab('스냅·후기', { role: null, inTablist: false }), false, '탭이라고 밝히지 않은 요소')
+  assert.equal(isReviewTab('스냅·후기', { role: 'tab', selected: true }), false, '이미 열린 탭')
+  assert.equal(isReviewTab('스냅·후기', { role: 'tab', href: '/review/goods/1' }), false, '다른 페이지 링크')
+  for (const t of ['후기 작성', '리뷰 쓰고 쿠폰 받기', '상품정보', '구매후기 이벤트', '스냅', ''])
+    assert.equal(isReviewTab(t, { role: 'tab' }), false, t)
+  assert.equal(isReviewTab('후기', null), false)
+})
+
+test('reviewLoader.isInnerScroller: overflow-y가 auto/scroll이고 내용이 더 길 때만 안쪽 스크롤 상자다', () => {
+  assert.equal(isInnerScroller({ overflowY: 'auto', scrollHeight: 2000, clientHeight: 500 }), true)
+  assert.equal(isInnerScroller({ overflowY: 'scroll', scrollHeight: 2000, clientHeight: 500 }), true)
+  assert.equal(isInnerScroller({ overflowY: 'visible', scrollHeight: 2000, clientHeight: 500 }), false)
+  assert.equal(isInnerScroller({ overflowY: 'auto', scrollHeight: 500, clientHeight: 500 }), false)
+  assert.equal(isInnerScroller({ overflowY: 'auto', scrollHeight: 500, clientHeight: 0 }), false)
+  assert.equal(isInnerScroller(), false)
+})
+
+test('reviewLoader.loadResultText: 늘면 더 불러온 건수와 총 건수, 안 늘면 이유를 알려주고 "N건에서 N건으로"는 쓰지 않는다', () => {
+  assert.equal(loadResultText({ before: 11, after: 21, reason: 'reached-target', clicked: true }), '리뷰 10건을 더 불러왔어요(총 21건)')
+  assert.equal(loadResultText({ before: 11, after: 11, reason: 'no-more', clicked: true }), '더 불러올 리뷰가 없어요(현재 11건)')
+  assert.equal(loadResultText({ before: 11, after: 11, reason: 'reached-total' }), '더 불러올 리뷰가 없어요(현재 11건)')
+  assert.equal(loadResultText({ before: 11, after: 11, reason: 'no-more', clicked: false }), '리뷰를 더 불러오지 못했어요(현재 11건) — 리뷰 탭을 열고 다시 눌러 주세요')
+  assert.equal(loadResultText({ before: 11, after: 11, reason: 'aborted' }), '불러오기를 중단했어요(현재 11건)')
+  assert.ok(loadResultText({ before: 11, after: 11, reason: 'no-more', grewOnPage: true }).includes('현재 11건'))
+  for (const a of [[11, 11], [11, 21], [0, 0], [5, 3]]) assert.ok(!/건에서 .*건으로/.test(loadResultText({ before: a[0], after: a[1], reason: 'no-more' })), String(a))
 })
 
 test('diagnose: 리뷰 불러오기 멈춘 이유(시간 한도·중단)가 리포트에 보인다', () => {
@@ -1524,7 +1579,7 @@ async function runContentInFakeDom(pageHtml = null, extra = {}, measurements = {
     }
     const created = []
     const storageCalls = []
-    const pageDoc = pageHtml ? fakeDocument(pageHtml) : null
+    const pageDoc = typeof pageHtml === 'string' ? fakeDocument(pageHtml) : pageHtml || null
     const doc = {
       readyState: 'complete', body: makeEl('body'), documentElement: makeEl('html'),
       createElement(tag) { const e = makeEl(tag); created.push(e); return e },
@@ -1665,16 +1720,17 @@ await atest('content.js(가짜 DOM, vm): 카드 문구가 줄었고 오래된 �
   assert.equal(texts.filter((t) => t.includes('확신도는 정확도를 측정한 값이 아니에요')).length, 1)
   assert.equal(texts.filter((t) => t.includes('참고용이에요')).length, 1)
   // 기본으로 보이는 영역(fold 바깥)의 문장 수는 적다: card 직계 자식은 헤더, 분류줄, 사이즈, 근거 한 줄, 고지 한 줄, fold뿐
-  const card = created.find((e) => e.className.split(' ').includes('card'))
+  // 리뷰 자동 불러오기 진행 카드가 먼저 그려지므로, 마지막에 그린 결과 카드를 봐요.
+  const card = created.findLast((e) => e.className.split(' ').includes('card'))
   assert.deepEqual(card.children.map((c) => c.className.split(' ')[0]), ['row', 'row', 'size', 'sum', 'tiny', 'fold'])
   // 최소화하면 fold가 숨겨지는 클래스가 붙고, 다시 누르면 풀린다
-  const mini = created.find((e) => e.tagName === 'BUTTON' && e.textContent === '−')
+  const mini = created.findLast((e) => e.tagName === 'BUTTON' && e.textContent === '−')
   mini._l.click()
   assert.ok(card.className.split(' ').includes('min'))
-  const plus = created.find((e) => e.tagName === 'BUTTON' && e.textContent === '+')
+  const plus = created.findLast((e) => e.tagName === 'BUTTON' && e.textContent === '+')
   plus._l.click()
   assert.ok(!card.className.split(' ').includes('min'))
-  const close = created.find((e) => e.tagName === 'BUTTON' && e.textContent === '×')
+  const close = created.findLast((e) => e.tagName === 'BUTTON' && e.textContent === '×')
   assert.ok(close)
 })
 
@@ -2236,7 +2292,7 @@ await atest('content.js(가짜 DOM, vm): 리뷰 탭 4개와 사진 모아보기,
   assert.ok(texts.includes(NOTE), '안내문은 정확히 두 문장')
   assert.ok(!texts.some((t) => t.includes('닉네임·리뷰 원문') || t.includes('서버로 보내지 않고')), '앞 문장 삭제')
   const more = created.find((e) => e.tagName === 'BUTTON' && e.textContent === '리뷰 더 불러오기')
-  const stopBtn = created.find((e) => e.tagName === 'BUTTON' && e.textContent === '중단')
+  const stopBtn = created.findLast((e) => e.tagName === 'BUTTON' && e.textContent === '중단')
   const row = created.find((e) => e.children.includes(more))
   assert.ok(more && stopBtn && row && row.className === 'btns' && row.children.includes(stopBtn), '불러오기와 중단은 같은 .btns 안')
   assert.ok(created.find((e) => e.children.includes(send))?.className === 'btns', '보내기 버튼도 .btns 안')
@@ -3701,6 +3757,77 @@ await atest('content.js(가짜 DOM, vm): 신발 사이즈표에 발볼 열이 �
   assert.ok(texts.some((t) => t.includes('휴리스틱') && t.includes('발볼') && t.includes('사이즈표')), '발볼 근거 한 줄')
 })
 
+
+// ---- 리뷰 자동 불러오기(30건)·더 불러오기(+10건): 가짜 HTML과 가짜 DOM이에요. 실제 무신사·크롬에서 확인한 것이 아니에요 ----
+const LOAD_REVIEW = (i) => `<li>키 ${160 + (i % 25)} 몸무게 ${55 + (i % 20)} 1 (M) 사이즈로 구매 정사이즈예요 후기 번호 ${i}번 잘 맞아요</li>`
+// 리뷰 n건과(리뷰 영역 = aria-label '상품 후기'), 있으면 '후기 더보기'(누르면 10건 추가)·'구매하기'·'스냅·후기' 탭을 둔 페이지
+function loadPage(n, { more = true, tab = false } = {}) {
+  const html = wrapBody(
+    `${optionsHtml}${chartTable(OPTION_LIST_LABELS())}` +
+      (tab ? `<div role="tablist"><button role="tab" aria-selected="true">상품정보</button><button role="tab" aria-selected="false" class="snap-tab">스냅·후기</button></div>` : '') +
+      `<section aria-label="상품 후기"><ul class="rl">${Array.from({ length: n }, (_, i) => LOAD_REVIEW(i)).join('')}</ul>` +
+      `${more ? '<button class="more">후기 더보기</button>' : ''}<button class="buy">구매하기</button></section>`,
+  )
+  const doc = fakeDocument(html)
+  const clicks = { more: 0, buy: 0, tab: 0 }
+  let added = n
+  const moreBtn = doc.querySelector('button.more')
+  if (moreBtn) moreBtn.click = () => {
+    clicks.more += 1
+    doc.$('ul.rl').append(Array.from({ length: 10 }, (_, k) => LOAD_REVIEW(added + k)).join(''))
+    added += 10
+  }
+  doc.querySelector('button.buy').click = () => { clicks.buy += 1 }
+  const tabBtn = doc.querySelector('button.snap-tab')
+  if (tabBtn) tabBtn.click = () => { clicks.tab += 1 }
+  return { doc, clicks }
+}
+const NO_FROM_TO = (texts) => !texts.some((t) => /건에서 .*건으로/.test(t))
+
+await atest('content.js(가짜 DOM, vm): 내 사이즈 찾기는 리뷰를 30건까지 자동으로 불러오고 진행 건수와 결과 한 줄을 보여준다', async () => {
+  const { doc, clicks } = loadPage(11)
+  const { texts, created } = await runContentInFakeDom(doc)
+  assert.equal(clicks.more, 2, '11 -> 21 -> 31건, 30건을 넘으면 멈춰요')
+  assert.equal(clicks.buy, 0, '구매하기는 누르지 않아요')
+  assert.ok(texts.includes('불러온 리뷰 11건') && texts.includes('불러온 리뷰 31건'), '진행 건수')
+  assert.ok(created.some((e) => e.tagName === 'BUTTON' && e.textContent === '중단'), '자동 불러오기 중에도 중단 버튼')
+  assert.ok(texts.includes('리뷰 20건을 더 불러왔어요(총 31건)'), texts.filter((t) => t.includes('불러')).join('|'))
+  assert.ok(NO_FROM_TO(texts))
+})
+
+await atest('content.js(가짜 DOM, vm): 리뷰 더 불러오기는 누를 때마다 10건씩 더 불러온다', async () => {
+  const { doc, clicks } = loadPage(11)
+  const { texts, created } = await runContentInFakeDom(doc)
+  const moreBtn = () => created.filter((e) => e.tagName === 'BUTTON' && e.textContent === '리뷰 더 불러오기').at(-1)
+  await moreBtn()._l.click()
+  assert.equal(clicks.more, 3, '한 번 누르면 더보기 한 번(10건)')
+  assert.ok(texts.includes('리뷰 10건을 더 불러왔어요(총 41건)'), texts.filter((t) => t.includes('불러')).join('|'))
+  await moreBtn()._l.click()
+  assert.equal(clicks.more, 4)
+  assert.ok(texts.includes('리뷰 10건을 더 불러왔어요(총 51건)'))
+  assert.equal(clicks.buy, 0)
+  assert.ok(NO_FROM_TO(texts))
+})
+
+await atest('content.js(가짜 DOM, vm): 더보기가 없어 늘지 않으면 "N건에서 N건으로" 대신 리뷰 탭을 열라고 안내하고, 리뷰 탭은 한 번만 누른다', async () => {
+  const { doc, clicks } = loadPage(11, { more: false, tab: true })
+  const { texts, created } = await runContentInFakeDom(doc)
+  assert.equal(clicks.tab, 1, '아직 안 열린 role="tab" 스냅·후기 탭만 한 번 눌러요')
+  assert.equal(clicks.buy, 0)
+  const msg = '리뷰를 더 불러오지 못했어요(현재 11건) — 리뷰 탭을 열고 다시 눌러 주세요'
+  assert.ok(texts.includes(msg), texts.filter((t) => t.includes('불러')).join('|'))
+  const moreBtn = created.filter((e) => e.tagName === 'BUTTON' && e.textContent === '리뷰 더 불러오기').at(-1)
+  await moreBtn._l.click()
+  assert.equal(texts.filter((t) => t === msg).length, 2, '더 불러오기를 눌러도 같은 안내')
+  assert.ok(NO_FROM_TO(texts))
+})
+
+await atest('content.js(가짜 DOM, vm): 리뷰가 이미 30건 이상이면 자동으로 불러오지 않는다', async () => {
+  const { doc, clicks } = loadPage(31)
+  const { texts } = await runContentInFakeDom(doc)
+  assert.equal(clicks.more, 0)
+  assert.ok(!texts.some((t) => t.startsWith('불러온 리뷰')))
+})
 
 // ---------- 신발 리뷰 수정 ----------
 test('가짜 데이터: 발볼 보정 뒤 작아요 다수면 "큰 사이즈가 없다"가 아니라 이미 보정했다고 안내한다', () => {

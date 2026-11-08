@@ -43,5 +43,8 @@ export function fakeDocument(html) {
       return f.length ? wrap(f[0]) : null
     },
   })
-  return wrap($.root()[0])
+  const root = wrap($.root()[0])
+  // 테스트에서 '더보기'를 누르면 리뷰가 늘어나는 페이지를 흉내 낼 수 있게 cheerio 객체를 붙여 둬요.
+  root.$ = $
+  return root
 }
