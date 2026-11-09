@@ -138,7 +138,11 @@ export async function runHfTryOn({
       ? 'AI 합성은 상의·아우터·하의·원피스만 지원해요.'
       : 'AI 합성은 상의·아우터만 지원해요. 무료 IDM-VTON Space는 상반신만 인식해요. Leffa 모델을 고르면 하의·원피스도 돼요.')
   }
-  if (which === 'leffa') space = TRYON_MODELS.leffa.space
+  if (which === 'leffa') {
+    space = TRYON_MODELS.leffa.space
+    // 운영자가 HF_SPACE로 고르지 않은 제3자 Space라서 HF_TOKEN을 보내지 않아요 (토큰 노출 방지).
+    token = ''
+  }
   const garmentDesc = garmentDescription(category, garmentName)
   const model = `${TRYON_MODELS[which].label} (Hugging Face ${space})`
   const key = createHash('sha256')
@@ -224,11 +228,9 @@ export async function runHfTryOn({
   if (errorEvent) {
     const detail = typeof errorEvent.data === 'string' ? errorEvent.data : JSON.stringify(errorEvent.data)
     logUpstream('Space 오류', detail)
-    // Leffa Space는 토큰 없는 요청을 이유 없이(null) 거절해요 (2026-11 확인, 토큰을 넣은 경우는 확인하지 못했어요).
+    // Leffa Space는 토큰 없는 요청을 이유 없이(null) 거절해요 (2026-11 확인). 제3자 Space라 토큰은 보내지 않아요.
     if (which === 'leffa' && errorEvent.data == null) {
-      throw hfError(502, 'LEFFA_REJECTED', hasToken
-        ? 'Leffa Space가 요청을 거절했어요. 잠시 뒤 다시 시도하거나 IDM-VTON으로 합성해 보세요.'
-        : 'Leffa Space가 토큰 없는 요청을 거절했어요. .env에 무료 HF_TOKEN을 넣거나 IDM-VTON으로 합성해 보세요.')
+      throw hfError(502, 'LEFFA_REJECTED', 'Leffa Space가 요청을 거절했어요(로그인하지 않은 요청을 막는 것으로 보여요). IDM-VTON으로 합성해 보세요.')
     }
     throw mapUpstreamError(200, detail, hasToken)
   }

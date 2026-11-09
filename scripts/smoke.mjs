@@ -6271,8 +6271,13 @@ await atest('hfTryOn(Leffa, 가짜 fetch): 하의는 dress_code·lower_body로 l
   assert.ok(data[0].path && data[1].path, '두 사진을 먼저 올린 경로')
   await assert.rejects(
     runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'top', model: 'leffa', fetchImpl: mk('event: error\ndata: null\n\n') }),
-    (e) => e.code === 'LEFFA_REJECTED' && e.message.includes('HF_TOKEN'),
+    (e) => e.code === 'LEFFA_REJECTED' && e.message.includes('IDM-VTON'),
   )
+  // 운영자의 HF_TOKEN은 제3자 Space(Leffa)로 보내지 않아요
+  calls.length = 0
+  clearTryOnCache()
+  await runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'dress', model: 'leffa', token: 'hf_secret', fetchImpl: mk(ok) })
+  assert.ok(calls.length > 0 && calls.every((c) => !c.opts.headers?.Authorization), 'Leffa 요청에는 Authorization이 없어요')
   await assert.rejects(runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'shoes', model: 'leffa', fetchImpl: mk(ok) }), (e) => e.code === 'UNSUPPORTED')
 })
 
