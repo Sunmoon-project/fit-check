@@ -83,6 +83,8 @@ docker build -t fit-check .
 docker run -p 3000:3000 --env-file .env fit-check   # http://localhost:3000, 헬스체크: /healthz
 ```
 
+**무료 배포(Render)**: Render 대시보드 → New → Blueprint → 이 저장소를 고르면 `render.yaml`대로 서비스가 만들어지고, 이후 `main`에 push되어 CI가 통과할 때마다 자동으로 다시 배포돼요. 배포 주소가 생기면 크롬 확장 연동을 위해 `WEB_APP_ORIGINS`와 `manifest.json`에도 그 주소를 추가하세요(위 크롬 확장 절 참고).
+
 GitHub Actions(`.github/workflows/ci.yml`)가 push·PR마다 smoke·빌드·확장 빌드를 돌리고, Docker 이미지를 빌드해 컨테이너가 실제로 응답하는지 확인해요.
 
 ### 서버 없이 파일 하나로 보기

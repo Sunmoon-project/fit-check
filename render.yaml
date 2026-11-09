@@ -1,0 +1,17 @@
+# Render 배포 설정(Blueprint). Render 대시보드 → New → Blueprint → 이 저장소를 고르면 아래대로 만들어져요.
+# Dockerfile로 이미지를 빌드하고, main에 push되어 GitHub Actions CI가 통과했을 때만 자동 배포해요.
+services:
+  - type: web
+    name: fit-check
+    runtime: docker
+    plan: free # 무료: 15분 동안 요청이 없으면 잠들고, 다음 요청 때 깨어나는 데 1분 정도 걸려요
+    region: singapore # 한국에서 가장 가까운 지역
+    branch: main
+    healthCheckPath: /healthz
+    autoDeployTrigger: checksPass
+    envVars:
+      # 값은 Render 대시보드에서 직접 넣어요(저장소에는 올리지 않음). 비워둬도 동작해요.
+      - key: HF_TOKEN
+        sync: false
+      - key: HF_SPACE
+        value: yisol/IDM-VTON
