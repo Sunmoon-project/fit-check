@@ -12,7 +12,7 @@ import { localAdapter, loadLearning, learnFromProduct, resetLearning } from './l
 import SizeChartLibrary from './components/SizeChartLibrary.jsx'
 import { createSizeChartDb, chartRecordFromProduct } from './lib/sizeChartDb.js'
 import UsedListing from './components/UsedListing.jsx'
-import { createImageSearcher } from './lib/imageSearch.js'
+import { createImageSearcher, createServerImageProvider, fetchImageSearchEnabled } from './lib/imageSearch.js'
 
 // 흐름: 내 정보(온보딩, 저장된 정보가 없을 때만) → 상품 링크 → 사이즈·핏 추천
 const STEP_LABELS = ['내 정보', '상품 링크', '사이즈 추천']
@@ -30,7 +30,13 @@ export default function App() {
   const [showUsed, setShowUsed] = useState(false) // 중고 상품 분석 화면
   const [chartEntries, setChartEntries] = useState([]) // 사이즈표 모음 목록 (이 브라우저의 localStorage)
   const chartDb = useMemo(() => createSizeChartDb(localAdapter()), [])
-  const imageSearcher = useMemo(() => createImageSearcher(null), []) // 사진 역검색: 연결된 공급자가 없어 비활성
+  const [imageSearcher, setImageSearcher] = useState(() => createImageSearcher(null)) // 사진 역검색: 서버가 켜져 있다고 알려줄 때만 공급자를 꽂아요
+  useEffect(() => {
+    let alive = true
+    // 사진 주소는 보내지 않고 켜짐 여부만 물어요. 실제 검색은 사용자가 버튼을 누를 때만 해요.
+    fetchImageSearchEnabled().then((on) => { if (alive && on) setImageSearcher(createImageSearcher(createServerImageProvider())) })
+    return () => { alive = false }
+  }, [])
   const [notice, setNotice] = useState(null) // { text, error } 확장에서 자동으로 가져온 결과 한 줄
 
   const step = editing || !profile ? 'onboarding' : product ? 'result' : 'product'

@@ -1,13 +1,15 @@
 import { useState } from 'react'
 import { analyzeUsedListing, findChartMatches, usedSearchQuery } from '../lib/usedAnalyze.js'
 import { USED_SITES, USED_SITES_NOTE } from '../lib/usedListing.js'
-import { IMAGE_SEARCH_DISABLED_TEXT } from '../lib/imageSearch.js'
+import { IMAGE_SEARCH_DISABLED_TEXT, IMAGE_SEARCH_NOTICE } from '../lib/imageSearch.js'
 import { LABEL_OCR_DISABLED_TEXT } from '../lib/labelOcr.js'
 
 // 중고 상품 분석: 번개장터·후르츠패밀리 같은 중고 판매글을 붙여넣으면 후기 없이 작음/맞음/큼을 알려줘요.
-// 판매글 글은 이 브라우저 안에서만 분석하고 저장하지 않아요. 사진 역검색·라벨 글자 인식은 자리만 있고 아직 연결되지 않았어요.
+// 판매글 글은 이 브라우저 안에서만 분석하고 저장하지 않아요. 사진 역검색은 서버가 켜져 있을 때만 쓸 수 있고,
+// 사용자가 동의 체크 후 '사진으로 찾기'를 눌렀을 때만 사진 주소 한 장이 외부 검색 서비스로 전송돼요(분석하기 버튼으로는 호출하지 않아요).
+// 라벨 글자 인식은 아직 연결되지 않았어요.
 // db: createSizeChartDb() 결과(search), imageSearcher: createImageSearcher() 결과. initialResult는 화면 테스트용이에요.
-export default function UsedListing({ profile, db, imageSearcher, onBack, initialResult = null }) {
+export default function UsedListing({ profile, db, imageSearcher, onBack, initialResult = null, initialPhoto = null }) {
   const [title, setTitle] = useState('')
   const [text, setText] = useState('')
   const [photos, setPhotos] = useState('')
@@ -15,6 +17,21 @@ export default function UsedListing({ profile, db, imageSearcher, onBack, initia
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const photoEnabled = !!imageSearcher?.enabled
+  const [consent, setConsent] = useState(false)
+  const [photoBusy, setPhotoBusy] = useState(false)
+  const [photoResult, setPhotoResult] = useState(initialPhoto) // { status, candidates, pages, message }
+  const firstUrl = photos.split(/\s+/).find((u) => /^https:\/\//i.test(u)) || ''
+
+  // 사용자가 '사진으로 찾기'를 눌렀을 때만 호출해요. 동의 체크가 없으면 호출하지 않아요.
+  async function findByPhoto() {
+    if (!photoEnabled || !consent || !firstUrl) return
+    setPhotoBusy(true)
+    try {
+      setPhotoResult(await imageSearcher.search([firstUrl]))
+    } finally {
+      setPhotoBusy(false)
+    }
+  }
 
   async function analyze(e) {
     e.preventDefault()
@@ -27,12 +44,7 @@ export default function UsedListing({ profile, db, imageSearcher, onBack, initia
     try {
       const urls = photos.split(/\s+/).filter(Boolean)
       const listing = { title: title.trim(), text: [title.trim(), text.trim()].filter(Boolean).join('\n'), photos: urls.filter((u) => /^https:\/\//i.test(u)).slice(0, 5) }
-      let candidates = []
-      if (photoEnabled && urls.length) {
-        const r = await imageSearcher.search(urls)
-        candidates = r.candidates
-        if (r.message) setMsg(r.message)
-      }
+      const candidates = photoResult?.status === 'ok' ? photoResult.candidates : [] // 이미 찾은 후보만 써요(여기서 새로 호출하지 않아요)
       const matches = db ? await findChartMatches(db, usedSearchQuery(listing), candidates) : []
       setResult(analyzeUsedListing(listing, profile, { chartMatches: matches }))
     } catch {
@@ -59,6 +71,13 @@ export default function UsedListing({ profile, db, imageSearcher, onBack, initia
           <h3 className="section-title">사진으로 같은 상품 찾기 (사진 역검색)</h3>
           <textarea aria-label="사진 주소" rows={2} placeholder="https:// 사진 주소 (줄마다 하나)" value={photos} onChange={(e) => setPhotos(e.target.value)} disabled={busy || !photoEnabled} />
           {!photoEnabled && <p className="muted small">{IMAGE_SEARCH_DISABLED_TEXT}</p>}
+          {!photoEnabled && <p className="muted small">서버 설정(IMAGE_SEARCH_PROVIDER, IMAGE_SEARCH_API_KEY)이 있고 웹 서버로 열었을 때 켜져요. 아직 실제 검색 서비스로 확인하지 못한 기능이에요.</p>}
+          <label className="used-consent">
+            <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} disabled={busy || photoBusy || !photoEnabled} />
+            <span>{IMAGE_SEARCH_NOTICE} 동의하고 사진 한 장으로 검색할게요.</span>
+          </label>
+          <button type="button" className="btn" onClick={findByPhoto} disabled={busy || photoBusy || !photoEnabled || !consent || !firstUrl}>{photoBusy ? '찾는 중…' : '사진으로 찾기'}</button>
+          {photoResult && <PhotoResult result={photoResult} />}
           <p className="muted small">{LABEL_OCR_DISABLED_TEXT}</p>
         </div>
         <button type="submit" className="btn primary" disabled={busy}>{busy ? '분석 중…' : '분석하기'}</button>
@@ -66,6 +85,21 @@ export default function UsedListing({ profile, db, imageSearcher, onBack, initia
       {msg && <p className="error" role="alert">{msg}</p>}
       {result && <UsedResult result={result} />}
     </section>
+  )
+}
+
+function PhotoResult({ result: r }) {
+  if (r.status !== 'ok') return <p className="error" role="alert">{r.message || '사진 검색에 실패했어요.'}</p>
+  return (
+    <div className="used-photo-result" role="region" aria-label="사진 역검색 결과">
+      {r.candidates.length ? <p className="small">같은 상품 후보: {r.candidates.map((c) => [c.brand, c.model].filter(Boolean).join(' ')).join(' · ')}</p> : <p className="small">같은 상품 후보를 찾지 못했어요.</p>}
+      <p className="muted small">후보는 추정이에요. 브랜드·모델명은 사이즈표 모음 검색과 지역 기본값에만 쓰여요.</p>
+      {r.pages?.length > 0 && (
+        <ul className="small">
+          {r.pages.map((p, i) => <li key={i}><a href={p.url} target="_blank" rel="noopener noreferrer">{p.title}</a></li>)}
+        </ul>
+      )}
+    </div>
   )
 }
 
