@@ -5664,6 +5664,55 @@ test('지역·근거 표시: 웹 결과 화면(서버 렌더)에 브랜드 지�
   assert.ok(noChart.includes('사이즈 표기 참고값(근사/출처 확인 필요)') && noChart.includes('100 → 가슴둘레 호칭 약 100cm'))
 })
 
+import { reviewBodyEstimate } from '../src/lib/reviewBodyEstimate.js'
+
+test('후기 보정 추정: 비슷한 체형이 산 사이즈·핏 평가로 직접 재지 않은 둘레만 옮기고, 후기가 1건이거나 직접 잰 부위는 그대로 둔다 (가짜 데이터)', () => {
+  const chart = { L: { shoulder: 48, chest: 112 } }
+  const reviews = [{ size: 'L', fit: 'true', similarity: 100 }, { size: 'L', fit: 'true', similarity: 100 }]
+  const base = { shoulder: 45.5, chest: 97.5, topLength: 68 }
+  const r = reviewBodyEstimate({ values: base, measured: new Set(), reviews, measuresOf: (s) => chart[s], rules: EASE_RULES })
+  // 정사이즈 가슴 여유 (6+14)/2=10 → 역산 102. 공식 97.5(가중 2)와 후기 2건(가중 2) 평균 = 99.75 → 0.5 단위 100
+  assert.equal(r.values.chest, 100)
+  assert.equal(r.reviewParts.chest.n, 2)
+  assert.equal(r.values.topLength, 68, '기장은 건드리지 않아요')
+  const measured = reviewBodyEstimate({ values: base, measured: new Set(['chest']), reviews, measuresOf: (s) => chart[s], rules: EASE_RULES })
+  assert.equal(measured.values.chest, 97.5, '직접 잰 가슴은 그대로')
+  assert.ok(!measured.reviewParts.chest)
+  const one = reviewBodyEstimate({ values: base, measured: new Set(), reviews: reviews.slice(0, 1), measuresOf: (s) => chart[s], rules: EASE_RULES })
+  assert.deepEqual(one.reviewParts, {}, '후기 1건이면 보정하지 않아요')
+  // '작아요'는 더 큰 몸으로 역산해요
+  const small = reviewBodyEstimate({ values: base, measured: new Set(), reviews: reviews.map((x) => ({ ...x, fit: 'small' })), measuresOf: (s) => chart[s], rules: EASE_RULES })
+  assert.ok(small.values.chest > r.values.chest)
+  // 아무리 많아도 공식값에서 6cm 넘게 옮기지 않아요
+  const far = reviewBodyEstimate({ values: base, measured: new Set(), reviews: Array.from({ length: 20 }, () => ({ size: 'L', fit: 'small', similarity: 100 })), measuresOf: (s) => ({ L: { chest: 140 } })[s], rules: EASE_RULES })
+  assert.equal(far.values.chest, 103.5)
+})
+
+test('단계형 추천: 키·몸무게만이면 비슷한 체형 후기 2건을 우선하고, 가슴을 직접 재면 실측 비교를 우선한다 (가짜 데이터)', () => {
+  const product = {
+    name: '스웻셔츠', mall: 'shop', category: 'top',
+    sizeChart: { measures: { M: { shoulder: 47, chest: 104 }, L: { shoulder: 49, chest: 112 } } },
+    reviews: [
+      { id: 1, nick: 'a', rating: 5, text: '정사이즈', gender: 'male', height: 175, weight: 70, size: 'L', fit: 'true' },
+      { id: 2, nick: 'b', rating: 5, text: '정사이즈', gender: 'male', height: 176, weight: 70, size: 'L', fit: 'true' },
+    ],
+    notes: [],
+  }
+  const simple = { gender: 'male', height: 175, weight: 70, preferredFit: 'regular', usual: { top: '', bottom: '' }, measurements: {} }
+  const r = generateFitComment(simple, product)
+  assert.equal(r.detailed, false)
+  assert.equal(r.recommendedSize, 'L', '키·몸무게만이면 후기 우선')
+  assert.ok(r.reviewParts.chest, '가슴은 후기로 보정')
+  assert.ok(r.note.includes('비슷한 체형 후기를 우선'))
+  const cmp = compareSizes({ chart: product.sizeChart, bodyValues: r.bodyValues, measured: r.measured, category: 'top', reviewParts: r.reviewParts })
+  assert.equal(cmp.sizes[0].rows.find((x) => x.part === 'chest').bodyKind, 'review', '비교 표에 (후기 추정)')
+  const det = generateFitComment({ ...simple, measurements: { chest: 96 } }, product)
+  assert.equal(det.detailed, true)
+  assert.equal(det.recommendedSize, 'M', '가슴을 재면 실측 비교 우선')
+  assert.equal(det.bodyValues.chest, 96)
+})
+
+
 // ---- 중고 판매글 분석 (번개장터·후르츠패밀리). 아래 글·HTML은 전부 직접 만든 가짜예요. 실제 사이트에서 확인한 것이 아니에요 ----
 const usedProfile = buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular' }).profile
 const U_TITLE = '[M] 나이키 Club Fleece Hoodie 후드 티셔츠'

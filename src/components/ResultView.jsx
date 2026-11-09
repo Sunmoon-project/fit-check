@@ -34,7 +34,7 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
     learnRef.current?.(product)
   }, [product])
   const compare = useMemo(
-    () => compareSizes({ chart: product.sizeChart, bodyValues: bodyValuesForProfile(profile).values, measured: result.measured, category: product.category, calibration: calibration || {}, learned }),
+    () => compareSizes({ chart: product.sizeChart, bodyValues: result.bodyValues || bodyValuesForProfile(profile).values, measured: result.measured, category: product.category, calibration: calibration || {}, learned, reviewParts: result.reviewParts }),
     [profile, product, calibration, result, learned],
   )
   const [picked, setPicked] = useState(null)
