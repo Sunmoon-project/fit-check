@@ -9,6 +9,7 @@ import { shouldStop, isSafeMoreButton, isReviewTab, isInnerScroller, loadTarget,
 import { compareBody, countUpValue, similarityTier, TIER_LABEL, diffText, buySizeText } from '../src/lib/similarityBreakdown.js'
 import { EXT_PROFILE_KEY, isUsableProfile } from '../src/lib/extProfile.js'
 import { chromeAdapter, loadLearning, addSamples, resetLearning } from '../src/lib/learnStore.js'
+import { createSizeChartDb, SIZE_CHART_DB_STORAGE_NOTE } from '../src/lib/sizeChartDb.js'
 import { LEARNING_NOTE, LEARNING_STORAGE_NOTE } from '../src/lib/learnedModel.js'
 
 // 표 구조로 사이즈표가 안 읽힐 때 화면 위치로 줄·칸을 맞추는 마지막 후보에 쓸 위치 제공자 (읽기만 해요)
@@ -1051,10 +1052,18 @@ async function analyzeLearning(profile, opts) {
     model = null
   }
   let out = analyzePage(document, location.href, profile, EXT_VERSION, { ...opts, learned: model, collectSamples: true })
+  // 사이즈표를 읽은 상품만 사이즈표 모음에 저장해요(같은 상품은 갱신). 실패해도 분석 결과는 그대로 보여줘요.
+  if (out.status === 'ok' && out.chartRecord) {
+    try {
+      await createSizeChartDb(adapter).put(out.chartRecord)
+    } catch {
+      /* 무시 */
+    }
+  }
   if (out.status === 'ok' && out.learnSamples?.length) {
     try {
       const r = await addSamples(adapter, out.learnSamples)
-      if (r.added > 0) out = analyzePage(document, location.href, profile, EXT_VERSION, { ...opts, learned: r.model, collectSamples: false })
+      if (r.added > 0) out = { ...analyzePage(document, location.href, profile, EXT_VERSION, { ...opts, learned: r.model, collectSamples: false }), chartRecord: out.chartRecord }
     } catch {
       /* 저장 실패해도 분석 결과는 그대로 보여줘요 */
     }
@@ -1083,6 +1092,28 @@ function learningBlock(r) {
     }
   })
   box.append(btn)
+  return box
+}
+
+// 사이즈표 모음 안내와 비우기 버튼 (사이즈표를 읽어 저장한 상품에서만)
+function chartDbBlock(r) {
+  if (!r.chartRecord) return null
+  const box = el('div', 'tiny lrn')
+  const line = el('p', 'tiny', `이 상품의 사이즈표를 사이즈표 모음에 저장했어요. ${SIZE_CHART_DB_STORAGE_NOTE}`)
+  line.setAttribute('role', 'status')
+  const btn = el('button', 'btn', '사이즈표 모음 비우기')
+  btn.type = 'button'
+  btn.addEventListener('click', async () => {
+    btn.disabled = true
+    try {
+      await createSizeChartDb(chromeAdapter(chrome.storage.local, chrome.runtime)).clear()
+      line.textContent = '저장된 사이즈표를 모두 지웠어요.'
+    } catch {
+      line.textContent = '비우지 못했어요. 다시 눌러 주세요.'
+      btn.disabled = false
+    }
+  })
+  box.append(line, btn)
   return box
 }
 
@@ -1317,6 +1348,8 @@ function renderResult(r) {
     const fold = el('div', 'fold')
     fold.append(loadMoreBlock(r))
     if (r.loadInfo) fold.append(el('p', 'tiny', r.loadInfo))
+    const chartDbBox = chartDbBlock(r)
+    if (chartDbBox) fold.append(chartDbBox)
     const summarySlot = el('div')
     fold.append(summarySlot)
 

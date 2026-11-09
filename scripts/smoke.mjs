@@ -64,6 +64,7 @@ import { toSamples, mergeSamples } from '../src/lib/learnSamples.js'
 import { trainModel, validateModel, resolveLearned, learningStatus, emptyModel, LEARN, LEARN_SCHEMA_VERSION, brandKeyOf } from '../src/lib/learnedModel.js'
 import { LEARN_KEY, localAdapter, chromeAdapter, loadLearning, addSamples, resetLearning, learnFromProduct } from '../src/lib/learnStore.js'
 import { EASE_RULES, classifyEase } from '../src/lib/fitEngine.js'
+import { createSizeChartDb, SIZE_CHART_DB_KEY, SIZE_CHART_DB_VERSION, normalizeText, normalizeCode, brandKeyOfName, modelSimilarity, modelTokens, chartRecordFromProduct, toEntry } from '../src/lib/sizeChartDb.js'
 
 let passed = 0
 function test(name, fn) {
@@ -5312,6 +5313,194 @@ test('학습 표시: 웹 결과 화면(서버 렌더)에 학습값 사용 중 �
   assert.ok(withModel.includes('학습값 사용 중(샘플 20건)') && withModel.includes('학습값 초기화') && withModel.includes('이 브라우저에만 저장돼요'))
   const without = textOf(render(WEB.ResultView, props))
   assert.ok(!without.includes('학습값'))
+})
+
+
+// ---- 사이즈표 모음 DB (전부 직접 만든 가짜 데이터예요. 실제 쇼핑몰 데이터가 아니고 검색 점수의 정확도는 측정하지 않았어요) ----
+const chartMemAdapter = (initial = {}) => {
+  const m = new Map(Object.entries(initial).map(([k, v]) => [k, JSON.stringify(v)]))
+  return {
+    m,
+    async get(k) { return m.has(k) ? JSON.parse(m.get(k)) : null },
+    async set(k, v) { m.set(k, JSON.stringify(v)); return true },
+    async remove(k) { m.delete(k) },
+  }
+}
+const CHART = { unit: 'cm', headers: ['사이즈', '가슴단면'], rows: [['S', 50], ['M', 53]], measures: { S: { chest: 100 }, M: { chest: 106 } } }
+const rec = (o = {}) => ({ brand: 'Nike', model: 'Nike Club Fleece Hoodie 후드 티셔츠', code: 'BV2654-010', category: 'top', gender: 'male', url: 'https://shop.example/p/1?utm=a#x', sizeChart: CHART, ...o })
+
+test('사이즈표 DB: 정규화(대소문자·공백·특수문자)와 브랜드 별칭(한글/영문)', () => {
+  assert.equal(normalizeText('  Club-Fleece_HOODIE!! '), 'club fleece hoodie')
+  assert.equal(normalizeCode(' bv2654-010 '), 'BV2654010')
+  assert.equal(brandKeyOfName('나이키'), brandKeyOfName('NIKE'))
+  assert.equal(brandKeyOfName('뉴발란스'), brandKeyOfName('New  Balance'))
+  assert.equal(brandKeyOfName('The North Face'), brandKeyOfName('노스페이스'))
+  assert.notEqual(brandKeyOfName('나이키'), brandKeyOfName('아디다스'))
+  assert.equal(brandKeyOfName(''), null)
+  assert.ok(modelSimilarity(modelTokens('후드 티셔츠'), modelTokens('후드  티셔츠!')) === 1)
+  assert.equal(modelSimilarity(modelTokens('모델 1000'), modelTokens('모델 2000')), 0.5, '숫자 토큰은 같아야만 겹쳐요')
+})
+
+await atest('사이즈표 DB: 한글 브랜드로 저장하고 영문 별칭으로 찾는다 (점수·근거 포함)', async () => {
+  const db = createSizeChartDb(chartMemAdapter())
+  await db.put(rec({ brand: '나이키' }))
+  const r = await db.search({ brand: 'nike', model: 'club fleece hoodie' })
+  assert.equal(r.length, 1)
+  assert.ok(r[0].score >= 60 && r[0].score < 90)
+  assert.ok(r[0].reasons.some((x) => x.includes('브랜드 일치')) && r[0].reasons.some((x) => x.includes('모델명 유사도')))
+  assert.deepEqual(r[0].entry.sizeChart.rows, CHART.rows)
+  assert.deepEqual(await db.search({}), [], '질의가 비면 빈 배열')
+})
+
+await atest('사이즈표 DB: 품번 정확 일치가 최고 점수, 유사 모델명은 그보다 낮다', async () => {
+  const db = createSizeChartDb(chartMemAdapter())
+  await db.put(rec({ url: 'https://shop.example/p/1' }))
+  await db.put(rec({ model: 'Nike Club Fleece Hoodie Black', code: 'ZZ9999-001', url: 'https://shop.example/p/2' }))
+  await db.put(rec({ brand: 'Adidas', model: '삼선 트랙 팬츠', code: 'AD1234', category: 'bottom', url: 'https://shop.example/p/3' }))
+  const byCode = await db.search({ code: 'bv2654 010' })
+  assert.equal(byCode.length, 1)
+  assert.ok(byCode[0].score >= 90 && byCode[0].reasons[0] === '품번 정확 일치')
+  const byModel = await db.search({ brand: '나이키', model: 'Nike Club Fleece Hoodie Black', category: 'top', gender: 'male' })
+  assert.equal(byModel[0].entry.code, 'ZZ9999-001', '모델명이 더 가까운 쪽이 먼저')
+  assert.ok(byModel.length === 2 && byModel[0].score > byModel[1].score)
+  const both = await db.search({ brand: 'nike', model: 'Nike Club Fleece Hoodie Black', code: 'BV2654-010' })
+  assert.equal(both[0].entry.code, 'BV2654-010', '품번 일치가 모델명 일치보다 앞')
+  assert.ok(both[0].score > both[1].score)
+  assert.ok(!(await db.search({ brand: 'nike', model: 'Club Fleece Hoodie' })).some((x) => x.entry.brandKey === brandKeyOfName('adidas')), '다른 브랜드·모델은 후보에서 빠짐')
+})
+
+await atest('사이즈표 DB: 카테고리·성별이 다르면 점수가 내려간다', async () => {
+  const db = createSizeChartDb(chartMemAdapter())
+  await db.put(rec({ url: 'https://shop.example/p/1', code: '' }))
+  const q = { brand: 'nike', model: 'Club Fleece Hoodie' }
+  const base = (await db.search({ ...q, category: 'top', gender: 'male' }))[0].score
+  const catBad = await db.search({ ...q, category: 'shoes', gender: 'male' })
+  const genBad = await db.search({ ...q, category: 'top', gender: 'female' })
+  assert.ok(catBad[0].score <= base - 30, `카테고리 불일치 ${catBad[0].score} vs ${base}`)
+  assert.ok(genBad[0].score <= base - 20, `성별 불일치 ${genBad[0].score} vs ${base}`)
+  assert.ok(catBad[0].reasons.some((x) => x.includes('카테고리 불일치')) && genBad[0].reasons.some((x) => x.includes('성별 불일치')))
+  // 품번이 맞아도 카테고리·성별이 다르면 같은 품번의 일치 상품보다 낮다
+  await db.put(rec({ url: 'https://shop.example/p/9', code: 'KEEP-123', category: 'shoes', gender: 'female' }))
+  const c = await db.search({ code: 'KEEP-123', category: 'top', gender: 'male' })
+  assert.ok(c[0].score >= 90 && c[0].score < 100)
+})
+
+await atest('사이즈표 DB: 같은 상품(주소 또는 브랜드+품번)은 중복 저장하지 않고 갱신한다', async () => {
+  const db = createSizeChartDb(chartMemAdapter())
+  const a = await db.put(rec(), 1000)
+  assert.deepEqual([a.saved, a.updated], [true, false])
+  // 같은 주소(쿼리·해시만 다름) -> 갱신
+  const b = await db.put(rec({ url: 'https://shop.example/p/1?other=1', sizeChart: { ...CHART, rows: [['S', 51], ['M', 54], ['L', 57]] } }), 2000)
+  assert.deepEqual([b.saved, b.updated, b.total], [true, true, 1])
+  // 주소가 달라도 브랜드(별칭)+품번이 같으면 같은 상품
+  const c = await db.put(rec({ brand: '나이키', url: 'https://other.example/x', code: 'bv2654 010' }), 3000)
+  assert.deepEqual([c.updated, c.total], [true, 1])
+  const l = await db.list()
+  assert.equal(l.length, 1)
+  assert.equal(l[0].updatedAt, 3000)
+  assert.equal(l[0].url, 'https://other.example/x', '주소는 쿼리 없이 저장')
+  // 다른 상품은 따로
+  await db.put(rec({ url: 'https://shop.example/p/2', code: 'OTHER1' }), 4000)
+  assert.equal((await db.list()).length, 2)
+})
+
+await atest('사이즈표 DB: 건수·글자 수 상한을 넘으면 오래 갱신되지 않은 항목부터 정리한다', async () => {
+  const db = createSizeChartDb(chartMemAdapter(), { limits: { maxEntries: 5 } })
+  for (let i = 0; i < 8; i++) await db.put(rec({ url: `https://shop.example/p/${i}`, code: `C${i}XYZ`, model: `모델 ${i}` }), 1000 + i)
+  const l = await db.list()
+  assert.equal(l.length, 5)
+  assert.deepEqual(l.map((e) => e.code), ['C7XYZ', 'C6XYZ', 'C5XYZ', 'C4XYZ', 'C3XYZ'], '가장 오래된 3건이 빠짐')
+  const small = createSizeChartDb(chartMemAdapter(), { limits: { maxBytes: 1500 } })
+  for (let i = 0; i < 10; i++) await small.put(rec({ url: `https://shop.example/p/${i}`, code: `C${i}XYZ` }), 1000 + i)
+  const sl = await small.list()
+  assert.ok(sl.length >= 1 && sl.length < 10 && sl[0].code === 'C9XYZ')
+})
+
+await atest('사이즈표 DB: 스키마 버전이 다르면 폐기하고, 비우기는 저장값을 지운다', async () => {
+  const ad = chartMemAdapter({ [SIZE_CHART_DB_KEY]: { schemaVersion: SIZE_CHART_DB_VERSION + 1, entries: [{ id: 'x', sizeChart: CHART, model: 'old' }] } })
+  const db = createSizeChartDb(ad)
+  assert.deepEqual(await db.list(), [])
+  assert.equal(ad.m.has(SIZE_CHART_DB_KEY), false, '버전이 다른 값은 저장소에서도 지움')
+  await db.put(rec())
+  assert.equal(ad.m.has(SIZE_CHART_DB_KEY), true)
+  await db.clear()
+  assert.equal(ad.m.has(SIZE_CHART_DB_KEY), false)
+  assert.deepEqual(await db.search({ brand: 'nike', model: 'hoodie' }), [])
+})
+
+await atest('사이즈표 DB: 어댑터만 바꿔도 같은 인터페이스로 동작한다 (localStorage / chrome.storage / 직접 만든 어댑터)', async () => {
+  const mem = new Map()
+  const ls = localAdapter({ getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => void mem.set(k, v), removeItem: (k) => void mem.delete(k) })
+  const area = { d: {}, get(k, cb) { cb({ [k]: this.d[k] }) }, set(o, cb) { Object.assign(this.d, JSON.parse(JSON.stringify(o))); cb() }, remove(k, cb) { delete this.d[k]; cb() } }
+  const custom = (() => { const calls = []; const a = chartMemAdapter(); return { calls, get: (k) => (calls.push('get'), a.get(k)), set: (k, v) => (calls.push('set'), a.set(k, v)), remove: (k) => (calls.push('remove'), a.remove(k)) } })()
+  for (const adapter of [ls, chromeAdapter(area, {}), custom]) {
+    const db = createSizeChartDb(adapter)
+    assert.deepEqual(Object.keys(db).sort(), ['clear', 'list', 'put', 'search'])
+    assert.equal((await db.put(rec())).saved, true)
+    assert.equal((await db.search({ code: 'BV2654-010' }))[0].score >= 90, true)
+    await db.clear()
+    assert.equal((await db.list()).length, 0)
+  }
+  assert.ok(mem.size === 0 && !('x' in area.d) && custom.calls.includes('set'))
+})
+
+test('사이즈표 DB: 사이즈표가 없거나 상품 단서가 없으면 저장 입력이 되지 않고, 후기·체형 필드는 버린다', () => {
+  assert.equal(chartRecordFromProduct({ name: 'x', category: 'top', sizeChart: null }), null)
+  assert.equal(toEntry(rec({ sizeChart: { rows: [] } })), null)
+  assert.equal(toEntry({ sizeChart: CHART }), null, '주소·품번·모델명이 없음')
+  const withExtra = chartRecordFromProduct({ name: '재킷', category: 'outer', url: 'https://shop.example/p/5', reviews: [{ text: 'SECRETREVIEW' }], height: 175, sizeChart: CHART, targetGender: { gender: 'male' } })
+  const e = toEntry({ ...withExtra, reviews: [{ text: 'SECRETREVIEW' }], profile: { height: 175 } })
+  const json = JSON.stringify(e)
+  assert.ok(!json.includes('SECRETREVIEW') && !json.includes('175') && !/reviews|profile/.test(json))
+  assert.equal(e.gender, 'male')
+})
+
+test('가짜 HTML: JSON-LD Product의 브랜드와 품번을 사이즈표 모음용으로 읽는다 (학습의 brand와는 별개)', () => {
+  const ld = '<script type="application/ld+json">{"@type":"Product","name":"x","brand":{"name":"스투시"},"mpn":"ST-1234"}</script>'
+  const p = parsePage(fakeDocument(wrapBody(ld + chartTable(OPTION_LIST_LABELS()))), 'https://shop.example/products/7')
+  assert.deepEqual([p.chartBrand, p.chartCode], ['스투시', 'ST-1234'])
+  assert.equal(p.brand, undefined)
+  const none = parsePage(fakeDocument(wrapBody(chartTable(OPTION_LIST_LABELS()))), 'https://shop.example/products/7')
+  assert.deepEqual([none.chartBrand, none.chartCode], ['', ''])
+})
+
+await atest('사이즈표 DB: 확장(가짜 DOM, vm)이 사이즈표를 읽은 상품만 저장하고 후기 글은 저장하지 않으며 비우기 버튼이 지운다', async () => {
+  const html = VIEW_HTML(chartTable(OPTION_LIST_LABELS()))
+  const store = new Map()
+  const { texts, created } = await runContentInFakeDom(html, {}, {}, store)
+  assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
+  assert.ok(store.has(SIZE_CHART_DB_KEY), '사이즈표를 읽었으니 저장')
+  const saved = JSON.parse(store.get(SIZE_CHART_DB_KEY))
+  assert.equal(saved.schemaVersion, SIZE_CHART_DB_VERSION)
+  assert.equal(saved.entries.length, 1)
+  assert.deepEqual(saved.entries[0].sizeChart.headers.slice(1), ['총장', '어깨', '가슴', '소매'])
+  const raw = store.get(SIZE_CHART_DB_KEY)
+  for (const piece of ['ZQOTHER', '소재가 부드럽고', 'onerror', '"height"', '"weight"']) assert.ok(!raw.includes(piece), piece)
+  assert.ok(texts.some((t) => t.includes('이 브라우저에만 저장돼요')))
+  const btn = created.find((e) => e.className === 'btn' && e.textContent === '사이즈표 모음 비우기')
+  assert.ok(btn, '비우기 버튼')
+  btn.click()
+  for (let i = 0; i < 50 && store.has(SIZE_CHART_DB_KEY); i++) await new Promise((r) => setTimeout(r, 10))
+  assert.equal(store.has(SIZE_CHART_DB_KEY), false)
+  // 사이즈표를 못 읽은 상품은 저장하지 않고 버튼도 없다
+  const noChartStore = new Map()
+  const nc = await runContentInFakeDom(wrapBody(NOCHART_HTML), {}, {}, noChartStore)
+  assert.equal(noChartStore.has(SIZE_CHART_DB_KEY), false)
+  assert.ok(!nc.created.some((e) => e.textContent === '사이즈표 모음 비우기'))
+})
+
+test('사이즈표 DB: 웹 화면(서버 렌더)에 목록·점수 근거·저장 위치 안내·비우기 버튼이 있다', async () => {
+  const db = createSizeChartDb(chartMemAdapter())
+  await db.put(rec({ brand: '나이키' }), 1000)
+  const entries = await db.list()
+  const html = render(WEB.SizeChartLibrary, { db, initialEntries: entries, onBack: noop })
+  const text = textOf(html)
+  assert.ok(text.includes('사이즈표 모음 1') && text.includes('Nike Club Fleece Hoodie') && text.includes('BV2654-010'))
+  assert.ok(text.includes('이 브라우저에만 저장돼요') && text.includes('사이즈표 모음 비우기') && text.includes('검색'))
+  assert.ok(!text.includes('아직 저장된 사이즈표가 없어요'))
+  const empty = textOf(render(WEB.SizeChartLibrary, { db, initialEntries: [], onBack: noop }))
+  assert.ok(empty.includes('아직 저장된 사이즈표가 없어요'))
+  assert.ok(/<button[^>]*disabled[^>]*>사이즈표 모음 비우기/.test(render(WEB.SizeChartLibrary, { db, initialEntries: [], onBack: noop })))
 })
 
 console.log(`\n${passed}개 통과`)

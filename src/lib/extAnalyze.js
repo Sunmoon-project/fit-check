@@ -9,6 +9,7 @@ import { targetGenderNotice } from './targetGender.js'
 import { shoeViewFor, shoeComment, feelSizeText } from './shoeFit.js'
 import { resolveLearned, brandKeyOf } from './learnedModel.js'
 import { toSamples } from './learnSamples.js'
+import { chartRecordFromProduct } from './sizeChartDb.js'
 // 사용자가 직접 적은 사이즈표: 열 이름(예: 어깨 가슴 총장)과 줄(예: M 50 57 68) → buildSizeChart 입력 모양.
 // 저장하지 않고 이번 분석에만 씁니다. 잘못된 줄은 버려요.
 export function manualChartRows(columnsText, linesText) {
@@ -167,6 +168,8 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     exportData: exportData(product, pageUrl, result),
     // 학습값 사용 상태({ used, total, categorySamples, text })와, 요청했을 때만 이 상품 후기에서 만든 학습 샘플(개인 식별 정보 없음)
     learning: result.learning || null,
+    // 사이즈표를 읽은 경우에만 사이즈표 모음에 저장할 입력(후기·체형 없음). 요청했을 때만 만들어요.
+    chartRecord: opts.collectSamples ? chartRecordFromProduct(product, { pageUrl }) : null,
     learnSamples: opts.collectSamples ? toSamples(product, { pageUrl }) : [],
     compareView: cmpView.view,
     shoeView: shoe,

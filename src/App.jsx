@@ -9,6 +9,8 @@ import { applyDelivery, syncNotice } from './lib/wardrobeSync.js'
 import { connectExtensionSync } from './lib/syncClient.js'
 import { computeCalibration } from './lib/fitEngine.js'
 import { localAdapter, loadLearning, learnFromProduct, resetLearning } from './lib/learnStore.js'
+import SizeChartLibrary from './components/SizeChartLibrary.jsx'
+import { createSizeChartDb, chartRecordFromProduct } from './lib/sizeChartDb.js'
 
 // 흐름: 내 정보(온보딩, 저장된 정보가 없을 때만) → 상품 링크 → 사이즈·핏 추천
 const STEP_LABELS = ['내 정보', '상품 링크', '사이즈 추천']
@@ -22,11 +24,15 @@ export default function App() {
   const [wardrobe, setWardrobe] = useState(() => loadWardrobe())
   const [showWardrobe, setShowWardrobe] = useState(false)
   const [learningModel, setLearningModel] = useState(null) // 학습값 묶음 (이 브라우저의 localStorage에서 읽어요)
+  const [showCharts, setShowCharts] = useState(false)
+  const [chartEntries, setChartEntries] = useState([]) // 사이즈표 모음 목록 (이 브라우저의 localStorage)
+  const chartDb = useMemo(() => createSizeChartDb(localAdapter()), [])
   const [notice, setNotice] = useState(null) // { text, error } 확장에서 자동으로 가져온 결과 한 줄
 
   const step = editing || !profile ? 'onboarding' : product ? 'result' : 'product'
   const stepIndex = step === 'onboarding' ? 0 : step === 'product' ? 1 : 2
   const wardrobeView = showWardrobe && step !== 'onboarding'
+  const chartsView = showCharts && step !== 'onboarding' && !wardrobeView
 
   function handleProfile(p) {
     saveProfile(p)
@@ -43,6 +49,7 @@ export default function App() {
   useEffect(() => {
     let alive = true
     loadLearning(localAdapter()).then((s) => alive && setLearningModel(s.model))
+    chartDb.list().then((l) => alive && setChartEntries(l))
     return () => {
       alive = false
     }
@@ -50,6 +57,15 @@ export default function App() {
 
   // 상품을 분석할 때 후기에서 학습 샘플을 쌓고(중복 방지) 갱신된 학습값을 판정에 써요.
   async function handleLearn(p) {
+    // 사이즈표를 읽은 실제 상품만 사이즈표 모음에 저장해요(데모 상품은 제외, 같은 상품은 갱신).
+    if (p.source !== 'demo') {
+      try {
+        const rec = chartRecordFromProduct(p, { pageUrl: p.url })
+        if (rec && (await chartDb.put(rec)).saved) setChartEntries(await chartDb.list())
+      } catch {
+        /* 저장소를 못 쓰면 건너뛰어요 */
+      }
+    }
     try {
       const r = await learnFromProduct(localAdapter(), p, { pageUrl: p.url })
       setLearningModel(r.model)
@@ -119,6 +135,7 @@ export default function App() {
   }
 
   function toggleWardrobe() {
+    setShowCharts(false)
     setShowWardrobe((v) => !v)
     window.scrollTo(0, 0)
   }
@@ -135,14 +152,17 @@ export default function App() {
             <button type="button" className={`btn pill ${showWardrobe ? 'on' : ''}`} onClick={toggleWardrobe}>
               옷장 {wardrobe.length}
             </button>
-            <button type="button" className="btn pill" onClick={() => { setShowWardrobe(false); setEditing(true) }}>
+            <button type="button" className={`btn pill ${chartsView ? 'on' : ''}`} onClick={() => { setShowWardrobe(false); setShowCharts((v) => !v) }}>
+              사이즈표 {chartEntries.length}
+            </button>
+            <button type="button" className="btn pill" onClick={() => { setShowWardrobe(false); setShowCharts(false); setEditing(true) }}>
               내 정보 {profile.height}·{profile.weight}
             </button>
           </div>
         )}
       </header>
 
-      {!wardrobeView && (
+      {!wardrobeView && !chartsView && (
         <nav className="steps" aria-label="진행 단계">
           {STEP_LABELS.map((label, i) => (
             <div key={label} className={`step-dot ${i <= stepIndex ? 'done' : ''} ${i === stepIndex ? 'current' : ''}`}>
@@ -165,15 +185,16 @@ export default function App() {
 
       <main className="app-main">
         {wardrobeView && <Wardrobe items={wardrobe} onDelete={handleDeleteWardrobe} onBack={toggleWardrobe} onImport={handleImportWardrobe} onClearReviews={handleClearReviews} />}
-        {!wardrobeView && step === 'onboarding' && (
+        {chartsView && <SizeChartLibrary db={chartDb} initialEntries={chartEntries} onBack={() => setShowCharts(false)} onChanged={() => setChartEntries([])} />}
+        {!wardrobeView && !chartsView && step === 'onboarding' && (
           <Onboarding
             initial={profile}
             onComplete={handleProfile}
             onCancel={profile ? () => setEditing(false) : null}
           />
         )}
-        {!wardrobeView && step === 'product' && <UrlInput onProduct={handleProduct} />}
-        {!wardrobeView && step === 'result' && (
+        {!wardrobeView && !chartsView && step === 'product' && <UrlInput onProduct={handleProduct} />}
+        {!wardrobeView && !chartsView && step === 'result' && (
           <ResultView
             product={product}
             profile={profile}
