@@ -6246,7 +6246,8 @@ test('평가 모듈: 네트워크를 쓰지 않고, README·문서는 실제 측
   }
   assert.equal(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).scripts['eval:fit'], 'node scripts/evalFit.mjs')
   const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
-  assert.ok(readme.includes('eval:fit') && readme.includes('실제 데이터로 측정한 수치는 아직 없'))
+  // README는 프로그램 소개만 담고, 측정 수치가 없다는 고지는 링크된 평가 문서(아래 검사)에 있어요.
+  assert.ok(readme.includes('eval:fit') && readme.includes('docs/평가_핏정확도.md'))
   const doc = readFileSync(new URL('../docs/평가_핏정확도.md', import.meta.url), 'utf8')
   for (const key of ['라벨 잡음', '표본 수', '편향', 'Wilson', '합성 데이터, 실제 정확도 아님', '확장 내보내기는 추후', '실제 데이터로 측정한 수치는 아직 없']) assert.ok(doc.includes(key), key)
 })
