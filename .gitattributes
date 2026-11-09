@@ -1,0 +1,10 @@
+# 운영체제와 git 설정(core.autocrlf)에 관계없이 텍스트 파일을 LF로 받는다.
+# smoke 테스트 일부가 소스의 줄바꿈을 \n으로 가정한다.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
