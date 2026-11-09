@@ -85,6 +85,8 @@ tr.rec .cv{color:#9fe0ba}
 .tag{font-size:10px;border-radius:999px;background:#f1f1f1;padding:1px 7px;color:#333}
 .tag.miss{background:#fff;border:1px dashed #c8c8c8;color:#6b6b70}
 .tag.sim{background:#111;color:#fff}
+.tag.excl{background:#fff3e0;border:1px solid #c27a1e;color:#6b3f00}
+.rv.excl{border-style:dashed;background:#fafafa}
 .rvh{margin-bottom:4px}
 .rvn{font-size:12px;color:#111}
 .rvp{font-size:11px;color:#555;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
@@ -433,7 +435,7 @@ const SENT_PREVIEW = 3
 
 // 리뷰 한 건: 닉네임·상품명 / 태그 / 문장별 본문 / 사진. 모두 textContent와 createElement로만 만들고 저장·전송하지 않아요.
 function reviewItem(rv) {
-  const li = el('li', 'rv')
+  const li = el('li', rv.excluded ? 'rv excl' : 'rv')
   if (rv.nick || rv.productName) {
     const head = el('div', 'rvh')
     if (rv.nick) head.append(el('b', 'rvn', rv.nick))
@@ -441,6 +443,8 @@ function reviewItem(rv) {
     li.append(head)
   }
   const meta = el('div', 'rvm')
+  if (rv.excluded) meta.append(el('span', 'tag excl', rv.excluded.text))
+  else if (rv.labelReduced) meta.append(el('span', 'tag excl', '가중치 낮춤(비슷한 체형 다수와 반대 평가)'))
   const tag = (label, value, text) => meta.append(el('span', value == null ? 'tag miss' : 'tag', value == null ? `${label} 못 읽음` : `${label} ${text}`))
   if (rv.similarity != null) meta.append(el('span', 'tag sim', `체형 유사도 ${rv.similarity}`))
   meta.append(el('span', rv.gender ? 'tag' : 'tag miss', rv.gender === 'male' ? '남성' : rv.gender === 'female' ? '여성' : '성별 못 읽음'))
@@ -607,6 +611,8 @@ function photoGallery(list) {
 function reviewsBlock(rvs) {
   const box = el('div')
   const all = [...rvs.matched, ...rvs.others]
+  // 제외된 후기는 숨기지 않고 전체 리뷰 탭에 '제외됨(사유)'로 보여줘요. 추천 계산·사진·체형 비교에는 쓰지 않아요.
+  const excluded = rvs.excluded || []
   const tabs = [
     {
       label: '비슷한 체형',
@@ -622,8 +628,9 @@ function reviewsBlock(rvs) {
       label: '전체 리뷰',
       build() {
         const d = el('div')
-        if (all.length) d.append(reviewList(all))
+        if (all.length || excluded.length) d.append(reviewList([...all, ...excluded]))
         else d.append(el('p', 'note', '불러온 리뷰가 없어요.'))
+        if (excluded.length) d.append(el('p', 'note', `제외됨 ${rvs.excludedTotal ?? excluded.length}건은 이상치로 보여 추천 계산에 쓰지 않았어요. 위 목록에 사유와 함께 남겨 뒀어요.`))
         const hidden = rvs.matchedTotal + rvs.othersTotal - all.length
         if (hidden > 0) d.append(el('p', 'note', `${hidden}건은 표시하지 않았어요.`))
         return d
@@ -1274,7 +1281,7 @@ function renderResult(r) {
 
     if (r.reviewViews) {
       // 신발은 키·몸무게 기준 '비슷한 체형' 판정을 추천에 쓰지 않으므로 제목에도 쓰지 않아요.
-      const rv = section(r.reviewViews.isShoes ? `리뷰 원문 (불러온 ${r.reviewsLoaded}건)` : `리뷰 원문 (비슷한 체형 ${r.reviewViews.matchedTotal}건 / 불러온 ${r.reviewsLoaded}건)`)
+      const rv = section(r.reviewViews.isShoes ? `리뷰 원문 (불러온 ${r.reviewsLoaded}건)` : `리뷰 원문 (비슷한 체형 ${r.reviewViews.matchedTotal}건 / 불러온 ${r.reviewsLoaded}건${r.reviewViews.excludedTotal ? ` / 제외 ${r.reviewViews.excludedTotal}건` : ''})`)
       rv.body.append(reviewsBlock(r.reviewViews))
       fold.append(rv.det)
     }

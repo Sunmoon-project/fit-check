@@ -2,7 +2,7 @@
 // 옵션 'NNN (NNN-NNN)' 읽기, 리뷰 '만족도' 문구 읽기, 발길이·발볼 기준 추천, 구매 사이즈별 리뷰 집계.
 // 추천 규칙은 일반적인 착용감을 바탕으로 한 휴리스틱이고, 정확도를 측정한 값이 아니에요.
 import { targetGenderNotice } from './targetGender.js'
-import { EASE_RULES, SHOE_WINDOW, SHOE_VERDICTS, FIT_PREF_LABEL, CONFIDENCE_LABEL, classifyEase, classifyShoeEase, bodyValuesForProfile } from './fitEngine.js'
+import { EASE_RULES, SHOE_WINDOW, SHOE_VERDICTS, FIT_PREF_LABEL, CONFIDENCE_LABEL, classifyEase, classifyShoeEase, bodyValuesForProfile, screenReviews } from './fitEngine.js'
 
 export const FOOT_WIDTH_LABEL = { narrow: '좁은 편', normal: '보통', wide: '넓은 편' }
 export const FOOT_WIDTHS = Object.keys(FOOT_WIDTH_LABEL)
@@ -373,7 +373,7 @@ export function shoeViewFor(product, profile) {
     footLengthEstimated: !measured.has('footLength'),
     footWidth: profile.footWidth,
     preferredFit: profile.preferredFit,
-    reviews: product.reviews,
+    reviews: screenReviews(product.reviews, product).kept,
     sizeWidths: chartWidthsByMm(product?.sizeChart),
     }),
     targetGender: tg,

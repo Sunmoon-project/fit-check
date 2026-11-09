@@ -47,6 +47,9 @@ function reviewView(r, disp = (x) => x) {
     fit: r.fit ?? null,
     fitLabel: r.fit ? FIT_LABEL[r.fit] || null : null,
     similarity: Number.isFinite(r.similarity) ? r.similarity : null,
+    // 이상치로 제외된 후기는 지우지 않고 '제외됨(사유)'로 보여줘요. 라벨 이상치는 가중치만 줄였다는 표시.
+    excluded: r.excluded ? { text: String(r.excluded.text || ''), reasons: [...(r.excluded.reasons || [])] } : null,
+    labelReduced: r.labelReduced === true,
     shoe: shoeReviewView(r),
   }
 }
@@ -152,6 +155,8 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
       me: { gender: profile.gender === 'male' || profile.gender === 'female' ? profile.gender : null, height: profile.height, weight: profile.weight },
       matchedTotal: (result.matched || []).length,
       othersTotal: (result.otherReviews || []).length,
+      excluded: (result.excludedReviews || []).slice(0, MAX_SHOWN.others).map(view),
+      excludedTotal: (result.excludedReviews || []).length,
     },
     exportData: exportData(product, pageUrl, result),
     compareView: cmpView.view,

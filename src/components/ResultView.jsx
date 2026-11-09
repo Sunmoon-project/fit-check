@@ -119,7 +119,7 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
         {saveNote && <p className="muted small">{saveNote}</p>}
       </div>
 
-      <MatchedReviews matched={result.matched} others={result.otherReviews} />
+      <MatchedReviews matched={result.matched} others={result.otherReviews} excluded={result.excludedReviews} />
 
       {!isShoes && <SimilarityCompare profile={profile} reviews={[...result.matched, ...result.otherReviews]} />}
 
