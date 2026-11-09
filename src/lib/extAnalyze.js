@@ -99,7 +99,7 @@ function compareView(product, profile, result, learned = null) {
   if (!product.sizeChart) return { view: null, failed: false }
   try {
     const values = result.bodyValues || bodyValuesForProfile(profile).values
-    const cmp = compareSizes({ chart: product.sizeChart, bodyValues: values, measured: result.measured, category: product.category, learned, reviewParts: result.reviewParts })
+    const cmp = compareSizes({ chart: product.sizeChart, bodyValues: values, measured: result.measured, category: product.category, learned, reviewParts: result.reviewParts, photoParts: result.photoParts })
     return { view: cmp.sizes.length ? { ...compactCompare(cmp), recommended: result.recommendedSize ?? null } : null, failed: false }
   } catch {
     return { view: null, failed: true }

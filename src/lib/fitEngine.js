@@ -73,10 +73,10 @@ const isNum = (v) => typeof v === 'number' && Number.isFinite(v)
 
 // 신체 치수(추정 + 직접 입력) + 기장 표준값
 export function bodyValuesForProfile(profile) {
-  const { values, measured } = estimateBody(profile)
+  const { values, measured, photo } = estimateBody(profile)
   const out = { ...values }
   for (const [k, r] of Object.entries(LENGTH_RATIO)) out[k] = round1(profile.height * r)
-  return { values: out, measured }
+  return { values: out, measured, photo }
 }
 
 // 보정 오프셋만큼 기준을 평행이동해서 판정
@@ -472,6 +472,7 @@ export function generateFitComment(profile, product, calibration = {}, model = n
     // 판정에 쓴 내 치수(공식 추정 + 후기 보정 + 직접 입력)와 후기로 보정한 부위. 비교 표가 같은 값을 보여주도록 넘겨요.
     bodyValues: values,
     reviewParts,
+    photoParts: [...(formula.photo || [])],
     detailed,
     regionInfo,
     // 사이즈표를 못 읽었을 때만: 사이즈 표기의 뜻(근사/출처 확인 필요). 추천 계산에는 쓰지 않아요.

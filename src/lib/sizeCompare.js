@@ -22,7 +22,7 @@ export const partUnit = (part) => (MM_PARTS.includes(part) ? 'mm' : 'cm')
  * @returns {{ sizes: Array<{ size, label, rows: Array }>, measureOnlyParts: string[], hasComparable: boolean }}
  * row: { part, label, unit, garment, body, bodyKind('measured'|'review'|'estimated'|'standard'|null; review = 후기로 보정한 추정), ease, verdict, level, key, isLength, basis('rule'|'heuristic'|'none'), note }
  */
-export function compareSizes({ chart, bodyValues = {}, measured = [], category, calibration = {}, learned = null, reviewParts = {} }) {
+export function compareSizes({ chart, bodyValues = {}, measured = [], category, calibration = {}, learned = null, reviewParts = {}, photoParts = [] }) {
   if (!chart?.measures) return { sizes: [], measureOnlyParts: [], hasComparable: false }
   const cat = category || chart.category
   const mine = measured instanceof Set ? measured : new Set(measured)
@@ -46,7 +46,7 @@ export function compareSizes({ chart, bodyValues = {}, measured = [], category, 
       if (v) {
         rows.push({
           part, label: v.label, unit: v.unit, garment, body: v.body,
-          bodyKind: isLength ? 'standard' : mine.has(part) ? 'measured' : reviewParts?.[part] ? 'review' : 'estimated',
+          bodyKind: isLength ? 'standard' : mine.has(part) ? 'measured' : reviewParts?.[part] ? 'review' : photoParts.includes(part) ? 'photo' : 'estimated',
           ease: v.ease, verdict: v.verdict, level: v.level, key: v.key, isLength, basis, note: basis === 'heuristic' ? '휴리스틱 기준' : '',
         })
         hasComparable = true

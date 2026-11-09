@@ -509,7 +509,7 @@ function compareBlock(cv) {
         tr.append(el('td', null, r.body == null ? '-' : fmt(r.body, r.unit)), el('td', null, fmt(r.garment, r.unit)), el('td', null, '-'))
         tr.append(el('td', 'mo', r.note))
       } else {
-        const kind = r.bodyKind === 'measured' ? '' : r.bodyKind === 'standard' ? ' (표준)' : r.bodyKind === 'review' ? ' (후기 추정)' : ' (추정)'
+        const kind = r.bodyKind === 'measured' ? '' : r.bodyKind === 'standard' ? ' (표준)' : r.bodyKind === 'review' ? ' (후기 추정)' : r.bodyKind === 'photo' ? ' (사진 추정)' : ' (추정)'
         tr.append(el('td', null, `${fmt(r.body, r.unit)}${kind}`), el('td', null, fmt(r.garment, r.unit)), el('td', null, `${r.ease > 0 ? '+' : ''}${r.ease}${r.unit}`))
         const td = el('td', 'vd', r.note ? `${r.verdict} (${r.note})` : r.verdict)
         const bar = el('span', 'bar')

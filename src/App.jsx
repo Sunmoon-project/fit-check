@@ -241,7 +241,7 @@ export default function App() {
       <main className="app-main">
         {wardrobeView && <Wardrobe items={wardrobe} onDelete={handleDeleteWardrobe} onBack={toggleWardrobe} onImport={handleImportWardrobe} onClearReviews={handleClearReviews} />}
         {chartsView && <SizeChartLibrary db={chartDb} initialEntries={chartEntries} onBack={() => setShowCharts(false)} onChanged={() => setChartEntries([])} />}
-        {tryOnView && <TryOnStudio wardrobe={wardrobe} profile={profile} current={tryOnCurrent} onSaveImage={handleWardrobeImage} onBack={() => setShowTryOn(false)} />}
+        {tryOnView && <TryOnStudio wardrobe={wardrobe} profile={profile} current={tryOnCurrent} onSaveImage={handleWardrobeImage} onBack={() => setShowTryOn(false)} onProfile={(p) => { saveProfile(p); setProfile(p) }} />}
         {usedView && <UsedListing profile={profile} db={chartDb} imageSearcher={imageSearcher} onBack={() => setShowUsed(false)} />}
         {mainView && step === 'onboarding' && (
           <Onboarding
