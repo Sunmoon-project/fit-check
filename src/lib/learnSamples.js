@@ -1,6 +1,7 @@
 // 후기 → 학습 샘플 변환 (순수 함수). 웹 앱과 확장이 같은 함수를 써요.
 //
 // 샘플에 담는 것: 종류(category), 브랜드 키, 라벨(small/true/large), 가중치, 부위별 여유분(0.5cm 단위), 날짜(일 번호), 중복 방지 id.
+// 지역(region)은 브랜드·도메인 등에서 추정한 5가지 값 중 하나뿐이에요(추정이라 틀릴 수 있어요).
 // 담지 않는 것: 닉네임, 후기 본문, 사진 주소, 상품명, 상품 주소, 키·몸무게(구간으로도 안 남겨요), 성별, 사이즈 이름.
 //
 // 키·몸무게를 구간화하지 않고 아예 버리는 이유: contribution.js의 기여 레코드는 서버로 나가서 체형별 통계를 내야 해서
@@ -9,6 +10,7 @@
 // 중복 방지 id는 (상품 주소·사이즈·키·몸무게·핏·본문 앞부분)의 해시라서 원문을 복원할 수 없어요.
 import { bodyValuesForProfile, screenReviews, EASE_RULES } from './fitEngine.js'
 import { brandKeyOf } from './learnedModel.js'
+import { regionKeyOf } from './brandRegion.js'
 
 const FITS = ['small', 'true', 'large']
 const LEARN_CATEGORIES = ['top', 'bottom', 'outer', 'dress'] // 사이즈표 실측으로 여유분을 구할 수 있는 종류. 신발은 제외
@@ -45,6 +47,8 @@ export function toSamples(product, opts = {}) {
   if (!product || !LEARN_CATEGORIES.includes(product.category) || !product.sizeChart?.measures) return []
   const url = opts.pageUrl || product.url || ''
   const brand = brandKeyOf({ ...product, url })
+  // 브랜드 지역 추정(국내/일본/미국/유럽/기타 중 하나, 판단 못 하면 담지 않음). 지역별 오프셋을 데이터로 확인하는 데만 써요.
+  const region = regionKeyOf(product, url)
   const day = dayNumber(opts.now)
   const { kept } = screenReviews(product.reviews || [], product)
   const out = []
@@ -67,6 +71,7 @@ export function toSamples(product, opts = {}) {
       id: hash([url, product.category, normKey(r.size), r.height, r.weight, r.fit, text].join('\u0000')),
       cat: product.category,
       brand,
+      ...(region ? { region } : {}),
       label: r.fit,
       w: isNum(r.labelWeight) ? r.labelWeight : 1,
       e,

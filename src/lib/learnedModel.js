@@ -8,7 +8,11 @@
 // 모델 모양:
 // { schemaVersion, trainedDay, sampleCount,
 //   categories: { [category]: { n, rules: { [part]: { tight, snug, regular, relaxed, n } } } },
-//   brands: { [category]: { [brand]: { offset, n } } } }
+//   brands: { [category]: { [brand]: { offset, n } } },
+//   regions?: { [category]: { [region]: { offset, n } } } }   // 같은 지역 브랜드들의 후기로 모은 오프셋(없을 수 있어요)
+//
+// 지역 오프셋은 "지역마다 사이즈가 다르다"는 가설을 데이터로 확인하는 장치예요. 가설 자체(미국은 크게, 일본은 비슷하거나 작게,
+// 유럽은 슬림하게)는 아직 검증 전이라 고정 수치를 코드에 넣지 않았고, 모은 후기에서 관측된 만큼만(표본이 적으면 0 쪽으로 축소) 반영해요.
 import { toDomain } from './contribution.js'
 
 export const LEARN_SCHEMA_VERSION = 1
@@ -20,6 +24,9 @@ export const LEARN = Object.freeze({
   brandMin: 3, // 브랜드 표본이 이 건수 미만이면 오프셋 0
   brandStrength: 10, // 브랜드 표본이 이만큼이면 관측값의 절반만 반영(축소 추정, shrinkage)
   maxBrandOffset: 4, // 브랜드 오프셋 한계(cm)
+  regionMin: 5, // 지역 표본이 이 건수 미만이면 지역 오프셋 0 (브랜드보다 넓은 묶음이라 더 보수적으로)
+  regionStrength: 20, // 지역 표본이 이만큼이면 관측값의 절반만 반영(축소 추정)
+  maxRegionOffset: 3, // 지역 오프셋 한계(cm)
   maxSamples: 500, // 저장하는 샘플 수 상한
   maxBytes: 200000, // 저장 용량 상한(JSON 글자 수 기준)
 })
@@ -111,70 +118,85 @@ export function trainModel(samples, prior, trainedDay = 0) {
     }
     model.categories[cat] = { n: rows.length, rules }
 
-    // 브랜드 오프셋: 학습된 카테고리 기준 대비, 같은 여유분에서 라벨이 한쪽으로 쏠리는 정도(cm).
+    // 브랜드·지역 오프셋: 학습된 카테고리 기준 대비, 같은 여유분에서 라벨이 한쪽으로 쏠리는 정도(cm).
     // 'small'이면 기준 snug를 넘는 만큼, 'large'면 relaxed에 못 미치는 만큼, 'true'면 목표 여유 중앙과의 차이를 모아 가중 평균해요.
-    const brands = {}
-    const byBrand = new Map()
-    for (const s of rows) if (s.brand) byBrand.set(s.brand, [...(byBrand.get(s.brand) || []), s])
-    for (const [brand, bs] of byBrand) {
-      if (bs.length < LEARN.brandMin) continue
-      let sum = 0
-      let w = 0
-      for (const s of bs) {
-        for (const [part, ease] of Object.entries(s.e)) {
-          const r = rules[part] || prior[part]
-          if (!r || part === 'footLength' || !isNum(ease)) continue
-          let d = null
-          if (s.label === 'small') d = Math.max(0, ease - r.snug)
-          else if (s.label === 'large') d = Math.min(0, ease - r.relaxed)
-          else d = ease - (r.snug + r.regular) / 2
-          sum += d * s.w
-          w += s.w
+    const groupOffsets = (key, min, strength, max) => {
+      const out = {}
+      const by = new Map()
+      for (const s of rows) if (s[key]) by.set(s[key], [...(by.get(s[key]) || []), s])
+      for (const [name, bs] of by) {
+        if (bs.length < min) continue
+        let sum = 0
+        let w = 0
+        for (const s of bs) {
+          for (const [part, ease] of Object.entries(s.e)) {
+            const r = rules[part] || prior[part]
+            if (!r || part === 'footLength' || !isNum(ease)) continue
+            let d = null
+            if (s.label === 'small') d = Math.max(0, ease - r.snug)
+            else if (s.label === 'large') d = Math.min(0, ease - r.relaxed)
+            else d = ease - (r.snug + r.regular) / 2
+            sum += d * s.w
+            w += s.w
+          }
         }
+        if (w === 0) continue
+        const shrink = bs.length / (bs.length + strength)
+        out[name] = { offset: round1(clamp((sum / w) * shrink, -max, max)), n: bs.length }
       }
-      if (w === 0) continue
-      const raw = sum / w
-      const shrink = bs.length / (bs.length + LEARN.brandStrength)
-      const offset = round1(clamp(raw * shrink, -LEARN.maxBrandOffset, LEARN.maxBrandOffset))
-      brands[brand] = { offset, n: bs.length }
+      return out
     }
+    const brands = groupOffsets('brand', LEARN.brandMin, LEARN.brandStrength, LEARN.maxBrandOffset)
     if (Object.keys(brands).length) model.brands[cat] = brands
+    const regions = groupOffsets('region', LEARN.regionMin, LEARN.regionStrength, LEARN.maxRegionOffset)
+    if (Object.keys(regions).length) (model.regions ||= {})[cat] = regions
   }
   return model
 }
 
 /**
  * 판정에 쓸 모습으로 풀어요. 묶음이 없거나 버전이 다르면 null (= 기존 동작 그대로).
- * @returns {{ rules: object, offset: number, categorySamples: number, brandSamples: number, total: number, brand: string|null, applied: boolean }|null}
+ * 오프셋은 브랜드 값이 있으면 그것(더 구체적), 없으면 같은 지역 브랜드들로 모은 지역 값, 둘 다 없으면 0(보정 없음)이에요. 두 값을 더하지 않아요(이중 반영 방지).
+ * @returns {{ rules: object, offset: number, offsetSource: 'brand'|'region'|null, brandOffset: number, regionOffset: number, categorySamples: number, brandSamples: number, regionSamples: number, total: number, brand: string|null, region: string|null, applied: boolean }|null}
  */
-export function resolveLearned(model, category, brand = null) {
+export function resolveLearned(model, category, brand = null, region = null) {
   const m = validateModel(model)
   if (!m) return null
   const cat = m.categories[category]
   const b = brand ? m.brands[category]?.[brand] : null
+  const g = region ? m.regions?.[category]?.[region] : null
   const rules = cat?.rules || {}
-  const offset = b?.offset || 0
+  const brandOffset = b?.offset || 0
+  const regionOffset = g?.offset || 0
+  // 브랜드 항목이 있으면(오프셋이 0이어도) 브랜드가 근거라서 지역 값으로 덮지 않아요.
+  const offsetSource = b ? (brandOffset !== 0 ? 'brand' : null) : regionOffset !== 0 ? 'region' : null
+  const offset = b ? brandOffset : regionOffset
   return {
     rules,
     offset,
+    offsetSource,
+    brandOffset,
+    regionOffset,
     categorySamples: cat?.n || 0,
     brandSamples: b?.n || 0,
+    regionSamples: g?.n || 0,
     total: m.sampleCount,
     brand: brand || null,
+    region: region || null,
     applied: Object.keys(rules).length > 0 || offset !== 0,
   }
 }
 
 /** 화면에 보일 상태 한 줄과 값. model이 없거나 샘플이 0건이면 null. */
-export function learningStatus(model, category, brand = null) {
+export function learningStatus(model, category, brand = null, region = null) {
   const m = validateModel(model)
   if (!m || m.sampleCount <= 0) return null
-  const r = resolveLearned(m, category, brand)
+  const r = resolveLearned(m, category, brand, region)
   const used = r.applied
   const text = used
     ? `학습값 사용 중(샘플 ${r.categorySamples}건)`
     : `학습값 모으는 중(전체 샘플 ${m.sampleCount}건, 이 종류는 아직 적용할 차이가 없어요)`
-  return { used, total: m.sampleCount, categorySamples: r.categorySamples, brandSamples: r.brandSamples, text }
+  return { used, total: m.sampleCount, categorySamples: r.categorySamples, brandSamples: r.brandSamples, regionSamples: r.regionSamples, offset: r.offset, offsetSource: r.offsetSource, text }
 }
 
 export const LEARNING_NOTE = '이 브라우저에 모은 후기로 판정 기준을 조금 옮긴 값이에요. 정확도를 잰 값은 아니에요.'

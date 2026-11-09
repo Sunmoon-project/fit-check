@@ -11,6 +11,7 @@ import { EXT_PROFILE_KEY, isUsableProfile } from '../src/lib/extProfile.js'
 import { chromeAdapter, loadLearning, addSamples, resetLearning } from '../src/lib/learnStore.js'
 import { createSizeChartDb, SIZE_CHART_DB_STORAGE_NOTE } from '../src/lib/sizeChartDb.js'
 import { LEARNING_NOTE, LEARNING_STORAGE_NOTE } from '../src/lib/learnedModel.js'
+import { REGION_HYPOTHESIS_NOTE } from '../src/lib/brandRegion.js'
 
 // 표 구조로 사이즈표가 안 읽힐 때 화면 위치로 줄·칸을 맞추는 마지막 후보에 쓸 위치 제공자 (읽기만 해요)
 setRectProvider((el) => el.getBoundingClientRect())
@@ -1361,6 +1362,23 @@ function renderResult(r) {
     }
     why.body.append(el('h3', null, r.headline), el('p', null, r.body))
     fold.append(why.det)
+
+    // 추천에 쓰인 근거를 줄별로 (후기 건수·제외, 학습값·샘플 수, 브랜드/지역 보정, 부위별 여유분, 브랜드 지역)
+    if (r.details?.length) {
+      const dt = section('추천에 쓰인 근거 (자세히)')
+      const dul = el('ul', 'why details')
+      for (const t of r.details) dul.append(el('li', null, t))
+      dt.body.append(dul)
+      if (r.regionInfo) dt.body.append(el('p', 'tiny', REGION_HYPOTHESIS_NOTE))
+      fold.append(dt.det)
+    }
+    if (r.sizeSystem) {
+      const ss = section(r.sizeSystem.title)
+      const sul = el('ul', 'why')
+      for (const t of r.sizeSystem.lines) sul.append(el('li', null, t))
+      ss.body.append(sul, el('p', 'tiny', r.sizeSystem.note))
+      fold.append(ss.det)
+    }
 
     if (r.reviewViews) {
       // 신발은 키·몸무게 기준 '비슷한 체형' 판정을 추천에 쓰지 않으므로 제목에도 쓰지 않아요.

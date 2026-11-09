@@ -48,9 +48,12 @@ function ldBrandCode(nodes) {
     const b = n.brand
     const brand = typeof b === 'string' ? b : typeof b?.name === 'string' ? b.name : ''
     const code = [n.mpn, n.productID, n.sku].find((v) => (typeof v === 'string' || typeof v === 'number') && String(v).trim()) ?? ''
-    if (brand || code) return { chartBrand: brand.trim().slice(0, 40), chartCode: String(code).trim().slice(0, 40) }
+    // 통화 코드(KRW, JPY 등 영문 3글자)는 브랜드 지역 판단의 약한 근거로만 써요.
+    const offer = Array.isArray(n.offers) ? n.offers[0] : n.offers
+    const cur = typeof offer?.priceCurrency === 'string' && /^[A-Za-z]{3}$/.test(offer.priceCurrency.trim()) ? offer.priceCurrency.trim().toUpperCase() : ''
+    if (brand || code) return { chartBrand: brand.trim().slice(0, 40), chartCode: String(code).trim().slice(0, 40), priceCurrency: cur }
   }
-  return { chartBrand: '', chartCode: '' }
+  return { chartBrand: '', chartCode: '', priceCurrency: '' }
 }
 
 // 칸 글자: 요소 경계와 <br>에서 띄어쓰기를 넣어 '1'+'신발 길이'가 '1신발 길이'로 붙어도 읽을 수 있게 하고, 공백은 하나로 줄여요.
