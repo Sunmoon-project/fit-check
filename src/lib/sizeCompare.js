@@ -46,7 +46,7 @@ export function compareSizes({ chart, bodyValues = {}, measured = [], category, 
       if (v) {
         rows.push({
           part, label: v.label, unit: v.unit, garment, body: v.body,
-          bodyKind: isLength ? 'standard' : mine.has(part) ? 'measured' : reviewParts?.[part] ? 'review' : photoParts.includes(part) ? 'photo' : 'estimated',
+          bodyKind: part === 'inseam' && mine.has('leg') ? 'leg' : isLength ? 'standard' : mine.has(part) ? 'measured' : reviewParts?.[part] ? 'review' : photoParts.includes(part) ? 'photo' : 'estimated',
           ease: v.ease, verdict: v.verdict, level: v.level, key: v.key, isLength, basis, note: basis === 'heuristic' ? '휴리스틱 기준' : '',
         })
         hasComparable = true

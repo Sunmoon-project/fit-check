@@ -55,6 +55,7 @@ export const EASE_RULES = {
 // 기장 항목의 표준값 = 키 × 비율 (휴리스틱)
 const LENGTH_RATIO = { topLength: 0.39, outerLength: 0.41, inseam: 0.58, dressLength: 0.68 }
 const LENGTH_PARTS = Object.keys(LENGTH_RATIO)
+const LEG_RATIO = 0.45
 
 export const VERDICTS = [
   { key: 'tooTight', label: '작을 수 있음', lengthLabel: '짧을 수 있음' },
@@ -76,6 +77,8 @@ export function bodyValuesForProfile(profile) {
   const { values, measured, photo } = estimateBody(profile)
   const out = { ...values }
   for (const [k, r] of Object.entries(LENGTH_RATIO)) out[k] = round1(profile.height * r)
+  // 다리길이를 직접 쟀으면 바지 총장 기준을 키 대신 다리길이 비율로 잡아요 (평균 다리길이 = 키 × LEG_RATIO).
+  if (measured.has('leg')) out.inseam = round1(values.leg * (LENGTH_RATIO.inseam / LEG_RATIO))
   return { values: out, measured, photo }
 }
 

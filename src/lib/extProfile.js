@@ -1,7 +1,7 @@
 // 크롬 확장의 체형 입력 → 핏 엔진이 읽는 프로필. 순수 함수라 테스트할 수 있어요.
 export const EXT_PROFILE_KEY = 'fitcheckProfile'
 
-const MEASURE_KEYS = ['shoulder', 'chest', 'waist', 'hip', 'thigh', 'arm', 'footLength']
+const MEASURE_KEYS = ['shoulder', 'chest', 'waist', 'hip', 'thigh', 'arm', 'leg', 'footLength']
 
 /** 폼 값(문자열) → 프로필. 잘못된 값이면 { error }. */
 export function buildProfile(form) {
