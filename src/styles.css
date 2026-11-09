@@ -603,3 +603,6 @@ body {
 .used-form textarea:disabled { opacity: .5; }
 .used-result { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line-strong); }
 .used-result .size { font-size: 34px; font-weight: 800; margin: 4px 0; }
+.used-consent { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
+.used-consent input { width: auto; margin-top: 3px; }
+.used-photo-result { margin-top: 8px; }

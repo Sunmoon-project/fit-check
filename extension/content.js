@@ -1340,6 +1340,12 @@ function usedCard(card, r) {
   if (r.perSize?.length) card.append(el('p', 'tiny', `사이즈별: ${r.perSize.map((p) => `${p.size} ${p.label}`).join(' · ')}`))
   card.append(el('p', 'tiny', r.noReviewNote))
   card.append(el('p', 'tiny', r.disclaimer))
+  // 사진 역검색은 서버가 필요해서 확장에서는 호출하지 않아요(확장은 네트워크 호출 없음). 웹 앱의 '중고 상품 분석'으로 가는 링크만 둬요.
+  const photoLink = el('a', 'weblink', '사진으로 같은 상품 찾기는 웹 앱 ‘중고 상품 분석’에서 (개발 서버 localhost:5173)')
+  photoLink.href = WEB_APP_OPEN_URL
+  photoLink.target = '_blank'
+  photoLink.rel = 'noopener noreferrer'
+  card.append(photoLink)
   const fold = el('div', 'fold')
   const why = section('추천 이유', true)
   const ul = el('ul', 'why')
