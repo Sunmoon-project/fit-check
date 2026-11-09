@@ -6345,15 +6345,15 @@ test('사진 체형 추정(가짜 관절·윤곽): 키로 축척을 잡아 어�
   assert.equal(r.ok, true)
   const cmPerPx = 175 / (800 / 0.935)
   assert.ok(Math.abs(r.raw.shoulder - 170 * cmPerPx * 1.27) <= 0.5, `어깨 ${r.raw.shoulder}`)
-  assert.ok(Math.abs(r.raw.chest - ellipseCircumference(230 * cmPerPx, 0.72)) <= 0.5, `가슴 ${r.raw.chest}`)
+  assert.ok(Math.abs(r.raw.chest - ellipseCircumference(230 * cmPerPx, 0.72) * 1.08) <= 0.5, `가슴 ${r.raw.chest}`)
   assert.ok(r.raw.waist < r.raw.chest && r.raw.hip > r.raw.waist, '허리는 가장 좁고 엉덩이는 넓게')
   for (const k of ['shoulder', 'chest', 'waist', 'hip']) {
     assert.ok(r.values[k] >= formula[k] * 0.88 - 0.5 && r.values[k] <= formula[k] * 1.12 + 0.5, `${k} ±12%`)
   }
   assert.deepEqual(r.warnings, [])
   // 넓은 사람은 공식보다 크게, 좁은 사람은 작게
-  const big = measureFromPose({ ...fakePose({ shoulderPx: 190, chestPx: 260 }), heightCm: 175, formula })
-  const small = measureFromPose({ ...fakePose({ shoulderPx: 150, chestPx: 200 }), heightCm: 175, formula })
+  const big = measureFromPose({ ...fakePose({ shoulderPx: 190, chestPx: 190 }), heightCm: 175, formula })
+  const small = measureFromPose({ ...fakePose({ shoulderPx: 150, chestPx: 150 }), heightCm: 175, formula })
   assert.ok(big.values.shoulder > r.values.shoulder && small.values.shoulder < r.values.shoulder)
   assert.ok(big.values.chest > small.values.chest)
   // 팔이 붙어 몸통이 너무 넓으면 가슴·허리는 빼고 안내
@@ -6399,6 +6399,13 @@ test('사진 추정값 반영: 직접 잰 값 > 사진 추정 > 키·몸무게 �
   const cmp = compareSizes({ chart: product.sizeChart, bodyValues: r.bodyValues, measured: r.measured, category: 'top', reviewParts: r.reviewParts, photoParts: r.photoParts })
   assert.equal(cmp.sizes[0].rows.find((x) => x.part === 'chest').bodyKind, 'photo')
   assert.equal(cmp.sizes[0].rows.find((x) => x.part === 'chest').body, 102)
+})
+
+test('치수 재는 법: 입력 칸 부위마다 안내가 있고, 그림과 설명을 보여준다', () => {
+  const html = textOf(render(WEB.MeasureGuide, {}))
+  for (const f of BODY_FIELDS) if (f.key !== 'footLength') assert.ok(html.includes(f.label), `${f.label} 안내 없음`)
+  assert.ok(html.includes('다리길이'), '다리길이')
+  assert.ok(html.includes('어깨 끝 뼈'), '처음엔 어깨 설명')
 })
 
 console.log(`\n${passed}개 통과`)

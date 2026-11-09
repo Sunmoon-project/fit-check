@@ -199,3 +199,20 @@ details[open] > summary::after { transform: translateY(1px) rotate(-135deg); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after, ::details-content { animation: none !important; transition: none !important; }
 }
+
+/* 치수 재는 법 */
+.measure-guide { display: grid; grid-template-columns: minmax(140px, 200px) 1fr; gap: 20px; align-items: start; margin-top: 16px; }
+.mg-fig { width: 100%; height: auto; }
+.mg-body { fill: var(--panel); stroke: var(--line-strong); stroke-width: 1.2; }
+.mg-body .mg-arm { fill: none; stroke: var(--panel); stroke-width: 15; stroke-linecap: round; stroke-linejoin: round; }
+.mg-mark { fill: none; stroke: var(--v-regular); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.mg-mark path { stroke-dasharray: 1; animation: fc-draw .6s cubic-bezier(.22,1,.36,1) both; }
+.mg-mark .mg-back { stroke-dasharray: 3 3; stroke-width: 1.6; opacity: .55; animation: fc-fade .4s .3s both; }
+.mg-mark circle { fill: var(--v-regular); stroke: none; animation: fc-pop .3s .45s both; }
+.mg-text { animation: fc-rise .3s cubic-bezier(.22,1,.36,1) both; }
+.mg-text h3 { margin: 14px 0 4px; font-size: 16px; }
+.mg-text p { margin: 0 0 6px; }
+.mg-tips { margin: 14px 0 0; padding-left: 18px; }
+.mg-tips li + li { margin-top: 2px; }
+@media (max-width: 520px) { .measure-guide { grid-template-columns: 110px 1fr; gap: 12px; } }
+@media (prefers-reduced-motion: reduce) { .mg-mark path, .mg-mark circle, .mg-text { animation: none; } }

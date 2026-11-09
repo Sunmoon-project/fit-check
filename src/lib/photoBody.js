@@ -10,6 +10,8 @@ const EYE_RATIO = 0.935 // 눈높이 ≈ 키의 93.5%
 const ANKLE_RATIO = 0.045 // 발목 높이 ≈ 키의 4.5%
 const SHOULDER_K = 1.27
 const DEPTH = { chest: 0.72, waist: 0.75, hip: 0.8 } // 앞뒤 두께 ÷ 좌우 너비 (가정)
+// 가슴 단면은 타원보다 각져 있어 타원 둘레가 실제보다 8% 안팎 작게 나와요 (평균 체형 폭·두께로 비교한 값).
+const GIRTH_K = { chest: 1.08, waist: 1, hip: 1 }
 const BAND = { chest: 0.33, waist: 0.62, hip: 1.08 } // 어깨선(0)~골반 관절선(1) 사이 상대 높이
 const ARM_W = 0.055 // 팔 두께 ≈ 키의 5.5% (팔 중심선에서 몸통 쪽으로 이만큼의 절반을 빼요)
 const PHOTO_WEIGHT = 0.6
@@ -129,7 +131,7 @@ export function measureFromPose({ landmarks, width, height, mask = null, maskW =
         if (!warnings.some((w) => w.startsWith('팔'))) warnings.push('팔이 몸에 붙어 있어 가슴·허리를 재지 못했어요. 팔을 몸에서 살짝 떼고 찍어 주세요.')
         continue
       }
-      raw[part] = ellipseCircumference(wPx * cmPerPx, DEPTH[part])
+      raw[part] = ellipseCircumference(wPx * cmPerPx, DEPTH[part]) * GIRTH_K[part]
     }
   } else {
     warnings.push('사람 윤곽을 얻지 못해 어깨너비만 쟀어요.')
