@@ -12,6 +12,8 @@ import { chromeAdapter, loadLearning, addSamples, resetLearning } from '../src/l
 import { createSizeChartDb, SIZE_CHART_DB_STORAGE_NOTE } from '../src/lib/sizeChartDb.js'
 import { LEARNING_NOTE, LEARNING_STORAGE_NOTE } from '../src/lib/learnedModel.js'
 import { REGION_HYPOTHESIS_NOTE } from '../src/lib/brandRegion.js'
+import { isUsedListingPage, usedSiteOf, readListing, listingText } from '../src/lib/usedListing.js'
+import { usedSearchQuery, findChartMatches } from '../src/lib/usedAnalyze.js'
 
 // 표 구조로 사이즈표가 안 읽힐 때 화면 위치로 줄·칸을 맞추는 마지막 후보에 쓸 위치 제공자 (읽기만 해요)
 setRectProvider((el) => el.getBoundingClientRect())
@@ -1042,6 +1044,18 @@ async function loadMoreReviews(mode, onProgress) {
   return { reason, clicked, grewOnPage: count > startCount }
 }
 
+// 중고 판매글 페이지면 이 브라우저의 사이즈표 모음에서 비슷한 상품을 미리 찾아 둬요(네트워크 없음). 중고 사이트가 아니거나 실패하면 빈 목록이에요.
+async function usedChartMatchesFor(adapter) {
+  if (!usedSiteOf(location.href)) return []
+  try {
+    const listing = readListing(document)
+    const q = usedSearchQuery({ ...listing, text: listingText(listing) })
+    return q ? await findChartMatches(createSizeChartDb(adapter), q) : []
+  } catch {
+    return []
+  }
+}
+
 // 분석 한 번 + 학습: 저장된 학습값으로 판정하고, 이 상품 후기에서 만든 샘플(개인 식별 정보 없음)을 chrome.storage.local에 쌓아요.
 // 새 샘플이 쌓였으면 갱신된 학습값으로 한 번 더 분석해요. 저장소를 못 쓰면(예: 확장이 갱신된 직후) 학습 없이 기존 방식으로 분석해요.
 async function analyzeLearning(profile, opts) {
@@ -1052,7 +1066,8 @@ async function analyzeLearning(profile, opts) {
   } catch {
     model = null
   }
-  let out = analyzePage(document, location.href, profile, EXT_VERSION, { ...opts, learned: model, collectSamples: true })
+  const usedChartMatches = await usedChartMatchesFor(adapter)
+  let out = analyzePage(document, location.href, profile, EXT_VERSION, { ...opts, learned: model, collectSamples: true, usedChartMatches })
   // 사이즈표를 읽은 상품만 사이즈표 모음에 저장해요(같은 상품은 갱신). 실패해도 분석 결과는 그대로 보여줘요.
   if (out.status === 'ok' && out.chartRecord) {
     try {
@@ -1311,8 +1326,45 @@ async function reanalyzeWithCategory(key) {
   }
 }
 
+// 중고 판매글 결과 카드: 후기 없이 판매글 실측 > 사이즈표 DB > 기본값 순서로 판정해요. 판매글에서 읽은 글은 textContent로만 넣어요.
+function usedCard(card, r) {
+  const conf = el('span', 'badge', r.confidenceLabel.text)
+  conf.style.color = r.confidenceLabel.color
+  const row = el('div', 'row')
+  row.append(el('span', 'eyebrow', [r.site?.name, r.categoryLabel].filter(Boolean).join(' · ') || '중고 판매글'), conf)
+  card.append(row)
+  if (r.title) card.append(el('p', 'tiny', r.title))
+  card.append(el('div', 'size', r.verdictLabel || '판정 어려움'))
+  card.append(el('p', 'sum', r.headline))
+  card.append(el('p', 'tiny', `근거: ${r.basisLabel}${r.approx ? ' (근사/추정)' : ''}`))
+  if (r.perSize?.length) card.append(el('p', 'tiny', `사이즈별: ${r.perSize.map((p) => `${p.size} ${p.label}`).join(' · ')}`))
+  card.append(el('p', 'tiny', r.noReviewNote))
+  card.append(el('p', 'tiny', r.disclaimer))
+  const fold = el('div', 'fold')
+  const why = section('추천 이유', true)
+  const ul = el('ul', 'why')
+  for (const t of r.reasons) ul.append(el('li', null, t))
+  why.body.append(ul)
+  fold.append(why.det)
+  const dt = section('추천에 쓰인 근거 (자세히)')
+  const dul = el('ul', 'why details')
+  for (const t of r.details) dul.append(el('li', null, t))
+  dt.body.append(dul)
+  fold.append(dt.det)
+  if (r.diagnostics) {
+    const rep = section('문제가 있나요? 진단 리포트')
+    rep.body.append(reportBlock(formatReport(r.diagnostics)))
+    fold.append(rep.det)
+  }
+  card.append(fold)
+}
+
 function renderResult(r) {
   showCard((card) => {
+    if (r.status === 'used') {
+      usedCard(card, r)
+      return
+    }
     if (r.status !== 'ok') {
       card.append(el('p', null, r.message))
       const noticeBox = categoryNoticeBlock(r)
@@ -1325,7 +1377,7 @@ function renderResult(r) {
         card.append(diag.det)
       }
       if (r.diagnostics) {
-        card.append(manualForm(r))
+        if (!r.usedSite) card.append(manualForm(r))
         card.append(reportBlock(formatReport(r.diagnostics)))
       }
       return
@@ -1461,7 +1513,7 @@ async function run() {
       result = await analyzeLearning(profile, { categoryOverride: chosenCategory })
     }
     // 리뷰가 AUTO_TARGET건보다 적으면 자동으로 더 불러온 뒤 다시 분석해요 (상품 페이지로 읽힌 경우만).
-    if ((result.status === 'ok' || result.status === 'no-data') && (result.reviewsLoaded ?? 0) < AUTO_TARGET) {
+    if ((result.status === 'ok' || result.status === 'no-data') && !result.usedSite && (result.reviewsLoaded ?? 0) < AUTO_TARGET) {
       stage = 'load'
       fab.textContent = '리뷰 불러오는 중…'
       const res = await loadMoreReviews('auto', showAutoLoading())
@@ -1503,7 +1555,7 @@ if (!window.__fitcheckLoaded) {
   let tries = 0
   const maybeShow = () => {
     if (host) return
-    if (isProductPage(document)) ensureUi()
+    if (isProductPage(document) || isUsedListingPage(document, location.href)) ensureUi()
     else if (++tries < 4) setTimeout(maybeShow, 1500)
   }
   maybeShow()

@@ -596,3 +596,10 @@ body {
 
 .category-picker { margin: 6px 0 10px; }
 .category-picker .chip-row { margin-top: 6px; }
+
+/* 중고 상품 분석 */
+.used-form { display: flex; flex-direction: column; gap: 8px; margin: 16px 0 8px; }
+.used-form input, .used-form textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; font: inherit; background: var(--surface); color: var(--ink); }
+.used-form textarea:disabled { opacity: .5; }
+.used-result { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line-strong); }
+.used-result .size { font-size: 34px; font-weight: 800; margin: 4px 0; }

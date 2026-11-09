@@ -68,6 +68,11 @@ import { classifyBrandRegion, regionLine, regionKeyOf, BRAND_REGION_DICT, REGION
 import { representativeMeasure, sizeSystemHint, SIZE_SYSTEM_FLAG } from '../src/lib/sizeSystems.js'
 import { createSizeChartDb, SIZE_CHART_DB_KEY, SIZE_CHART_DB_VERSION, normalizeText, normalizeCode, brandKeyOfName, modelSimilarity, modelTokens, chartRecordFromProduct, toEntry } from '../src/lib/sizeChartDb.js'
 
+import { USED_SITES, USED_SITES_NOTE, usedSiteOf, parseListingText, readListing, listingText, isUsedListingPage } from '../src/lib/usedListing.js'
+import { analyzeUsedListing, findChartMatches, usedSearchQuery, usedVerdictFrom, USED_DB_MIN_SCORE, USED_NO_REVIEW_NOTE } from '../src/lib/usedAnalyze.js'
+import { createImageSearcher, IMAGE_SEARCH_DISABLED_TEXT } from '../src/lib/imageSearch.js'
+import { createLabelReader, LABEL_OCR_DISABLED_TEXT } from '../src/lib/labelOcr.js'
+
 let passed = 0
 function test(name, fn) {
   try {
@@ -1376,7 +1381,8 @@ test('확장 manifest: MV3, 최소 권한, 광범위 호스트 권한·원격 �
   assert.deepEqual(checkManifest(EXT_MANIFEST), [])
   assert.deepEqual([...EXT_MANIFEST.permissions].sort(), ['activeTab', 'scripting', 'storage'])
   assert.equal(EXT_MANIFEST.host_permissions, undefined)
-  assert.ok(EXT_MANIFEST.content_scripts[0].matches.length <= 5)
+  // 쇼핑몰마다 한 줄씩 늘어나요. 너무 넓은 주소는 checkManifest가 따로 막아요.
+  assert.ok(EXT_MANIFEST.content_scripts[0].matches.length <= 10)
   assert.equal(EXT_MANIFEST.background, undefined, 'service worker 없음')
 })
 
@@ -5650,6 +5656,302 @@ test('지역·근거 표시: 웹 결과 화면(서버 렌더)에 브랜드 지�
   assert.ok(text.includes('검증 전 가설'))
   const noChart = textOf(render(WEB.FitComment, { result: generateFitComment(profile, { name: '셔츠', category: 'top', optionLabels: ['95', '100'], reviews: [], sizeChart: null, targetGender: { gender: 'male' } }, {}, null) }))
   assert.ok(noChart.includes('사이즈 표기 참고값(근사/출처 확인 필요)') && noChart.includes('100 → 가슴둘레 호칭 약 100cm'))
+})
+
+// ---- 중고 판매글 분석 (번개장터·후르츠패밀리). 아래 글·HTML은 전부 직접 만든 가짜예요. 실제 사이트에서 확인한 것이 아니에요 ----
+const usedProfile = buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular' }).profile
+const U_TITLE = '[M] 나이키 Club Fleece Hoodie 후드 티셔츠'
+
+test('중고 판매글 파서: 사이즈 표기(알파벳·숫자·FREE·신발 mm·허리 인치)와 브랜드·모델·품번을 읽는다', () => {
+  const a = parseListingText('사이즈: L\n품번: BV2654-010', { title: '나이키 Club Fleece 후드 L' })
+  assert.deepEqual(a.sizes.map((x) => x.label), ['L'])
+  assert.equal(a.brand.key, 'nike')
+  assert.equal(a.code, 'BV2654-010')
+  assert.ok(a.model.includes('Club Fleece') && !/\bL$/.test(a.model))
+  assert.deepEqual(parseListingText('셔츠 100사이즈').sizes.map((x) => [x.label, x.kind]), [['100', 'kr-top']])
+  assert.deepEqual(parseListingText('프리사이즈 FREE size 가디건').sizes.map((x) => x.label), ['FREE'])
+  const shoe = parseListingText('뉴발란스 530 270mm 새상품', { title: '뉴발란스 530 270' })
+  assert.equal(shoe.category, 'shoes')
+  assert.ok(shoe.sizes.some((x) => x.label === '270' && x.kind === 'mm'))
+  const jeans = parseListingText('리바이스 501 청바지 W32 허리 40 허벅지 30')
+  assert.ok(jeans.sizes.some((x) => x.label === '32' && x.kind === 'inch') && jeans.category === 'bottom')
+  assert.ok(!parseListingText('S급 상태 좋아요 직거래').sizes.length, 'S급은 사이즈가 아니라 상태')
+  assert.equal(parseListingText('번호: 없음').code, '')
+})
+
+test('중고 판매글 파서: 실측 줄(가슴·총장·어깨·소매), 단면이면 ×2, cm 생략, 둘레는 그대로', () => {
+  const p = parseListingText('가슴단면 55cm 총장 70 어깨 47 소매 60', { title: '후드 티셔츠' }).measuresBySize.default
+  assert.equal(p.chest.cm, 110)
+  assert.equal(p.chest.kind, 'section')
+  assert.equal(p.topLength.cm, 70, 'cm 생략도 읽어요')
+  assert.equal(p.shoulder.cm, 47)
+  assert.equal(p.arm.cm, 60)
+  const circ = parseListingText('가슴둘레 108 어깨 46', { title: '셔츠' }).measuresBySize.default
+  assert.equal(circ.chest.cm, 108)
+  assert.equal(circ.chest.kind, 'circ')
+  const trail = parseListingText('가슴 55(단면) 총장 70', { title: '티셔츠' }).measuresBySize.default
+  assert.equal(trail.chest.cm, 110, '뒤에 붙은 (단면)도 인식')
+  const bare = parseListingText('단면 55 총장 70', { title: '맨투맨' }).measuresBySize.default
+  assert.equal(bare.chest.cm, 110)
+  assert.equal(bare.chest.inferred, true, '부위 없는 단면은 가슴으로 짐작한 값이라 표시')
+  const bottom = parseListingText('허리 40 밑위 30 허벅지 30 총장 100', { title: '청바지' }).measuresBySize.default
+  assert.equal(bottom.waist.cm, 80)
+  assert.equal(bottom.thigh.cm, 60)
+  assert.equal(bottom.rise.cm, 30)
+  assert.equal(bottom.inseam.cm, 100)
+  assert.equal(parseListingText('허리 30인치', { title: '청바지' }).measuresBySize.default.waist.cm, 76.2)
+})
+
+test('중고 판매글 파서: 비현실적인 값은 버리고 단면/둘레가 애매한 값도 버리며 건수를 센다', () => {
+  const r = parseListingText('가슴 5 어깨 200 소매 999 총장 3 허리 72 가슴단면 55', { title: '티셔츠' })
+  const d = r.measuresBySize.default
+  assert.deepEqual(Object.keys(d).sort(), ['chest', 'waist'].sort())
+  assert.equal(d.chest.cm, 110)
+  assert.equal(d.waist.cm, 72, '72는 허리 둘레로만 가능한 값')
+  assert.ok(r.counts.droppedCount >= 4)
+  const amb = parseListingText('가슴 72', { title: '티셔츠' })
+  assert.deepEqual(amb.measuresBySize, {}, '72는 단면(×2=144)일 수도 둘레일 수도 있어 쓰지 않아요')
+  assert.equal(amb.counts.ambiguousCount, 1)
+  assert.deepEqual(parseListingText('상품 가격 100 제품 55', { title: '티셔츠' }).measuresBySize, {}, '상품·제품의 "품"은 가슴으로 읽지 않아요')
+})
+
+test('중고 판매글 파서: 사이즈별 실측(M: …, L: …)은 사이즈별로 나눠 읽는다', () => {
+  const r = parseListingText('M 가슴 55 총장 70\nL 가슴 58 총장 72', { title: '후드 티셔츠' })
+  assert.deepEqual(r.namedSizes, ['M', 'L'])
+  assert.equal(r.measuresBySize.M.chest.cm, 110)
+  assert.equal(r.measuresBySize.L.chest.cm, 116)
+  assert.equal(r.measuresBySize.L.topLength.cm, 72)
+})
+
+const dbWith = async (...recs) => {
+  const db = createSizeChartDb(chartMemAdapter())
+  for (const r of recs) await db.put(r)
+  return db
+}
+
+test('중고 분석 판정 규칙: 핵심 부위가 없으면 판정하지 않고, 선호 핏에 따라 타이트/넉넉을 다르게 본다', () => {
+  assert.equal(usedVerdictFrom([], 'regular'), null)
+  assert.equal(usedVerdictFrom([{ part: 'topLength', level: 0 }], 'regular'), null, '총장만으로는 판정 안 함')
+  assert.equal(usedVerdictFrom([{ part: 'chest', level: 0 }], 'regular'), 'small')
+  assert.equal(usedVerdictFrom([{ part: 'chest', level: 1 }], 'regular'), 'small')
+  assert.equal(usedVerdictFrom([{ part: 'chest', level: 1 }], 'slim'), 'fit')
+  assert.equal(usedVerdictFrom([{ part: 'chest', level: 4 }], 'regular'), 'large')
+  assert.equal(usedVerdictFrom([{ part: 'chest', level: 4 }], 'relaxed'), 'fit')
+  assert.equal(usedVerdictFrom([{ part: 'chest', level: 2 }, { part: 'shoulder', level: 3 }], 'regular'), 'fit')
+})
+
+await atest('중고 분석 우선순위 1: 판매글 실측이 있으면 사이즈표 DB가 있어도 실측을 쓴다 (후기 없음 카드)', async () => {
+  const db = await dbWith(rec({ brand: '나이키', model: 'Nike Club Fleece Hoodie 후드 티셔츠', sizeChart: { ...CHART, measures: { S: { chest: 80 }, M: { chest: 82 } } } }))
+  const listing = { title: U_TITLE, text: `${U_TITLE}\n품번 BV2654-010\n가슴단면 55 총장 70 어깨 47 소매 60` }
+  const matches = await findChartMatches(db, usedSearchQuery(listing))
+  assert.ok(matches[0].score >= 90, '품번이 같아 DB 후보도 있음')
+  const r = analyzeUsedListing(listing, usedProfile, { chartMatches: matches })
+  assert.equal(r.status, 'used')
+  assert.equal(r.basis, 'listing')
+  assert.equal(r.verdict, 'fit')
+  assert.equal(r.verdictLabel, '맞음')
+  assert.equal(r.approx, false)
+  assert.ok(['low', 'medium'].includes(r.confidence), '확신도 높음은 주지 않아요')
+  assert.equal(r.confidence, 'medium')
+  assert.equal(r.noReviewNote, USED_NO_REVIEW_NOTE)
+  assert.equal(r.priority.find((x) => x.id === 'chart-db').state, 'skipped')
+  assert.ok(r.details.some((l) => l.startsWith('판매글에서 읽은 실측: 가슴 55(단면→둘레 110)')))
+  assert.ok(r.details.some((l) => l.startsWith('가슴: 옷 110cm − 내 ')))
+  assert.ok(r.reasons.includes(USED_NO_REVIEW_NOTE))
+  // 작은 실측이면 '작음', 큰 실측이면 '큼'
+  assert.equal(analyzeUsedListing({ title: '티셔츠', text: '티셔츠 가슴단면 44 어깨 40' }, usedProfile).verdictLabel, '작음')
+  assert.equal(analyzeUsedListing({ title: '티셔츠', text: '티셔츠 가슴단면 66 어깨 58' }, usedProfile).verdictLabel, '큼')
+})
+
+await atest('중고 분석 우선순위 2: 판매글 실측이 없고 DB 점수가 기준 이상이면 DB 사이즈표를 쓰고 근사로 표시한다', async () => {
+  const db = await dbWith(rec({ brand: '나이키', model: 'Nike Club Fleece Hoodie 후드 티셔츠' }))
+  const listing = { title: U_TITLE, text: `${U_TITLE}\n품번 BV2654-010\n상태 좋아요` }
+  const r = analyzeUsedListing(listing, usedProfile, { chartMatches: await findChartMatches(db, usedSearchQuery(listing)) })
+  assert.equal(r.basis, 'chart-db')
+  assert.equal(r.approx, true)
+  assert.equal(r.verdictLabel, '맞음', 'M 가슴 106 vs 내 97.5')
+  assert.ok(r.basisLabel.includes('근사'))
+  assert.ok(r.details.some((l) => l.startsWith('사이즈표 DB(근사/추정): 점수 ') && l.includes('품번 정확 일치')))
+  assert.equal(r.priority.find((x) => x.id === 'listing').state, 'none')
+  // 점수가 기준 아래면 쓰지 않아요
+  const weak = [{ score: USED_DB_MIN_SCORE - 1, reasons: ['모델명 유사도 40%(+24)'], entry: { id: 'x', brand: 'a', model: 'b', category: 'top', sizeChart: CHART } }]
+  const r2 = analyzeUsedListing({ title: U_TITLE, text: U_TITLE }, usedProfile, { chartMatches: weak })
+  assert.notEqual(r2.basis, 'chart-db')
+  assert.ok(r2.priority.find((x) => x.id === 'chart-db').text.includes('기준'))
+  // 판매 사이즈를 모르면 DB 기준 추천 사이즈만 알려주고 판정은 하지 않아요
+  const r3 = analyzeUsedListing({ title: '나이키 Club Fleece Hoodie 후드 티셔츠', text: '나이키 Club Fleece Hoodie 후드 티셔츠 품번 BV2654-010' }, usedProfile, { chartMatches: await findChartMatches(db, usedSearchQuery({ title: '나이키 Club Fleece Hoodie 후드 티셔츠', text: '나이키 Club Fleece Hoodie 후드 티셔츠 품번 BV2654-010' })) })
+  assert.equal(r3.verdict, null)
+  assert.ok(r3.recommended)
+  assert.equal(r3.confidence, 'low')
+})
+
+test('중고 분석 우선순위 3: 실측도 DB도 없으면 사이즈 표기 기본값으로만 가늠하고 확신도는 낮음·근사/추정으로 표시한다', () => {
+  const r = analyzeUsedListing({ title: '뉴발란스 530 270', text: '뉴발란스 530 270mm 사이즈' }, usedProfile)
+  assert.equal(r.basis, 'default')
+  assert.equal(r.approx, true)
+  assert.equal(r.confidence, 'low')
+  assert.equal(r.verdictLabel, '맞음')
+  assert.ok(r.details.some((l) => l.startsWith('사이즈 표기 참고값(근사/출처 확인 필요)')))
+  assert.ok(r.details.some((l) => l.startsWith('브랜드 지역: 미국(추정)')))
+  const small = analyzeUsedListing({ title: '뉴발란스 530 250', text: '뉴발란스 530 250mm' }, usedProfile)
+  assert.equal(small.verdictLabel, '작음')
+  const big = analyzeUsedListing({ title: '뉴발란스 530 290', text: '뉴발란스 530 290mm' }, usedProfile)
+  assert.equal(big.verdictLabel, '큼')
+  // 국내 호칭(95/100/105)은 미국 브랜드로 추정되면 쓰지 않고, 근거가 없으면 판정하지 않아요
+  assert.equal(analyzeUsedListing({ title: '나이키 후드티 100', text: '나이키 후드티 100사이즈' }, usedProfile).basis, 'none')
+  const kr = analyzeUsedListing({ title: '무신사 스탠다드 셔츠 100', text: '셔츠 100사이즈 남성' }, usedProfile)
+  assert.equal(kr.basis, 'default')
+  const none = analyzeUsedListing({ title: '후드티', text: '후드티 상태 좋아요' }, usedProfile)
+  assert.equal(none.basis, 'none')
+  assert.equal(none.verdict, null)
+  assert.equal(none.verdictLabel, null)
+  assert.ok(none.headline.includes('근거가 부족'))
+})
+
+const BUNJANG_HTML = `<html><head><meta property="og:title" content="[L] 나이키 후드 티셔츠 ">
+<meta property="og:description" content="새상품 직거래 가능"><meta property="og:image" content="https://img.example.com/a.jpg"></head>
+<body><div class="product-description"><p>가슴단면 55</p><p>총장 70 어깨 47 소매 60</p></div><div class="comments">댓글 영역</div>
+<img src="https://img.example.com/b.jpg"><img src="data:image/png;base64,AAA"><img src="http://insecure.example/c.jpg"></body></html>`
+const FRUITS_HTML = `<html><head><script type="application/ld+json">{"@type":"Product","name":"Stussy 스투시 후드 M","description":"M 사이즈\\n가슴 단면 56 총장 71","image":["https://cdn.example.com/f1.jpg"],"offers":{"price":"85000","priceCurrency":"KRW"}}</script></head><body><h1>Stussy 후드</h1></body></html>`
+
+test('중고 판매글 읽기: 번개장터·후르츠패밀리 주소를 알아보고, og 태그·JSON-LD·본문 영역에서 제목·본문·가격·사진을 읽는다 (가짜 HTML)', () => {
+  assert.equal(usedSiteOf('https://m.bunjang.co.kr/products/1').id, 'bunjang')
+  assert.equal(usedSiteOf('https://bunjang.co.kr/products/1').id, 'bunjang')
+  assert.equal(usedSiteOf('https://www.fruitsfamily.com/products/1').id, 'fruitsfamily')
+  assert.equal(usedSiteOf('https://www.musinsa.com/products/1'), null)
+  assert.equal(usedSiteOf('https://evil-bunjang.co.kr.example.com/'), null, '비슷한 이름의 다른 도메인은 거부')
+  assert.ok(USED_SITES_NOTE.includes('추정') && USED_SITES_NOTE.includes('확인하지 못했어요'))
+  const b = readListing(fakeDocument(BUNJANG_HTML))
+  assert.equal(b.title, '[L] 나이키 후드 티셔츠')
+  assert.equal(b.description, '새상품 직거래 가능')
+  assert.ok(b.bodyText.includes('가슴단면 55') && b.bodyText.includes('총장 70'))
+  assert.ok(!b.bodyText.includes('댓글'))
+  assert.deepEqual(b.photos, ['https://img.example.com/a.jpg', 'https://img.example.com/b.jpg'], 'https 사진만, data:·http는 버림')
+  const f = readListing(fakeDocument(FRUITS_HTML))
+  assert.equal(f.title, 'Stussy 스투시 후드 M')
+  assert.equal(f.price.amount, 85000)
+  assert.equal(f.price.currency, 'KRW')
+  assert.deepEqual(f.photos, ['https://cdn.example.com/f1.jpg'])
+  assert.ok(listingText(f).includes('가슴 단면 56'))
+  assert.equal(isUsedListingPage(fakeDocument(BUNJANG_HTML), 'https://m.bunjang.co.kr/products/1'), true)
+  assert.equal(isUsedListingPage(fakeDocument(BUNJANG_HTML), 'https://shop.example/p/1'), false)
+  assert.equal(isUsedListingPage(fakeDocument('<html><body>x</body></html>'), 'https://m.bunjang.co.kr/'), false, '제목이 없으면 판매글로 보지 않아요')
+})
+
+test('중고 판매글: analyzePage가 중고 사이트 주소면 판매글 결과 카드를 만들고, 진단에는 건수만 담는다', () => {
+  const out = analyzePage(fakeDocument(BUNJANG_HTML), 'https://m.bunjang.co.kr/products/1', usedProfile, '0.1.0')
+  assert.equal(out.status, 'used')
+  assert.equal(out.site.name, '번개장터')
+  assert.equal(out.basis, 'listing')
+  assert.equal(out.verdictLabel, '맞음')
+  assert.equal(out.reviewViews, undefined, '후기 구역 없음')
+  assert.deepEqual(out.counts, { measureCount: 4, sizeCount: 1, droppedCount: 0, ambiguousCount: 0, photoCount: 2 })
+  const report = formatReport(out.diagnostics)
+  assert.ok(report.includes('중고 판매글 읽기: 실측 4개, 사이즈 표기 1개, 버린 값 0개, 사진 2개, 사용한 근거 판매글 실측, 알려진 중고 사이트 주소 예'))
+  for (const secret of ['나이키', '후드', '가슴단면', 'img.example.com', '직거래']) assert.ok(!report.includes(secret), `리포트에 판매글 글이 없어야 해요: ${secret}`)
+  // 읽을 글이 없으면 no-data(진단 포함, 리뷰 불러오기 대상 아님 표시)
+  const empty = analyzePage(fakeDocument('<html><body>x</body></html>'), 'https://fruitsfamily.com/x', usedProfile, '0.1.0')
+  assert.equal(empty.status, 'no-data')
+  assert.equal(empty.usedSite, true)
+  assert.ok(formatReport(empty.diagnostics).includes('사용한 근거 없음'))
+  // 중고 사이트가 아닌 주소에서는 기존 흐름 그대로
+  assert.notEqual(analyzePage(fakeDocument(BUNJANG_HTML), 'https://shop.example/p/1', usedProfile, '0.1.0').status, 'used')
+  // 중고 분석이 아닐 때 진단 리포트에는 중고 줄이 없다
+  assert.ok(!formatReport(collectDiagnostics(fakeDocument(BUNJANG_HTML), 'https://shop.example/p/1', '0.1.0')).includes('중고 판매글 읽기'))
+})
+
+await atest('중고 판매글 content.js(가짜 DOM, vm): 번개장터·후르츠패밀리 가짜 HTML이 결과 카드로 그려지고 후기 불러오기는 하지 않는다', async () => {
+  const b = await runContentInFakeDom(BUNJANG_HTML, { location: { href: 'https://m.bunjang.co.kr/products/1' } })
+  assert.ok(!b.texts.some((t) => t.includes('분석 중 문제가 생겼어요')), b.texts.join('|'))
+  assert.ok(b.texts.includes('맞음'), '판정 글자')
+  assert.ok(b.texts.some((t) => t.includes('후기 없이 계산했어요')))
+  assert.ok(b.texts.some((t) => t.startsWith('근거: 판매글 실측')))
+  assert.ok(b.texts.some((t) => t.startsWith('판매글에서 읽은 실측: 가슴 55(단면→둘레 110)')))
+  assert.ok(b.texts.includes('문제가 있나요? 진단 리포트'))
+  assert.ok(!b.texts.some((t) => t.includes('리뷰 불러오는 중')), '중고 판매글은 후기 불러오기를 하지 않아요')
+  assert.ok(!b.texts.some((t) => t.includes('리뷰 원문')))
+  const f = await runContentInFakeDom(FRUITS_HTML, { location: { href: 'https://www.fruitsfamily.com/products/9' } })
+  assert.ok(f.texts.includes('맞음') || f.texts.includes('작음') || f.texts.includes('큼'))
+  assert.ok(f.texts.some((t) => t.startsWith('후르츠패밀리')) || f.texts.some((t) => t.includes('후르츠패밀리')))
+  assert.ok(!f.texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
+  // 같은 HTML이라도 중고 사이트 주소가 아니면 중고 카드가 아니에요
+  const other = await runContentInFakeDom(BUNJANG_HTML)
+  assert.ok(!other.texts.some((t) => t.includes('후기 없이 계산했어요')))
+})
+
+await atest('중고 판매글 content.js(가짜 DOM, vm): 이 브라우저의 사이즈표 모음에 비슷한 상품이 있으면 DB 근거로 쓴다', async () => {
+  const store = new Map([[SIZE_CHART_DB_KEY, JSON.stringify({ schemaVersion: SIZE_CHART_DB_VERSION, entries: [toEntry(rec({ brand: '나이키', model: 'Nike Club Fleece Hoodie 후드 티셔츠' }))].map((e) => ({ ...e, id: 'e1' })) })]])
+  const html = `<html><head><meta property="og:title" content="[M] 나이키 Club Fleece Hoodie 후드 티셔츠"><meta property="og:description" content="품번 BV2654-010 새상품"></head><body></body></html>`
+  const { texts } = await runContentInFakeDom(html, { location: { href: 'https://bunjang.co.kr/products/5' } }, {}, store)
+  assert.ok(texts.some((t) => t.startsWith('근거: 사이즈표 DB(근사) (근사/추정)')), texts.filter((t) => t.includes('근거')).join('|'))
+  assert.ok(texts.some((t) => t.startsWith('사이즈표 DB(근사/추정): 점수 ')))
+})
+
+await atest('중고 판매글 웹: 중고 상품 분석 화면이 후기 없는 결과, 우선순위 근거, 사진 역검색·라벨 인식 준비 중 안내를 보여주고 App에 연결돼 있다', async () => {
+  const result = analyzeUsedListing({ title: U_TITLE, text: `${U_TITLE}\n가슴단면 55 총장 70 어깨 47` }, usedProfile)
+  const html = render(WEB.UsedListing, { profile: usedProfile, db: null, imageSearcher: createImageSearcher(null), onBack: noop, initialResult: result })
+  const text = textOf(html)
+  assert.ok(text.includes('중고 상품 분석') && text.includes('번개장터·후르츠패밀리'))
+  assert.ok(text.includes('맞음') && text.includes('근거: 판매글 실측'))
+  assert.ok(text.includes(USED_NO_REVIEW_NOTE) && text.includes('근거 우선순위: ① 판매글 실측'))
+  assert.ok(text.includes('사진 역검색') && text.includes(IMAGE_SEARCH_DISABLED_TEXT) && text.includes(LABEL_OCR_DISABLED_TEXT))
+  assert.ok(text.includes('추정이고 실제 사이트에서 확인하지 못했어요'))
+  assert.ok(html.includes('<textarea') && /aria-label="사진 주소"[^>]*disabled/.test(html), '사진 주소 입력은 공급자가 없으면 비활성')
+  const noResult = textOf(render(WEB.UsedListing, { profile: usedProfile, db: null, imageSearcher: createImageSearcher(null), onBack: noop }))
+  assert.ok(!noResult.includes('추천 이유'))
+  const app = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
+  assert.ok(app.includes('<UsedListing') && app.includes('중고 상품 분석') && app.includes('createImageSearcher(null)'))
+})
+
+test('중고 판매글 manifest: 번개장터·후르츠패밀리가 content_scripts matches에 있고 검사를 통과한다 (도메인은 추정)', () => {
+  const m = EXT_MANIFEST.content_scripts.find((c) => c.js.includes('content.js')).matches
+  for (const x of ['*://bunjang.co.kr/*', '*://www.bunjang.co.kr/*', '*://m.bunjang.co.kr/*', '*://fruitsfamily.com/*', '*://www.fruitsfamily.com/*']) assert.ok(m.includes(x), x)
+  assert.deepEqual(checkManifest(EXT_MANIFEST), [])
+  for (const s of USED_SITES) for (const h of s.hosts) assert.ok(m.includes(`*://${h}/*`), `${h}가 usedListing 사이트 목록과 manifest에 둘 다 있어야 해요`)
+  const build = readFileSync(new URL('./buildExtension.mjs', import.meta.url), 'utf8')
+  assert.ok(build.includes('번개장터') && build.includes('추정'), '도메인이 추정이라는 설명이 빌드 스크립트에 있어요')
+})
+
+await atest('사진 역검색·라벨 글자 인식 자리: 기본은 비활성이고, 공급자를 꽂으면 후보가 사이즈표 DB 검색에 쓰인다 (가짜 공급자)', async () => {
+  const off = createImageSearcher(null)
+  assert.equal(off.enabled, false)
+  assert.deepEqual(await off.search(['https://a.example/1.jpg']), { status: 'disabled', candidates: [], message: IMAGE_SEARCH_DISABLED_TEXT })
+  const calls = []
+  const fake = createImageSearcher({ async searchByImage(arg) { calls.push(arg); return [{ brand: '나이키', model: 'Nike Club Fleece Hoodie 후드 티셔츠', code: 'BV2654-010', extra: 'x'.repeat(500) }, {}] } })
+  const found = await fake.search(['https://a.example/1.jpg', 'http://insecure.example/2.jpg', 'https://a.example/1.jpg'])
+  assert.deepEqual(calls[0].urls, ['https://a.example/1.jpg'], 'https 중복 없는 주소만 공급자에 보내요')
+  assert.equal(found.status, 'ok')
+  assert.equal(found.candidates.length, 1)
+  assert.deepEqual(Object.keys(found.candidates[0]).sort(), ['brand', 'code', 'model'])
+  assert.equal((await fake.search([])).status, 'no-photo')
+  assert.equal((await createImageSearcher({ searchByImage: async () => { throw new Error('x') } }).search(['https://a.example/1.jpg'])).status, 'error')
+  // 글에는 단서가 없고 사진 후보만 있어도 DB에서 찾고 '사진 검색 후보'로 표시해요
+  const db = await dbWith(rec({ brand: '나이키', model: 'Nike Club Fleece Hoodie 후드 티셔츠' }))
+  const listing = { title: '후드티 M', text: '후드티 M 사이즈' }
+  assert.equal((await findChartMatches(db, usedSearchQuery(listing))).length, 0)
+  const matches = await findChartMatches(db, usedSearchQuery(listing), found.candidates)
+  assert.equal(matches[0].viaPhoto, true)
+  const r = analyzeUsedListing(listing, usedProfile, { chartMatches: matches })
+  assert.equal(r.basis, 'chart-db')
+  assert.ok(r.details.some((l) => l.includes('사진 검색 후보로 찾음')))
+  // 라벨 글자 인식
+  const reader = createLabelReader(null)
+  assert.equal(reader.enabled, false)
+  assert.equal((await reader.read('https://a.example/tag.jpg')).status, 'disabled')
+  const on = createLabelReader({ textFromImage: async () => 'SIZE M\nSTYLE NO BV2654-010' })
+  const read = await on.read('https://a.example/tag.jpg')
+  assert.equal(read.status, 'ok')
+  assert.deepEqual(read.fields.sizes, ['M'])
+  assert.equal(read.fields.code, 'BV2654-010')
+  assert.equal((await createLabelReader({ textFromImage: async () => '' }).read('x')).status, 'empty')
+  assert.equal((await createLabelReader({ textFromImage: async () => { throw new Error('x') } }).read('x')).status, 'error')
+})
+
+test('중고 판매글: 읽기·분석 모듈은 네트워크를 쓰지 않는다 (소스 검사)', () => {
+  for (const f of ['usedListing.js', 'usedAnalyze.js', 'imageSearch.js', 'labelOcr.js']) {
+    const src = readFileSync(new URL(`../src/lib/${f}`, import.meta.url), 'utf8')
+    assert.ok(!/\b(fetch|XMLHttpRequest|sendBeacon|WebSocket)\b\s*\(/.test(src), f)
+  }
 })
 
 console.log(`\n${passed}개 통과`)

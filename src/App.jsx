@@ -11,6 +11,8 @@ import { computeCalibration } from './lib/fitEngine.js'
 import { localAdapter, loadLearning, learnFromProduct, resetLearning } from './lib/learnStore.js'
 import SizeChartLibrary from './components/SizeChartLibrary.jsx'
 import { createSizeChartDb, chartRecordFromProduct } from './lib/sizeChartDb.js'
+import UsedListing from './components/UsedListing.jsx'
+import { createImageSearcher } from './lib/imageSearch.js'
 
 // 흐름: 내 정보(온보딩, 저장된 정보가 없을 때만) → 상품 링크 → 사이즈·핏 추천
 const STEP_LABELS = ['내 정보', '상품 링크', '사이즈 추천']
@@ -25,14 +27,17 @@ export default function App() {
   const [showWardrobe, setShowWardrobe] = useState(false)
   const [learningModel, setLearningModel] = useState(null) // 학습값 묶음 (이 브라우저의 localStorage에서 읽어요)
   const [showCharts, setShowCharts] = useState(false)
+  const [showUsed, setShowUsed] = useState(false) // 중고 상품 분석 화면
   const [chartEntries, setChartEntries] = useState([]) // 사이즈표 모음 목록 (이 브라우저의 localStorage)
   const chartDb = useMemo(() => createSizeChartDb(localAdapter()), [])
+  const imageSearcher = useMemo(() => createImageSearcher(null), []) // 사진 역검색: 연결된 공급자가 없어 비활성
   const [notice, setNotice] = useState(null) // { text, error } 확장에서 자동으로 가져온 결과 한 줄
 
   const step = editing || !profile ? 'onboarding' : product ? 'result' : 'product'
   const stepIndex = step === 'onboarding' ? 0 : step === 'product' ? 1 : 2
   const wardrobeView = showWardrobe && step !== 'onboarding'
   const chartsView = showCharts && step !== 'onboarding' && !wardrobeView
+  const usedView = showUsed && step !== 'onboarding' && !wardrobeView && !chartsView
 
   function handleProfile(p) {
     saveProfile(p)
@@ -136,6 +141,7 @@ export default function App() {
 
   function toggleWardrobe() {
     setShowCharts(false)
+    setShowUsed(false)
     setShowWardrobe((v) => !v)
     window.scrollTo(0, 0)
   }
@@ -152,17 +158,20 @@ export default function App() {
             <button type="button" className={`btn pill ${showWardrobe ? 'on' : ''}`} onClick={toggleWardrobe}>
               옷장 {wardrobe.length}
             </button>
-            <button type="button" className={`btn pill ${chartsView ? 'on' : ''}`} onClick={() => { setShowWardrobe(false); setShowCharts((v) => !v) }}>
+            <button type="button" className={`btn pill ${chartsView ? 'on' : ''}`} onClick={() => { setShowWardrobe(false); setShowUsed(false); setShowCharts((v) => !v) }}>
               사이즈표 {chartEntries.length}
             </button>
-            <button type="button" className="btn pill" onClick={() => { setShowWardrobe(false); setShowCharts(false); setEditing(true) }}>
+            <button type="button" className={`btn pill ${usedView ? 'on' : ''}`} onClick={() => { setShowWardrobe(false); setShowCharts(false); setShowUsed((v) => !v) }}>
+              중고 상품 분석
+            </button>
+            <button type="button" className="btn pill" onClick={() => { setShowWardrobe(false); setShowCharts(false); setShowUsed(false); setEditing(true) }}>
               내 정보 {profile.height}·{profile.weight}
             </button>
           </div>
         )}
       </header>
 
-      {!wardrobeView && !chartsView && (
+      {!wardrobeView && !chartsView && !usedView && (
         <nav className="steps" aria-label="진행 단계">
           {STEP_LABELS.map((label, i) => (
             <div key={label} className={`step-dot ${i <= stepIndex ? 'done' : ''} ${i === stepIndex ? 'current' : ''}`}>
@@ -186,15 +195,16 @@ export default function App() {
       <main className="app-main">
         {wardrobeView && <Wardrobe items={wardrobe} onDelete={handleDeleteWardrobe} onBack={toggleWardrobe} onImport={handleImportWardrobe} onClearReviews={handleClearReviews} />}
         {chartsView && <SizeChartLibrary db={chartDb} initialEntries={chartEntries} onBack={() => setShowCharts(false)} onChanged={() => setChartEntries([])} />}
-        {!wardrobeView && !chartsView && step === 'onboarding' && (
+        {usedView && <UsedListing profile={profile} db={chartDb} imageSearcher={imageSearcher} onBack={() => setShowUsed(false)} />}
+        {!wardrobeView && !chartsView && !usedView && step === 'onboarding' && (
           <Onboarding
             initial={profile}
             onComplete={handleProfile}
             onCancel={profile ? () => setEditing(false) : null}
           />
         )}
-        {!wardrobeView && !chartsView && step === 'product' && <UrlInput onProduct={handleProduct} />}
-        {!wardrobeView && !chartsView && step === 'result' && (
+        {!wardrobeView && !chartsView && !usedView && step === 'product' && <UrlInput onProduct={handleProduct} />}
+        {!wardrobeView && !chartsView && !usedView && step === 'result' && (
           <ResultView
             product={product}
             profile={profile}
