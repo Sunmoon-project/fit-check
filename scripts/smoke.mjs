@@ -6281,4 +6281,36 @@ await atest('hfTryOn(Leffa, 가짜 fetch): 하의는 dress_code·lower_body로 l
   await assert.rejects(runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'shoes', model: 'leffa', fetchImpl: mk(ok) }), (e) => e.code === 'UNSUPPORTED')
 })
 
+test('웹 렌더: 확장에서 담은 옷장 항목은 부위별 여유 게이지·실측·후기 핏 분포·리뷰를 자세히 보기에 그린다 (가짜 데이터)', () => {
+  const item = {
+    id: 'x1', savedAt: 1, product: { name: '스웻셔츠', mall: 'musinsa', category: 'top', image: null, url: 'https://shop.example/x1' },
+    size: 'L', measures: { shoulder: 49, chest: 112, topLength: 70 },
+    verdicts: [{ part: 'chest', label: '가슴', verdict: '적당', key: 'regular', ease: 10.5 }, { part: 'shoulder', label: '어깨', verdict: '넉넉', key: 'relaxed', ease: 3.5 }],
+    reviews: [
+      { nick: 'a', text: '좋아요', photos: ['https://img.example.com/1.jpg'], height: 175, weight: 70, size: 'L', fitLabel: '잘 맞아요', similarity: 95 },
+      { nick: 'b', text: '커요', photos: [], height: 176, weight: 71, size: 'L', fitLabel: '커요', similarity: 90 },
+    ],
+  }
+  const html = render(WEB.Wardrobe, { items: [item], onDelete: noop, onBack: noop })
+  const txt = textOf(html)
+  assert.ok(txt.includes('자세히 보기 · 리뷰 2건'))
+  assert.ok(html.includes('fv-gauge') && txt.includes('+10.5cm') && txt.includes('+3.5cm'), '여유 게이지')
+  assert.ok(html.includes('class="on l2"') && html.includes('class="on l3"'), '판정 칸 위치')
+  assert.ok(txt.includes('L 실측') && txt.includes('가슴 112cm') && txt.includes('총장 70cm'), '실측 칩')
+  assert.ok(txt.includes('담은 후기 핏 평가') && txt.includes('정사이즈 50%') && txt.includes('커요 50%'), '핏 분포(확장 fitLabel 기준)')
+  assert.ok(txt.includes('사진 모아보기'), '리뷰 탭')
+})
+
+test('웹 렌더: 결과 화면은 onTryOn이 있으면 사진 합성 대신 가상 피팅 바로가기를, TryOnPanel은 모델 선택을 보여준다', () => {
+  const clothing = { ...PRODUCTS['https://shop-a.example.com/goods/12345'], source: 'demo' }
+  const props = { product: clothing, profile, calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop }
+  const linked = textOf(render(WEB.ResultView, { ...props, onTryOn: noop }))
+  assert.ok(linked.includes('가상 피팅') && linked.includes('내 사진에 이 옷'))
+  assert.ok(!linked.includes('AI로 합성하기'), '패널은 탭으로 옮겨요')
+  const inline = textOf(render(WEB.ResultView, props))
+  assert.ok(inline.includes('AI로 합성하기'), 'onTryOn이 없으면 예전처럼 패널')
+  const panel = textOf(render(WEB.TryOnPanel, { product: { ...clothing, category: 'bottom' }, profile, verdicts: [], selectedSize: 'M', captureRef: { current: null } }))
+  assert.ok(panel.includes('IDM-VTON') && panel.includes('Leffa (실험적)') && panel.includes('상의·하의·원피스'))
+})
+
 console.log(`\n${passed}개 통과`)

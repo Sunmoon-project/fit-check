@@ -20,8 +20,9 @@ import SizeSummary from './SizeSummary.jsx'
 import FeedbackForm from './FeedbackForm.jsx'
 import TryOnPanel from './TryOnPanel.jsx'
 import { SimilarInWardrobe } from './Wardrobe.jsx'
+import { FitDistBar } from './FitVisuals.jsx'
 
-export default function ResultView({ product: parsedProduct, profile, calibration, feedbackCount, existingFeedback, onFeedback, onRestart, wardrobe = [], onSaveWardrobe, learningModel = null, onLearn, onResetLearning, onExportLearning }) {
+export default function ResultView({ product: parsedProduct, profile, calibration, feedbackCount, existingFeedback, onFeedback, onRestart, wardrobe = [], onSaveWardrobe, learningModel = null, onLearn, onResetLearning, onExportLearning, onTryOn }) {
   // 분류 신뢰도가 낮을 때 사용자가 고른 카테고리로 다시 분석해요 (자동 분류보다 우선).
   const [chosen, setChosen] = useState(null)
   const product = useMemo(() => (chosen ? recategorizeProduct(parsedProduct, chosen) : parsedProduct), [parsedProduct, chosen])
@@ -109,6 +110,8 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
         <>
           <SizeSummary compare={compare} recommendedSize={result.recommendedSize} category={product.category} />
 
+          <FitDistBar reviews={result.matched} title="비슷한 체형 핏 평가" />
+
           <MeasureMatch
             perSize={result.perSize}
             selectedSize={selectedSize}
@@ -119,7 +122,18 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
         </>
       )}
 
-      <TryOnPanel product={product} profile={profile} selectedSize={selectedSize} verdicts={verdicts} captureRef={captureRef} />
+      {onTryOn && !isShoes ? (
+        // 가상 피팅은 별도 탭에서 해요. 이 옷과 고른 사이즈를 그대로 넘겨요.
+        <button type="button" className="card tryon-link" onClick={() => onTryOn({ product, size: selectedSize, verdicts })}>
+          <span>
+            <strong>가상 피팅</strong>
+            <span className="muted small">내 사진에 이 옷({selectedSize || '-'})을 입혀 보기</span>
+          </span>
+          <span aria-hidden>→</span>
+        </button>
+      ) : (
+        <TryOnPanel product={product} profile={profile} selectedSize={selectedSize} verdicts={verdicts} captureRef={captureRef} />
+      )}
 
       <SimilarInWardrobe target={currentTarget} wardrobe={wardrobe} />
 
