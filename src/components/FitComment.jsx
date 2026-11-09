@@ -1,4 +1,5 @@
 import { CONFIDENCE_LABEL, describeEvidence } from '../lib/fitEngine.js'
+import { regionLine, REGION_HYPOTHESIS_NOTE } from '../lib/brandRegion.js'
 
 // 추천 사이즈 카드 (후기 투표 + 실측 비교 종합)
 export default function FitComment({ result }) {
@@ -6,9 +7,10 @@ export default function FitComment({ result }) {
   // 신발은 옷용 근거 문구 대신 신발 판정에서 만든 근거 한 줄과 이유를 써요.
   const conf = result.confidenceLabel || CONFIDENCE_LABEL[result.confidence]
   const evidence = isShoes
-    ? { summary: result.shoeSummary, reasons: result.shoeReasons || [] }
+    ? { summary: result.shoeSummary, reasons: result.shoeReasons || [], details: result.regionInfo ? [regionLine(result.regionInfo)] : [] }
     : result.evidence ? describeEvidence(result.evidence, result.confidence) : null
 
+  const sizeHint = result.sizeSystem || null
   return (
     <div className="card reco-card tone-reco">
       <div className="fit-head">
@@ -27,6 +29,20 @@ export default function FitComment({ result }) {
               {evidence.reasons.map((r) => <li key={r}>{r}</li>)}
             </ul>
           )}
+        </div>
+      )}
+
+      {evidence?.details?.length > 0 && (
+        <ul className="evidence-details" aria-label="추천에 쓰인 근거">
+          {evidence.details.map((d) => <li key={d} className="small">{d}</li>)}
+        </ul>
+      )}
+      {evidence?.details?.some((d) => d.startsWith('브랜드 지역')) && <p className="muted small">{REGION_HYPOTHESIS_NOTE}</p>}
+      {sizeHint && (
+        <div className="info-box size-system-hint" role="note">
+          <p className="small"><strong>{sizeHint.title}</strong></p>
+          <ul>{sizeHint.lines.map((l) => <li key={l} className="small">{l}</li>)}</ul>
+          <p className="muted small">{sizeHint.note}</p>
         </div>
       )}
 

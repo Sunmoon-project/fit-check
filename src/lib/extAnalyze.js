@@ -8,6 +8,7 @@ import { summarizeSizeChart } from './sizeSummary.js'
 import { targetGenderNotice } from './targetGender.js'
 import { shoeViewFor, shoeComment, feelSizeText } from './shoeFit.js'
 import { resolveLearned, brandKeyOf } from './learnedModel.js'
+import { classifyBrandRegion, regionInputOf, regionLine } from './brandRegion.js'
 import { toSamples } from './learnSamples.js'
 import { chartRecordFromProduct } from './sizeChartDb.js'
 // 사용자가 직접 적은 사이즈표: 열 이름(예: 어깨 가슴 총장)과 줄(예: M 50 57 68) → buildSizeChart 입력 모양.
@@ -130,8 +131,10 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
   // 학습값 묶음(opts.learned)은 선택이에요. 없으면 기존 동작 그대로입니다. 브랜드 키는 상품 주소의 알려진 쇼핑몰 도메인에서 가져와요.
   const learnBrand = brandKeyOf({ ...product, url: product.url || pageUrl })
   if (learnBrand) product.learnBrand = learnBrand
+  product.regionUrl = pageUrl // 브랜드 지역 판단의 도메인 근거 (product.url이 없을 때만 쓰여요)
   const result = generateFitComment(profile, product, {}, opts.learned || null)
-  const learned = opts.learned ? resolveLearned(opts.learned, product.category, learnBrand) : null
+  const regionKey = result.regionInfo && result.regionInfo.region !== 'unknown' ? result.regionInfo.region : null
+  const learned = opts.learned ? resolveLearned(opts.learned, product.category, learnBrand, regionKey) : null
   const shoe = canCompareShoe ? shoeViewFor(product, profile) : null
   const cmpView = shoe ? { view: null, failed: false } : compareView(product, profile, result, learned)
   // 사이즈표의 표시 이름('1 (M)')이 있으면 그 이름으로 보여줍니다.
@@ -183,6 +186,10 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     // 신발은 옷용 문구('무난해요', '슬림 핏 기준')를 쓰지 않고 신발 판정에서 만든 글을 써요.
     summary: shoeText ? shoeText.summary : evidence?.summary || '',
     reasons: shoeText ? shoeText.reasons : evidence?.reasons || [],
+    // 자세한 근거 줄(후기 건수·제외, 학습값·샘플 수, 브랜드/지역 보정, 부위별 여유분). 신발은 지역 줄만 있어요.
+    details: shoeText ? [regionLine(result.regionInfo)].filter(Boolean) : evidence?.details || [],
+    regionInfo: result.regionInfo ? { region: result.regionInfo.region, label: result.regionInfo.label, confidence: result.regionInfo.confidence, line: regionLine(result.regionInfo) } : null,
+    sizeSystem: result.sizeSystem || null,
     headline: shoeText ? shoeText.headline : result.headline,
     body: shoeText ? shoeText.body : result.body,
     note: shoeText ? shoeText.note : result.note,

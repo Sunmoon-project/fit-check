@@ -26,7 +26,7 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
   const [chosen, setChosen] = useState(null)
   const product = useMemo(() => (chosen ? recategorizeProduct(parsedProduct, chosen) : parsedProduct), [parsedProduct, chosen])
   const result = useMemo(() => generateFitComment(profile, product, calibration, learningModel), [profile, product, calibration, learningModel])
-  const learned = useMemo(() => (learningModel ? resolveLearned(learningModel, product.category, brandKeyOf(product)) : null), [learningModel, product])
+  const learned = useMemo(() => (learningModel ? resolveLearned(learningModel, product.category, brandKeyOf(product), result.regionInfo && result.regionInfo.region !== 'unknown' ? result.regionInfo.region : null) : null), [learningModel, product, result])
   // 상품을 분석할 때 후기에서 학습 샘플을 쌓아요(중복은 건너뜀). 결과는 App이 학습값으로 다시 내려줘요.
   const learnRef = useRef(onLearn)
   learnRef.current = onLearn

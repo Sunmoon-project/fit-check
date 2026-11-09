@@ -64,6 +64,8 @@ import { toSamples, mergeSamples } from '../src/lib/learnSamples.js'
 import { trainModel, validateModel, resolveLearned, learningStatus, emptyModel, LEARN, LEARN_SCHEMA_VERSION, brandKeyOf } from '../src/lib/learnedModel.js'
 import { LEARN_KEY, localAdapter, chromeAdapter, loadLearning, addSamples, resetLearning, learnFromProduct } from '../src/lib/learnStore.js'
 import { EASE_RULES, classifyEase } from '../src/lib/fitEngine.js'
+import { classifyBrandRegion, regionLine, regionKeyOf, BRAND_REGION_DICT, REGION_SCORE, REGION_HYPOTHESIS_NOTE } from '../src/lib/brandRegion.js'
+import { representativeMeasure, sizeSystemHint, SIZE_SYSTEM_FLAG } from '../src/lib/sizeSystems.js'
 import { createSizeChartDb, SIZE_CHART_DB_KEY, SIZE_CHART_DB_VERSION, normalizeText, normalizeCode, brandKeyOfName, modelSimilarity, modelTokens, chartRecordFromProduct, toEntry } from '../src/lib/sizeChartDb.js'
 
 let passed = 0
@@ -5501,6 +5503,153 @@ test('사이즈표 DB: 웹 화면(서버 렌더)에 목록·점수 근거·저�
   const empty = textOf(render(WEB.SizeChartLibrary, { db, initialEntries: [], onBack: noop }))
   assert.ok(empty.includes('아직 저장된 사이즈표가 없어요'))
   assert.ok(/<button[^>]*disabled[^>]*>사이즈표 모음 비우기/.test(render(WEB.SizeChartLibrary, { db, initialEntries: [], onBack: noop })))
+})
+
+// ---- 브랜드 지역 · 사이즈 체계 · 지역 오프셋 · 자세한 근거 (모두 직접 만든 가짜 입력이에요. 실제 사이트/규격 원문 확인이나 정확도 측정이 아니에요) ----
+test('브랜드 지역: 근거별로 점수를 합산하고, 근거가 없거나 엇갈리면 unknown', () => {
+  const kinds = (r) => r.evidence.map((e) => e.kind)
+  const dict = classifyBrandRegion({ brand: '유니클로' })
+  assert.deepEqual([dict.region, kinds(dict)], ['jp', ['brandDict']])
+  assert.equal(dict.estimated, true)
+  assert.equal(classifyBrandRegion({ name: 'Nike Club Fleece Hoodie' }).region, 'us', '브랜드 칸이 비면 상품명 앞쪽 별칭')
+  assert.equal(classifyBrandRegion({ originLabel: '일본 브랜드' }).region, 'jp')
+  assert.equal(classifyBrandRegion({ optionLabels: ['US 8', 'US 9'] }).region, 'us')
+  assert.equal(classifyBrandRegion({ optionLabels: ['JP 26', 'JP 27'] }).region, 'jp')
+  assert.equal(classifyBrandRegion({ optionLabels: ['EU 40', 'EU 41'] }).region, 'eu')
+  assert.equal(classifyBrandRegion({ optionLabels: ['250', '260', '270'] }).evidence[0].kind, 'sizeNotation')
+  assert.equal(classifyBrandRegion({ priceCurrency: 'jpy', url: 'https://shop.example/p/1' }).evidence[0].kind, 'currency')
+  const both = classifyBrandRegion({ priceCurrency: 'JPY', url: 'https://item.example.co.jp/p/1' })
+  assert.deepEqual([both.region, both.scores.jp], ['jp', REGION_SCORE.currency + REGION_SCORE.domain])
+  assert.equal(classifyBrandRegion({ priceText: '12,000엔' }).evidence[0].region, 'jp')
+  // 합산: 브랜드 사전(미국 3) + 사이즈 표기(미국 2) → 미국, 근거 2개
+  const sum = classifyBrandRegion({ brand: 'Nike', optionLabels: ['US 9'] })
+  assert.deepEqual([sum.region, sum.scores.us, sum.evidence.length, sum.confidence], ['us', 5, 2, 'high'])
+  // 근거 없음 / 약한 근거 하나(도메인만) / 동점 → unknown
+  const none = classifyBrandRegion({ brand: '무명브랜드', name: '아무 상품', url: 'https://shop.example/p/1' })
+  assert.deepEqual([none.region, none.evidence.length], ['unknown', 0])
+  assert.equal(classifyBrandRegion({}).region, 'unknown')
+  assert.equal(classifyBrandRegion({ url: 'https://shop.example.co.kr/p/1' }).region, 'unknown', '도메인만으로는 판단하지 않아요')
+  assert.equal(classifyBrandRegion({ brand: 'Nike', originLabel: '일본 브랜드' }).region, 'jp', '쇼핑몰 표시가 사전보다 높은 점수')
+  assert.equal(classifyBrandRegion({ brand: 'Nike', priceCurrency: 'JPY', optionLabels: ['JP 26'], originLabel: '' }).region, 'unknown', '3점 대 3점이면 판단하지 않아요')
+  // 사전의 모든 항목은 추정 표시를 달고 있어요
+  assert.ok(Object.values(BRAND_REGION_DICT).every((v) => v.estimated === true))
+})
+
+test('브랜드 지역: 화면 한 줄에 (추정)과 근거가 들어가고, 키는 판단 못 하면 null', () => {
+  const line = regionLine(classifyBrandRegion({ brand: '유니클로', url: 'https://www.uniqlo.co.jp/p/1' }))
+  assert.ok(line.startsWith('브랜드 지역: 일본(추정) 근거: ') && line.includes('브랜드 사전(추정)') && line.includes('도메인'), line)
+  assert.ok(regionLine(classifyBrandRegion({})).includes('알 수 없음'))
+  assert.equal(regionKeyOf({ brand: 'Nike' }), 'us')
+  assert.equal(regionKeyOf({ brand: '무명' }), null)
+  assert.ok(REGION_HYPOTHESIS_NOTE.includes('검증 전 가설') && !/\d+\s*cm/.test(REGION_HYPOTHESIS_NOTE), '가설 문구에 고정 수치가 없다')
+})
+
+test('사이즈 체계 변환표: 모든 값에 근사/출처 확인 필요 플래그가 있고, 없는 값은 만들지 않는다', () => {
+  const kr = representativeMeasure({ category: 'top', gender: 'male', label: '100' })
+  assert.deepEqual(kr.measures, { chest: 100 })
+  assert.deepEqual([kr.approximate, kr.needsSource, kr.flag], [true, true, SIZE_SYSTEM_FLAG])
+  assert.equal(SIZE_SYSTEM_FLAG, '근사/출처 확인 필요')
+  assert.equal(representativeMeasure({ category: 'top', gender: null, label: '100' }), null, '성별을 모르면 숫자 호칭을 풀지 않는다')
+  assert.equal(representativeMeasure({ category: 'top', gender: 'female', label: '100' }), null)
+  assert.equal(representativeMeasure({ category: 'top', gender: 'male', label: 'M' }), null, '알파벳은 근거를 확인하지 못해 비워 둔다')
+  assert.equal(representativeMeasure({ category: 'top', gender: 'male', label: '97' }), null)
+  assert.deepEqual(representativeMeasure({ category: 'bottom', label: '30' }).measures, { waist: 76.2 })
+  assert.deepEqual(representativeMeasure({ category: 'shoes', label: '260' }).measures, { footLength: 260 })
+  assert.ok([representativeMeasure({ category: 'bottom', label: '30' }), representativeMeasure({ category: 'shoes', label: '260' })].every((m) => m.approximate && m.needsSource && m.flag === SIZE_SYSTEM_FLAG))
+  const hint = sizeSystemHint({ category: 'top', gender: 'male', optionLabels: ['95', '100', '100', 'XL'] })
+  assert.deepEqual(hint.lines.length, 2)
+  assert.ok(hint.title.includes(SIZE_SYSTEM_FLAG) && hint.note.includes('추천 계산에는 쓰지 않았어요'))
+  assert.equal(sizeSystemHint({ category: 'top', gender: 'male', optionLabels: ['S', 'M'] }), null)
+  assert.ok(readFileSync(resolvePath(import.meta.dirname, '../docs/사이즈체계_출처확인.md'), 'utf8').includes('확인 TODO'), '출처 확인 문서가 있다')
+})
+
+test('지역 오프셋: 같은 지역 표본이 충분하면 모델에 쌓이고, 부족하면 0, 브랜드 오프셋이 있으면 브랜드가 우선', () => {
+  const reg = (region, n, tag, label = 'small') => Array.from({ length: n }, (_, i) => ({ id: `r-${region}-${tag}${i}`, cat: 'top', brand: `${tag}${i % 10}`, region, label, w: 1, e: { chest: 14 }, d: 20000 }))
+  const few = trainModel(reg('us', LEARN.regionMin - 1, 'f'), EASE_RULES)
+  assert.equal(few.regions, undefined, '표본이 모자라면 지역 오프셋을 만들지 않는다')
+  assert.equal(resolveLearned(few, 'top', null, 'us').offset, 0)
+  const some = trainModel(reg('us', 10, 'a'), EASE_RULES)
+  const many = trainModel(reg('us', 60, 'b'), EASE_RULES)
+  const o10 = some.regions.top.us.offset
+  const o60 = many.regions.top.us.offset
+  assert.ok(o10 > 0 && o60 > o10 && o60 <= LEARN.maxRegionOffset, `0 < ${o10} < ${o60} <= ${LEARN.maxRegionOffset}`)
+  const r = resolveLearned(many, 'top', 'nobrand', 'us')
+  assert.deepEqual([r.offset, r.offsetSource, r.regionSamples], [o60, 'region', 60])
+  assert.deepEqual([resolveLearned(many, 'top', null, 'jp').offset, resolveLearned(many, 'top', null, null).offset], [0, 0], '다른 지역·지역 모름은 보정 0')
+  assert.equal(resolveLearned(many, 'bottom', null, 'us').offset, 0, '다른 종류에는 적용 안 됨')
+  // 브랜드 오프셋(3건 이상 브랜드)이 있으면 지역 값을 더하지 않고 브랜드 값을 쓴다
+  const mixed = trainModel([...reg('us', 30, 'c'), ...synth('top', 'zbrand', 'true', 6, 8, 20000, 'zb').map((x) => ({ ...x, region: 'us' }))], EASE_RULES)
+  const m = resolveLearned(mixed, 'top', 'zbrand', 'us')
+  assert.equal(m.offset, m.brandOffset)
+  assert.notEqual(m.offset, m.regionOffset)
+  assert.ok(m.regionOffset > 0, '지역 값은 따로 계산돼 있다')
+  // 지역을 모르는 샘플은 지역 집계에 들어가지 않는다
+  assert.equal(trainModel(synth('top', 'q', 'small', 30, 14), EASE_RULES).regions, undefined)
+})
+
+await atest('지역 오프셋: 샘플에 지역이 담기고, 지역 학습값이 같은 지역 상품의 판정만 바꾼다 (되돌리면 실패)', async () => {
+  const withNike = toSamples(lrnProduct({ brand: 'Nike' }))
+  assert.ok(withNike.length > 0 && withNike.every((x) => x.region === 'us'))
+  assert.ok(toSamples(lrnProduct()).every((x) => !('region' in x)), '지역을 모르면 담지 않는다')
+  const model = trainModel(Array.from({ length: 40 }, (_, i) => ({ id: `u${i}`, cat: 'top', brand: `b${i % 20}`, region: 'us', label: 'small', w: 1, e: { chest: 16 }, d: 20000 })), EASE_RULES)
+  const us = generateFitComment(profile, lrnProduct({ brand: 'Nike', url: '' }), {}, model)
+  const none = generateFitComment(profile, lrnProduct({ brand: '무명', url: 'https://shop.example/p/1' }), {}, model)
+  const baseline = generateFitComment(profile, lrnProduct({ brand: 'Nike', url: '' }), {}, null)
+  assert.equal(us.evidence.offsetSource, 'region')
+  assert.ok(us.evidence.offsetValue > 0)
+  assert.equal(none.evidence.offsetSource, null)
+  assert.equal(none.evidence.offsetValue, 0)
+  assert.notEqual(us.perSize.map((p) => p.score).join(), none.perSize.map((p) => p.score).join(), '같은 지역 상품만 점수가 달라진다')
+  assert.equal(baseline.evidence.offsetSource, null)
+  assert.equal(us.regionInfo.region, 'us')
+})
+
+await atest('자세한 근거 줄: 후기 건수·제외, 학습값 샘플 수, 브랜드/지역 보정, 부위별 여유분, 브랜드 지역이 나오고 정확도처럼 보이는 문구는 없다', async () => {
+  const model = trainModel([...synth('top', null, 'small', 10, 12), ...synth('top', null, 'true', 10, 20)], EASE_RULES)
+  const base = lrnProduct()
+  const bad = { gender: 'male', height: 300, weight: 70, size: 'M', fit: 'small', text: '불가능한 키' }
+  const r = generateFitComment(profile, { ...base, brand: 'Nike', reviews: [...base.reviews, bad] }, {}, model)
+  const d = describeEvidence(r.evidence, r.confidence).details
+  const all = d.join('\n')
+  assert.ok(d.some((l) => l.startsWith('후기 근거: 불러온 후기 21건 중 이상치 제외 1건')), all)
+  assert.ok(d.includes('학습값: 사용(이 종류 샘플 20건, 이 브라우저에 모은 후기 기준)'), all)
+  assert.ok(d.some((l) => l.startsWith('브랜드·지역 보정: 없음(0cm')), all)
+  assert.ok(d.some((l) => l.startsWith('브랜드 지역: 미국(추정) 근거: ')), all)
+  assert.ok(d.some((l) => l.startsWith('부위별 여유분 판정: ') && /가슴 \+?-?\d/.test(l)), all)
+  assert.ok(d[d.length - 1].includes('정확도를 측정한 값은 아니에요'))
+  assert.ok(!/정확도 \d|\d+\s*%\s*정확/.test(all))
+  // 학습값이 없으면 학습 줄은 나오지 않고 후기·부위·지역 줄은 나온다
+  const plain = describeEvidence(generateFitComment(profile, base, {}, null).evidence, 'low').details.join('\n')
+  assert.ok(plain.includes('후기 근거') && plain.includes('부위별 여유분 판정') && !plain.includes('학습값'))
+  assert.deepEqual(describeEvidence({}, 'low').details, [])
+})
+
+await atest('지역·근거 표시: 확장 카드(가짜 DOM, vm)에 브랜드 지역(추정)과 자세한 근거가 나오고, 사이즈표가 없으면 변환표 참고값이 플래그와 함께 나온다', async () => {
+  const ld = '<script type="application/ld+json">{"@type":"Product","name":"x","brand":{"name":"나이키"},"offers":{"priceCurrency":"USD"}}</script>'
+  const { texts } = await runContentInFakeDom(wrapBody(ld + VIEW_HTML(chartTable(OPTION_LIST_LABELS()))))
+  assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
+  assert.ok(texts.some((t) => t.startsWith('브랜드 지역: 미국(추정) 근거: ') && t.includes('브랜드 사전(추정)') && t.includes('통화 USD')), '지역 근거 줄')
+  assert.ok(texts.includes('추천에 쓰인 근거 (자세히)'))
+  assert.ok(texts.some((t) => t.startsWith('후기 근거: 불러온 후기 ')))
+  assert.ok(texts.some((t) => t.startsWith('부위별 여유분 판정: ')))
+  assert.ok(texts.some((t) => t.includes('검증 전 가설')))
+  const unknown = await runContentInFakeDom(VIEW_HTML(chartTable(OPTION_LIST_LABELS())))
+  assert.ok(unknown.texts.some((t) => t.startsWith('브랜드 지역: 알 수 없음')), '근거가 없으면 알 수 없음')
+  // 판단 결과 자체는 analyzePage에도 담겨요
+  const out = analyzePage(fakeDocument(wrapBody(ld + VIEW_HTML(chartTable(OPTION_LIST_LABELS())))), 'https://shop.example/products/1', buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular' }).profile, '0.1.0')
+  assert.equal(out.regionInfo.region, 'us')
+  assert.ok(out.details.length >= 3)
+})
+
+test('지역·근거 표시: 웹 결과 화면(서버 렌더)에 브랜드 지역(추정)·자세한 근거·가설 안내가 나오고, 사이즈표가 없으면 변환표 참고값이 나온다', () => {
+  const clothing = { ...PRODUCTS['https://shop-a.example.com/goods/12345'], source: 'demo', brand: 'Nike' }
+  const props = { product: clothing, profile, calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop }
+  const text = textOf(render(WEB.ResultView, props))
+  assert.ok(text.includes('브랜드 지역: 미국(추정) 근거: 브랜드 사전(추정): 미국'), '지역 줄')
+  assert.ok(text.includes('후기 근거: 불러온 후기') && text.includes('부위별 여유분 판정:'))
+  assert.ok(text.includes('검증 전 가설'))
+  const noChart = textOf(render(WEB.FitComment, { result: generateFitComment(profile, { name: '셔츠', category: 'top', optionLabels: ['95', '100'], reviews: [], sizeChart: null, targetGender: { gender: 'male' } }, {}, null) }))
+  assert.ok(noChart.includes('사이즈 표기 참고값(근사/출처 확인 필요)') && noChart.includes('100 → 가슴둘레 호칭 약 100cm'))
 })
 
 console.log(`\n${passed}개 통과`)

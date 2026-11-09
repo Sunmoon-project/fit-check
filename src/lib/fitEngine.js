@@ -6,6 +6,8 @@ import { PART_LABEL, CATEGORY_PARTS } from '../data/measurements.js'
 import { estimateBody } from './bodyEstimate.js'
 import { detectReviewOutliers } from './reviewOutliers.js'
 import { resolveLearned, learningStatus, brandKeyOf } from './learnedModel.js'
+import { classifyBrandRegion, regionInputOf, regionLine } from './brandRegion.js'
+import { sizeSystemHint } from './sizeSystems.js'
 
 // ---------- 신발 허용 구간 (휴리스틱) ----------
 // d = 신발 사이즈(mm) - 발길이(mm). 브랜드/라스트마다 달라서 정확한 값이 아니라 일반적인 착용감을 바탕으로 한 기준이에요.
@@ -309,7 +311,10 @@ function describeVerdicts(verdicts) {
 // AI 핏 코멘트: 후기 투표 + 실측 비교를 합친 추천
 // model: 학습값 묶음(learnedModel.js). 없거나 버전이 다르면 기존 동작 그대로예요. 출처가 브라우저든 서버든 같은 코드로 읽어요.
 export function generateFitComment(profile, product, calibration = {}, model = null) {
-  const learned = model ? resolveLearned(model, product.category, brandKeyOf(product)) : null
+  // 브랜드 지역(추정): 같은 지역 브랜드들로 모은 학습 오프셋을 고를 때만 판정에 영향을 줘요. 근거가 없으면 unknown이고 보정은 0이에요.
+  const regionInfo = classifyBrandRegion(regionInputOf(product))
+  const regionKey = regionInfo.region === 'unknown' ? null : regionInfo.region
+  const learned = model ? resolveLearned(model, product.category, brandKeyOf(product), regionKey) : null
   const { values, measured } = bodyValuesForProfile(profile)
   const preferredFit = profile.preferredFit || 'regular'
   const measureResult = recommendSize(values, product.sizeChart, product.category, preferredFit, calibration, learned)
@@ -403,7 +408,7 @@ export function generateFitComment(profile, product, calibration = {}, model = n
     notes.push('직접 잰 치수가 없는 부위는 키·몸무게·체형으로 추정했어요(±3~5cm).')
   }
   if (calibrated) notes.push('내 착용 기록으로 판정 기준을 보정했어요.')
-  const learning = model ? learningStatus(model, product.category, brandKeyOf(product)) : null
+  const learning = model ? learningStatus(model, product.category, brandKeyOf(product), regionKey) : null
   if (learning?.used) notes.push('이 브라우저에 모은 후기로 기준을 조금 옮겼어요(정확도를 잰 값은 아니에요).')
   notes.push('후기와 사이즈표를 종합한 참고용 추천이에요. 소재와 신축성에 따라 다를 수 있어요.')
 
@@ -417,6 +422,16 @@ export function generateFitComment(profile, product, calibration = {}, model = n
     measuredParts: compared.filter((v) => measured.has(v.part)).length,
     estimatedParts: compared.filter((v) => !measured.has(v.part)).length,
     calibrated,
+    // 자세한 근거 줄(describeEvidence)에 쓰는 값. 모두 이 분석에서 센 값이고 정확도를 잰 값은 아니에요.
+    learnedState: !model ? 'none' : learning?.used ? 'used' : learning ? 'collecting' : 'none',
+    learnedCategorySamples: learned?.categorySamples ?? 0,
+    learnedTotalSamples: learned?.total ?? 0,
+    offsetSource: learned?.offsetSource ?? null,
+    offsetValue: learned?.offset ?? 0,
+    brandSamples: learned?.brandSamples ?? 0,
+    regionSamples: learned?.regionSamples ?? 0,
+    regionLine: regionLine(regionInfo),
+    partEase: compared.map((v) => ({ label: v.label, ease: v.ease, verdict: v.verdict, measured: measured.has(v.part) })),
     ...('reviewTotalOnPage' in product ? { reviewTotalOnPage: product.reviewTotalOnPage ?? null } : {}),
   }
 
@@ -436,6 +451,9 @@ export function generateFitComment(profile, product, calibration = {}, model = n
     perSize,
     verdicts,
     measured,
+    regionInfo,
+    // 사이즈표를 못 읽었을 때만: 사이즈 표기의 뜻(근사/출처 확인 필요). 추천 계산에는 쓰지 않아요.
+    sizeSystem: product.sizeChart ? null : sizeSystemHint({ category: product.category, gender: product.targetGender?.gender === 'male' ? 'male' : null, optionLabels: product.optionLabels || [] }),
     ...(learning ? { learning } : {}),
   }
 }
@@ -517,7 +535,34 @@ export function describeEvidence(evidence, confidence) {
     else if (e.estimatedParts > 0) reasons.push(`직접 잰 치수가 없어 ${e.estimatedParts}개 부위는 추정값으로 비교했어요.`)
     if (!reasons.length) reasons.push('후기와 사이즈표의 결과가 완전히 일치하지는 않아요.')
   }
-  return { summary: parts.join(' · '), reasons }
+  return { summary: parts.join(' · '), reasons, details: evidenceDetails(e) }
+}
+
+const signed = (v) => `${v > 0 ? '+' : ''}${v}`
+
+// 추천 사이즈 결과에 붙이는 자세한 근거 줄. 센 값(건수, 샘플 수, cm)만 보여주고, 정확도처럼 보이는 숫자는 만들지 않아요.
+// evidence에 해당 값이 없으면(예전 모양, 신발 등) 그 줄은 건너뛰어요.
+export function evidenceDetails(evidence) {
+  const e = evidence || {}
+  const lines = []
+  if (isNum(e.reviewTotal)) {
+    lines.push(
+      e.reviewTotal > 0
+        ? `후기 근거: 불러온 후기 ${e.reviewTotal}건 중 이상치 제외 ${e.reviewExcluded || 0}건, 비슷한 체형 ${e.reviewMatched}건, 그중 사이즈·핏을 밝힌 후기 ${e.reviewVotes}건`
+        : '후기 근거: 쓸 수 있는 후기가 없어요',
+    )
+  }
+  if (e.learnedState === 'used') lines.push(`학습값: 사용(이 종류 샘플 ${e.learnedCategorySamples}건, 이 브라우저에 모은 후기 기준)`)
+  else if (e.learnedState === 'collecting') lines.push(`학습값: 모으는 중(전체 샘플 ${e.learnedTotalSamples}건, 이 종류는 아직 적용할 차이가 없어요)`)
+  if (e.offsetSource === 'brand') lines.push(`브랜드 보정: ${signed(e.offsetValue)}cm (이 브랜드 샘플 ${e.brandSamples}건, 표본이 적을수록 0에 가깝게 줄여요)`)
+  else if (e.offsetSource === 'region') lines.push(`지역 보정: ${signed(e.offsetValue)}cm (같은 지역 브랜드 샘플 ${e.regionSamples}건, 검증 전 가설이라 모은 후기에서 확인된 만큼만 반영해요)`)
+  else if (e.learnedState === 'used' || e.learnedState === 'collecting') lines.push('브랜드·지역 보정: 없음(0cm, 모은 표본이 부족하거나 지역을 알 수 없어요)')
+  if (e.regionLine) lines.push(e.regionLine)
+  if (Array.isArray(e.partEase) && e.partEase.length) {
+    lines.push(`부위별 여유분 판정: ${e.partEase.map((p) => `${p.label} ${signed(p.ease)}cm ${p.verdict}${p.measured ? '' : '(추정)'}`).join(', ')}`)
+  }
+  if (lines.length) lines.push('위 수치는 센 값이고 규칙 기반 판정이에요. 정확도를 측정한 값은 아니에요.')
+  return lines
 }
 
 export const FIT_LABEL = {
