@@ -5664,6 +5664,55 @@ test('지역·근거 표시: 웹 결과 화면(서버 렌더)에 브랜드 지�
   assert.ok(noChart.includes('사이즈 표기 참고값(근사/출처 확인 필요)') && noChart.includes('100 → 가슴둘레 호칭 약 100cm'))
 })
 
+import { reviewBodyEstimate } from '../src/lib/reviewBodyEstimate.js'
+
+test('후기 보정 추정: 비슷한 체형이 산 사이즈·핏 평가로 직접 재지 않은 둘레만 옮기고, 후기가 1건이거나 직접 잰 부위는 그대로 둔다 (가짜 데이터)', () => {
+  const chart = { L: { shoulder: 48, chest: 112 } }
+  const reviews = [{ size: 'L', fit: 'true', similarity: 100 }, { size: 'L', fit: 'true', similarity: 100 }]
+  const base = { shoulder: 45.5, chest: 97.5, topLength: 68 }
+  const r = reviewBodyEstimate({ values: base, measured: new Set(), reviews, measuresOf: (s) => chart[s], rules: EASE_RULES })
+  // 정사이즈 가슴 여유 (6+14)/2=10 → 역산 102. 공식 97.5(가중 2)와 후기 2건(가중 2) 평균 = 99.75 → 0.5 단위 100
+  assert.equal(r.values.chest, 100)
+  assert.equal(r.reviewParts.chest.n, 2)
+  assert.equal(r.values.topLength, 68, '기장은 건드리지 않아요')
+  const measured = reviewBodyEstimate({ values: base, measured: new Set(['chest']), reviews, measuresOf: (s) => chart[s], rules: EASE_RULES })
+  assert.equal(measured.values.chest, 97.5, '직접 잰 가슴은 그대로')
+  assert.ok(!measured.reviewParts.chest)
+  const one = reviewBodyEstimate({ values: base, measured: new Set(), reviews: reviews.slice(0, 1), measuresOf: (s) => chart[s], rules: EASE_RULES })
+  assert.deepEqual(one.reviewParts, {}, '후기 1건이면 보정하지 않아요')
+  // '작아요'는 더 큰 몸으로 역산해요
+  const small = reviewBodyEstimate({ values: base, measured: new Set(), reviews: reviews.map((x) => ({ ...x, fit: 'small' })), measuresOf: (s) => chart[s], rules: EASE_RULES })
+  assert.ok(small.values.chest > r.values.chest)
+  // 아무리 많아도 공식값에서 6cm 넘게 옮기지 않아요
+  const far = reviewBodyEstimate({ values: base, measured: new Set(), reviews: Array.from({ length: 20 }, () => ({ size: 'L', fit: 'small', similarity: 100 })), measuresOf: (s) => ({ L: { chest: 140 } })[s], rules: EASE_RULES })
+  assert.equal(far.values.chest, 103.5)
+})
+
+test('단계형 추천: 키·몸무게만이면 비슷한 체형 후기 2건을 우선하고, 가슴을 직접 재면 실측 비교를 우선한다 (가짜 데이터)', () => {
+  const product = {
+    name: '스웻셔츠', mall: 'shop', category: 'top',
+    sizeChart: { measures: { M: { shoulder: 47, chest: 104 }, L: { shoulder: 49, chest: 112 } } },
+    reviews: [
+      { id: 1, nick: 'a', rating: 5, text: '정사이즈', gender: 'male', height: 175, weight: 70, size: 'L', fit: 'true' },
+      { id: 2, nick: 'b', rating: 5, text: '정사이즈', gender: 'male', height: 176, weight: 70, size: 'L', fit: 'true' },
+    ],
+    notes: [],
+  }
+  const simple = { gender: 'male', height: 175, weight: 70, preferredFit: 'regular', usual: { top: '', bottom: '' }, measurements: {} }
+  const r = generateFitComment(simple, product)
+  assert.equal(r.detailed, false)
+  assert.equal(r.recommendedSize, 'L', '키·몸무게만이면 후기 우선')
+  assert.ok(r.reviewParts.chest, '가슴은 후기로 보정')
+  assert.ok(r.note.includes('비슷한 체형 후기를 우선'))
+  const cmp = compareSizes({ chart: product.sizeChart, bodyValues: r.bodyValues, measured: r.measured, category: 'top', reviewParts: r.reviewParts })
+  assert.equal(cmp.sizes[0].rows.find((x) => x.part === 'chest').bodyKind, 'review', '비교 표에 (후기 추정)')
+  const det = generateFitComment({ ...simple, measurements: { chest: 96 } }, product)
+  assert.equal(det.detailed, true)
+  assert.equal(det.recommendedSize, 'M', '가슴을 재면 실측 비교 우선')
+  assert.equal(det.bodyValues.chest, 96)
+})
+
+
 // ---- 중고 판매글 분석 (번개장터·후르츠패밀리). 아래 글·HTML은 전부 직접 만든 가짜예요. 실제 사이트에서 확인한 것이 아니에요 ----
 const usedProfile = buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular' }).profile
 const U_TITLE = '[M] 나이키 Club Fleece Hoodie 후드 티셔츠'
@@ -6191,6 +6240,77 @@ test('평가 모듈: 네트워크를 쓰지 않고, README·문서는 실제 측
   assert.ok(readme.includes('eval:fit') && readme.includes('실제 데이터로 측정한 수치는 아직 없'))
   const doc = readFileSync(new URL('../docs/평가_핏정확도.md', import.meta.url), 'utf8')
   for (const key of ['라벨 잡음', '표본 수', '편향', 'Wilson', '합성 데이터, 실제 정확도 아님', '확장 내보내기는 추후', '실제 데이터로 측정한 수치는 아직 없']) assert.ok(doc.includes(key), key)
+})
+
+import { TRYON_MODELS } from '../server/hfTryOn.js'
+
+await atest('hfTryOn(Leffa, 가짜 fetch): 하의는 dress_code·lower_body로 leffa_predict_vt를 부르고, 이유 없는 거절(null)은 토큰 안내로 바꾼다', async () => {
+  clearTryOnCache()
+  const LB = 'https://franciszzj-leffa.hf.space'
+  const api = `${LB}/gradio_api`
+  const calls = []
+  const mk = (sse) => async (url, opts = {}) => {
+    calls.push({ url, opts })
+    if (url === `${LB}/config`) return resp({ api_prefix: '/gradio_api' })
+    if (url === `${api}/upload`) return resp([`/tmp/gradio/up${calls.length}.png`])
+    if (url === `${api}/call/leffa_predict_vt`) return resp({ event_id: 'lf1' })
+    if (url === `${api}/call/leffa_predict_vt/lf1`) return resp(sse, { type: 'text/event-stream' })
+    if (url === `${api}/file=/tmp/gradio/lf.png`) return resp(new Uint8Array([9]), { type: 'image/png' })
+    return resp('nf', { status: 404, type: 'text/plain' })
+  }
+  assert.equal(isTryOnSupported('bottom'), false, '기본(IDM-VTON)은 하의 미지원 그대로')
+  assert.equal(isTryOnSupported('bottom', 'leffa') && isTryOnSupported('dress', 'leffa'), true)
+  assert.equal(isTryOnSupported('shoes', 'leffa'), false)
+  assert.equal(TRYON_MODELS.leffa.space, 'franciszzj/Leffa')
+  const ok = `event: complete\ndata: ${JSON.stringify([{ path: '/tmp/gradio/lf.png' }, { path: '/tmp/m.png' }, { path: '/tmp/d.png' }])}\n\n`
+  const r = await runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'bottom', model: 'leffa', fetchImpl: mk(ok) })
+  assert.equal(r.image, 'data:image/png;base64,CQ==')
+  assert.ok(r.model.startsWith('Leffa'))
+  const { data } = JSON.parse(calls.find((c) => c.url === `${api}/call/leffa_predict_vt`).opts.body)
+  assert.deepEqual(data.slice(2), ['False', 30, 2.5, 42, 'dress_code', 'lower_body', 'False'])
+  assert.ok(data[0].path && data[1].path, '두 사진을 먼저 올린 경로')
+  await assert.rejects(
+    runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'top', model: 'leffa', fetchImpl: mk('event: error\ndata: null\n\n') }),
+    (e) => e.code === 'LEFFA_REJECTED' && e.message.includes('IDM-VTON'),
+  )
+  // 운영자의 HF_TOKEN은 제3자 Space(Leffa)로 보내지 않아요
+  calls.length = 0
+  clearTryOnCache()
+  await runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'dress', model: 'leffa', token: 'hf_secret', fetchImpl: mk(ok) })
+  assert.ok(calls.length > 0 && calls.every((c) => !c.opts.headers?.Authorization), 'Leffa 요청에는 Authorization이 없어요')
+  await assert.rejects(runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'shoes', model: 'leffa', fetchImpl: mk(ok) }), (e) => e.code === 'UNSUPPORTED')
+})
+
+test('웹 렌더: 확장에서 담은 옷장 항목은 부위별 여유 게이지·실측·후기 핏 분포·리뷰를 자세히 보기에 그린다 (가짜 데이터)', () => {
+  const item = {
+    id: 'x1', savedAt: 1, product: { name: '스웻셔츠', mall: 'musinsa', category: 'top', image: null, url: 'https://shop.example/x1' },
+    size: 'L', measures: { shoulder: 49, chest: 112, topLength: 70 },
+    verdicts: [{ part: 'chest', label: '가슴', verdict: '적당', key: 'regular', ease: 10.5 }, { part: 'shoulder', label: '어깨', verdict: '넉넉', key: 'relaxed', ease: 3.5 }],
+    reviews: [
+      { nick: 'a', text: '좋아요', photos: ['https://img.example.com/1.jpg'], height: 175, weight: 70, size: 'L', fitLabel: '잘 맞아요', similarity: 95 },
+      { nick: 'b', text: '커요', photos: [], height: 176, weight: 71, size: 'L', fitLabel: '커요', similarity: 90 },
+    ],
+  }
+  const html = render(WEB.Wardrobe, { items: [item], onDelete: noop, onBack: noop })
+  const txt = textOf(html)
+  assert.ok(txt.includes('자세히 보기 · 리뷰 2건'))
+  assert.ok(html.includes('fv-gauge') && txt.includes('+10.5cm') && txt.includes('+3.5cm'), '여유 게이지')
+  assert.ok(html.includes('class="on l2"') && html.includes('class="on l3"'), '판정 칸 위치')
+  assert.ok(txt.includes('L 실측') && txt.includes('가슴 112cm') && txt.includes('총장 70cm'), '실측 칩')
+  assert.ok(txt.includes('담은 후기 핏 평가') && txt.includes('정사이즈 50%') && txt.includes('커요 50%'), '핏 분포(확장 fitLabel 기준)')
+  assert.ok(txt.includes('사진 모아보기'), '리뷰 탭')
+})
+
+test('웹 렌더: 결과 화면은 onTryOn이 있으면 사진 합성 대신 가상 피팅 바로가기를, TryOnPanel은 모델 선택을 보여준다', () => {
+  const clothing = { ...PRODUCTS['https://shop-a.example.com/goods/12345'], source: 'demo' }
+  const props = { product: clothing, profile, calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop }
+  const linked = textOf(render(WEB.ResultView, { ...props, onTryOn: noop }))
+  assert.ok(linked.includes('가상 피팅') && linked.includes('내 사진에 이 옷'))
+  assert.ok(!linked.includes('AI로 합성하기'), '패널은 탭으로 옮겨요')
+  const inline = textOf(render(WEB.ResultView, props))
+  assert.ok(inline.includes('AI로 합성하기'), 'onTryOn이 없으면 예전처럼 패널')
+  const panel = textOf(render(WEB.TryOnPanel, { product: { ...clothing, category: 'bottom' }, profile, verdicts: [], selectedSize: 'M', captureRef: { current: null } }))
+  assert.ok(panel.includes('IDM-VTON') && panel.includes('Leffa (실험적)') && panel.includes('상의·하의·원피스'))
 })
 
 console.log(`\n${passed}개 통과`)

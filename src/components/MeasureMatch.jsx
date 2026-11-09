@@ -1,7 +1,7 @@
 import { VERDICTS } from '../lib/fitEngine.js'
 import { MEASURE_ONLY_LABEL } from '../lib/sizeCompare.js'
 
-const BODY_KIND_NOTE = { estimated: '(추정)', standard: '(표준)' }
+const BODY_KIND_NOTE = { estimated: '(추정)', review: '(후기 추정)', standard: '(표준)' }
 
 // 사이즈 탭 + 부위별 비교: 내 치수 vs 옷 실측, 여유분, 판정 막대.
 // compare(compareSizes 결과)가 있으면 신체 비교 기준이 없는 부위도 '실측만 표시'로 함께 보여줘요.

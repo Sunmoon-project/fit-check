@@ -14,9 +14,26 @@ const BASE_LAYOUT = {
 }
 
 const NO_STATUS_TEXT = 'AI 합성 서버에 연결하지 못했어요.'
-// 무료 IDM-VTON Space의 자동 마스크는 상반신만 칠해서 하의·원피스는 AI 합성을 받지 않아요 (서버도 400으로 거절).
-const AI_CATEGORIES = ['top', 'outer']
-const UPPER_ONLY_NOTE = '무료 IDM-VTON Space는 상반신만 인식해서 하의·원피스는 AI 합성을 지원하지 않아요. 위 미리보기를 참고해주세요.'
+// 무료 모델 두 가지 (서버 server/hfTryOn.js의 TRYON_MODELS와 같아요).
+// IDM-VTON: 상반신만 인식(상의·아우터), 토큰 없이 동작 확인. Leffa: 상의·하의·원피스, 토큰 없는 요청을 거절할 때가 있어 실험적이에요.
+const AI_MODELS = [
+  { id: 'idm', label: 'IDM-VTON', note: '상의·아우터', space: null, categories: ['top', 'outer'] },
+  { id: 'leffa', label: 'Leffa (실험적)', note: '상의·하의·원피스', space: 'franciszzj/Leffa', categories: ['top', 'outer', 'bottom', 'dress'] },
+]
+const UPPER_ONLY_NOTE = 'IDM-VTON은 상반신만 인식해서 하의·원피스는 합성하지 못해요. Leffa(실험적)를 고르거나 위 미리보기를 참고해주세요.'
+
+// AI 결과와 원래 사진을 손잡이로 나눠 비교해요 (왼쪽 = 원래 사진).
+function BeforeAfter({ before, after }) {
+  const [pos, setPos] = useState(50)
+  return (
+    <div className="ba" style={{ '--pos': `${pos}%` }}>
+      <img src={after} alt="AI 합성 결과" referrerPolicy="no-referrer" />
+      <img className="ba-before" src={before} alt="원래 사진" />
+      <span className="ba-line" aria-hidden />
+      <input type="range" min="0" max="100" value={pos} onChange={(e) => setPos(Number(e.target.value))} aria-label="원래 사진과 합성 결과 비교" />
+    </div>
+  )
+}
 
 // 선택한 사이즈의 여유분(판정 단계 0~4)이 클수록 옷을 조금 더 크게 그려 헐렁한 느낌을 줍니다.
 function easeScale(verdicts) {
@@ -32,7 +49,7 @@ function previewLayout(category, verdicts, scalePct, offsetPct) {
   return { widthPct, leftPct: 50 - widthPct / 2, topPct: base.top + offsetPct }
 }
 
-export default function TryOnPanel({ product, profile, verdicts, selectedSize, captureRef }) {
+export default function TryOnPanel({ product, profile, verdicts, selectedSize, captureRef, onResult }) {
   const canProductImage = Boolean(product.image)
   const [photo, setPhoto] = useState(() => loadPhoto())
   const [photoNote, setPhotoNote] = useState('')
@@ -47,6 +64,8 @@ export default function TryOnPanel({ product, profile, verdicts, selectedSize, c
   const [aiAvailable, setAiAvailable] = useState(null) // null=확인 중
   const [aiStatus, setAiStatus] = useState({ provider: '', space: '' })
   const [ai, setAi] = useState({ loading: false, image: null, model: '', error: '', cached: false })
+  const [modelId, setModelId] = useState('idm')
+  const aiModel = AI_MODELS.find((m) => m.id === modelId) || AI_MODELS[0]
   const [elapsed, setElapsed] = useState(0)
   const personInput = useRef(null)
   const garmentInput = useRef(null)
@@ -157,13 +176,14 @@ export default function TryOnPanel({ product, profile, verdicts, selectedSize, c
       const r = await fetch('/api/tryon', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ personImage: photo, garmentImage, category: product.category, garmentName: product.name }),
+        body: JSON.stringify({ personImage: photo, garmentImage, category: product.category, garmentName: product.name, model: aiModel.id }),
       })
       const data = await r.json().catch(() => ({}))
       if (!r.ok) {
         return setAi({ loading: false, image: null, model: '', error: data.message || 'AI 합성에 실패했어요.', cached: false })
       }
       setAi({ loading: false, image: data.image, model: data.model || '', error: '', cached: Boolean(data.cached) })
+      onResult?.({ image: data.image, kind: 'ai' })
     } catch {
       setAi({ loading: false, image: null, model: '', error: '서버에 연결하지 못했어요.', cached: false })
     }
@@ -184,7 +204,7 @@ export default function TryOnPanel({ product, profile, verdicts, selectedSize, c
   }
 
   const chips = verdicts.filter((v) => !v.isLength || v.level !== 2)
-  const aiCategoryOk = AI_CATEGORIES.includes(product.category)
+  const aiCategoryOk = aiModel.categories.includes(product.category)
 
   return (
     <div className="card tryon tone-tryon">
@@ -262,6 +282,13 @@ export default function TryOnPanel({ product, profile, verdicts, selectedSize, c
       )}
 
       <div className="ai-box">
+        <div className="seg" role="radiogroup" aria-label="AI 합성 모델">
+          {AI_MODELS.map((m) => (
+            <button key={m.id} type="button" role="radio" aria-checked={m.id === modelId} className={m.id === modelId ? 'on' : ''} disabled={ai.loading} onClick={() => setModelId(m.id)}>
+              {m.label}<span>{m.note}</span>
+            </button>
+          ))}
+        </div>
         <button
           type="button"
           className="btn primary block"
@@ -274,14 +301,14 @@ export default function TryOnPanel({ product, profile, verdicts, selectedSize, c
         {aiAvailable && !aiCategoryOk && <p className="muted small">{UPPER_ONLY_NOTE}</p>}
         {aiAvailable && aiCategoryOk && (
           <p className="muted small">
-            AI 합성을 누르면 내 전신 사진과 옷 이미지가 Hugging Face Space{aiStatus.space ? ` (${aiStatus.space})` : ''}로 전송돼요. 무료이고, 하루 GPU 사용량 제한이 있어요.
+            AI 합성을 누르면 내 전신 사진과 옷 이미지가 Hugging Face Space{(aiModel.space || aiStatus.space) ? ` (${aiModel.space || aiStatus.space})` : ''}로 전송돼요. 무료이고, 하루 GPU 사용량 제한이 있어요.
           </p>
         )}
         {ai.loading && <p className="muted small">무료 GPU 대기열을 거쳐서 보통 30초~2분 걸려요(최대 5분). 창을 닫지 말아주세요. 도중에 끊겨도 GPU 사용량은 쓰여요.</p>}
         {ai.error && <p className="error">{ai.error}</p>}
         {ai.image && (
           <figure className="ai-result">
-            <img src={ai.image} alt="AI 합성 결과" referrerPolicy="no-referrer" />
+            {photo ? <BeforeAfter before={photo} after={ai.image} /> : <img src={ai.image} alt="AI 합성 결과" referrerPolicy="no-referrer" />}
             <figcaption className="muted small">{ai.model} 합성 결과{ai.cached ? ' (저장된 결과)' : ''} · 실제 핏과 다를 수 있어요</figcaption>
           </figure>
         )}

@@ -15,7 +15,17 @@ export const KNOWN_SPACES = ['yisol/IDM-VTON', 'John6666/IDM-VTON', 'LPDoctor/ID
 // 공개 IDM-VTON Space의 자동 마스크는 상반신('upper_body')만 칠해요. 그래서 상의·아우터만 지원하고,
 // 하의·원피스는 다리를 그대로 둔 채 상체만 다시 그리게 되므로 받지 않아요.
 export const TRYON_CATEGORIES = ['top', 'outer']
-export const isTryOnSupported = (category) => category == null || TRYON_CATEGORIES.includes(category)
+
+// 쓸 수 있는 무료 모델. Leffa(franciszzj/Leffa, Gradio 5)는 상의·하의·원피스를 모두 지원하고 결과가 더 자연스러운 편이에요.
+// 둘 다 Hugging Face 무료 ZeroGPU Space라 하루 사용량 제한이 있어요. 함수 기본값은 예전과 같은 IDM-VTON이에요.
+export const TRYON_MODELS = {
+  leffa: { label: 'Leffa', space: 'franciszzj/Leffa', categories: ['top', 'outer', 'bottom', 'dress'] },
+  idm: { label: 'IDM-VTON', space: null, categories: TRYON_CATEGORIES },
+}
+export const resolveTryOnModel = (m) => (typeof m === 'string' && Object.hasOwn(TRYON_MODELS, m) ? m : 'idm')
+export const isTryOnSupported = (category, model = 'idm') => category == null || TRYON_MODELS[resolveTryOnModel(model)].categories.includes(category)
+// Leffa 입력: 옷 종류와 그에 맞는 체크포인트 (viton_hd는 상의 전용, dress_code는 상의·하의·원피스)
+const LEFFA_GARMENT = { top: ['viton_hd', 'upper_body'], outer: ['viton_hd', 'upper_body'], bottom: ['dress_code', 'lower_body'], dress: ['dress_code', 'dresses'] }
 // 옷 설명은 SDXL의 영어 CLIP 프롬프트("model is wearing ...")로 들어가요. 한글 상품명은 거의 도움이 안 돼서
 // 영어(ASCII) 이름일 때만 쓰고, 아니면 카테고리별 영어 문구를 써요.
 const GARMENT_DESC = { top: 'a top', outer: 'an outer jacket' }
@@ -120,14 +130,23 @@ export async function runHfTryOn({
   token = '',
   fetchImpl = fetch,
   signal,
+  model: modelId = 'idm',
 } = {}) {
-  if (!isTryOnSupported(category)) {
-    throw hfError(400, 'UNSUPPORTED', 'AI 합성은 상의·아우터만 지원해요. 무료 IDM-VTON Space는 상반신만 인식해요.')
+  const which = resolveTryOnModel(modelId)
+  if (!isTryOnSupported(category, which)) {
+    throw hfError(400, 'UNSUPPORTED', which === 'leffa'
+      ? 'AI 합성은 상의·아우터·하의·원피스만 지원해요.'
+      : 'AI 합성은 상의·아우터만 지원해요. 무료 IDM-VTON Space는 상반신만 인식해요. Leffa 모델을 고르면 하의·원피스도 돼요.')
+  }
+  if (which === 'leffa') {
+    space = TRYON_MODELS.leffa.space
+    // 운영자가 HF_SPACE로 고르지 않은 제3자 Space라서 HF_TOKEN을 보내지 않아요 (토큰 노출 방지).
+    token = ''
   }
   const garmentDesc = garmentDescription(category, garmentName)
-  const model = `IDM-VTON (Hugging Face ${space})`
+  const model = `${TRYON_MODELS[which].label} (Hugging Face ${space})`
   const key = createHash('sha256')
-    .update([space, category, garmentDesc, personImage, garmentImage].join('\n'))
+    .update([which, space, category, garmentDesc, personImage, garmentImage].join('\n'))
     .digest('hex')
   const hit = cache.get(key)
   if (hit) return { ...hit, cached: true }
@@ -181,13 +200,18 @@ export async function runHfTryOn({
   const personFD = await toFileData(personImage, 'person')
   const garmentFD = await toFileData(garmentImage, 'garment')
 
-  // 3) 작업 시작 (입력 순서: 사람 ImageEditor, 옷, 옷 설명, 자동 마스크, 자동 크롭, 단계 수, 시드)
-  const callRes = await hf(`${api}/call/tryon`, {
+  // 3) 작업 시작
+  //   IDM-VTON /tryon: 사람 ImageEditor, 옷, 옷 설명, 자동 마스크, 자동 크롭, 단계 수, 시드
+  //   Leffa /leffa_predict_vt: 사람, 옷, 참조 가속, 단계 수, 가이던스, 시드, 체크포인트, 옷 종류, 다시 그리기
+  const endpoint = which === 'leffa' ? 'leffa_predict_vt' : 'tryon'
+  const [vtModel, vtGarment] = LEFFA_GARMENT[category] || LEFFA_GARMENT.top
+  const data = which === 'leffa'
+    ? [personFD, garmentFD, 'False', DENOISE_STEPS, 2.5, SEED, vtModel, vtGarment, 'False']
+    : [{ background: personFD, layers: [], composite: null }, garmentFD, garmentDesc, true, false, DENOISE_STEPS, SEED]
+  const callRes = await hf(`${api}/call/${endpoint}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      data: [{ background: personFD, layers: [], composite: null }, garmentFD, garmentDesc, true, false, DENOISE_STEPS, SEED],
-    }),
+    body: JSON.stringify({ data }),
   })
   if (!callRes.ok) throw await failFrom(callRes, 'call')
   const { event_id: eventId } = (await callRes.json().catch(() => null)) || {}
@@ -197,13 +221,17 @@ export async function runHfTryOn({
   }
 
   // 4) 결과 수신 (SSE). 대기열이 길면 여기서 오래 기다려요.
-  const sseRes = await hf(`${api}/call/tryon/${eventId}`, { headers: { Accept: 'text/event-stream' } })
+  const sseRes = await hf(`${api}/call/${endpoint}/${eventId}`, { headers: { Accept: 'text/event-stream' } })
   if (!sseRes.ok) throw await failFrom(sseRes, 'result')
   const events = parseSse(await sseRes.text())
   const errorEvent = events.find((e) => e.event === 'error')
   if (errorEvent) {
     const detail = typeof errorEvent.data === 'string' ? errorEvent.data : JSON.stringify(errorEvent.data)
     logUpstream('Space 오류', detail)
+    // Leffa Space는 토큰 없는 요청을 이유 없이(null) 거절해요 (2026-11 확인). 제3자 Space라 토큰은 보내지 않아요.
+    if (which === 'leffa' && errorEvent.data == null) {
+      throw hfError(502, 'LEFFA_REJECTED', 'Leffa Space가 요청을 거절했어요(로그인하지 않은 요청을 막는 것으로 보여요). IDM-VTON으로 합성해 보세요.')
+    }
     throw mapUpstreamError(200, detail, hasToken)
   }
   const complete = events.find((e) => e.event === 'complete')

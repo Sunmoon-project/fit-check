@@ -98,8 +98,8 @@ function exportData(product, pageUrl, result) {
 function compareView(product, profile, result, learned = null) {
   if (!product.sizeChart) return { view: null, failed: false }
   try {
-    const { values } = bodyValuesForProfile(profile)
-    const cmp = compareSizes({ chart: product.sizeChart, bodyValues: values, measured: result.measured, category: product.category, learned })
+    const values = result.bodyValues || bodyValuesForProfile(profile).values
+    const cmp = compareSizes({ chart: product.sizeChart, bodyValues: values, measured: result.measured, category: product.category, learned, reviewParts: result.reviewParts })
     return { view: cmp.sizes.length ? { ...compactCompare(cmp), recommended: result.recommendedSize ?? null } : null, failed: false }
   } catch {
     return { view: null, failed: true }

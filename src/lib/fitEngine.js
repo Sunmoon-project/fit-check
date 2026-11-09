@@ -8,6 +8,7 @@ import { detectReviewOutliers } from './reviewOutliers.js'
 import { resolveLearned, learningStatus, brandKeyOf } from './learnedModel.js'
 import { classifyBrandRegion, regionInputOf, regionLine } from './brandRegion.js'
 import { sizeSystemHint } from './sizeSystems.js'
+import { reviewBodyEstimate, REVIEW_EST_PARTS } from './reviewBodyEstimate.js'
 
 // ---------- 신발 허용 구간 (휴리스틱) ----------
 // d = 신발 사이즈(mm) - 발길이(mm). 브랜드/라스트마다 달라서 정확한 값이 아니라 일반적인 착용감을 바탕으로 한 기준이에요.
@@ -315,9 +316,9 @@ export function generateFitComment(profile, product, calibration = {}, model = n
   const regionInfo = classifyBrandRegion(regionInputOf(product))
   const regionKey = regionInfo.region === 'unknown' ? null : regionInfo.region
   const learned = model ? resolveLearned(model, product.category, brandKeyOf(product), regionKey) : null
-  const { values, measured } = bodyValuesForProfile(profile)
+  const formula = bodyValuesForProfile(profile)
+  const measured = formula.measured
   const preferredFit = profile.preferredFit || 'regular'
-  const measureResult = recommendSize(values, product.sizeChart, product.category, preferredFit, calibration, learned)
   const sizeList = chartSizes(product.sizeChart)
   const optionKeys = (product.optionLabels || []).map(normKey)
   // 추천은 사이즈표의 이름, 표가 없으면 구매 옵션의 이름 안에서만 해요.
@@ -325,6 +326,15 @@ export function generateFitComment(profile, product, calibration = {}, model = n
   const screened = screenReviews(product.reviews || [], product)
   const reviewList = screened.kept.map((r) => (r.size ? { ...r, size: canonicalSize(r.size, allowedKeys) } : r))
   const { matched, others } = splitReviews(profile, reviewList)
+  // 직접 잰 둘레 치수가 하나라도 있으면 '상세 입력'으로 보고 실측 비교를 우선해요. 없으면 비슷한 체형 후기를 우선해요.
+  const detailed = REVIEW_EST_PARTS.some((p) => measured.has(p))
+  // 직접 재지 않은 둘레는 비슷한 체형 후기(산 사이즈 + 핏 평가)로 공식 추정값을 보정해요. 신발은 신발 전용 로직을 써요.
+  const est = product.category === 'shoes' || !product.sizeChart?.measures
+    ? { values: formula.values, reviewParts: {} }
+    : reviewBodyEstimate({ values: formula.values, measured, reviews: matched, measuresOf: (size) => measuresOf(product.sizeChart, normKey(size)), rules: { ...EASE_RULES, ...(learned?.rules || {}) } })
+  const values = est.values
+  const reviewParts = est.reviewParts
+  const measureResult = recommendSize(values, product.sizeChart, product.category, preferredFit, calibration, learned)
   const disp = makeDisplay(product)
   const reviewPick = pickFromReviews(matched, sizeList)
   const topSim = matched[0]?.similarity ?? 0
@@ -353,7 +363,8 @@ export function generateFitComment(profile, product, calibration = {}, model = n
       recommendedSize = measureSize
       confidence = reviewPick.votes >= 2 && reviewPick.size === measureSize ? 'high' : 'medium'
       body.push(reviewSentence, `사이즈표 실측으로 보면 ${fitName} 핏 기준 ${disp(measureSize)}가 가장 잘 맞아요.`)
-    } else if (reviewPick.votes >= 3 && topSim >= 75 && !reviewSizeTooSmall) {
+    } else if ((reviewPick.votes >= 3 && topSim >= 75 && !reviewSizeTooSmall) || (!detailed && reviewPick.votes >= 2 && !reviewSizeTooSmall)) {
+      // 키·몸무게만 입력했으면 추정 치수보다 비슷한 체형의 실제 선택을 우선해요 (후기 2건 이상, 실측상 작을 수 있는 사이즈가 아닐 때).
       recommendedSize = reviewPick.size
       confidence = 'medium'
       body.push(reviewSentence, `다만 사이즈표 실측만 보면 ${disp(measureSize)}가 ${fitName} 핏에 더 가까워요.`)
@@ -405,7 +416,14 @@ export function generateFitComment(profile, product, calibration = {}, model = n
   const verdicts = perSize.find((p) => p.size === recommendedSize)?.verdicts || []
   if (verdicts.length) body.push(`${disp(recommendedSize)} 기준: ${describeVerdicts(verdicts)}`)
   if (verdicts.some((v) => !v.isLength && !measured.has(v.part))) {
-    notes.push('직접 잰 치수가 없는 부위는 키·몸무게·체형으로 추정했어요(±3~5cm).')
+    const fromReviews = verdicts.filter((v) => reviewParts[v.part]).map((v) => v.label)
+    notes.push(fromReviews.length
+      ? `직접 잰 치수가 없는 부위는 키·몸무게로 추정하고, ${fromReviews.join('·')}는 비슷한 체형 후기(산 사이즈·핏 평가)로 보정했어요(±3~5cm).`
+      : '직접 잰 치수가 없는 부위는 키·몸무게·체형으로 추정했어요(±3~5cm).')
+  }
+  // 1단계(키·몸무게만) 안내: 다음 단계(직접 잰 치수)로 더 자세해진다는 것을 알려요. 신발은 발길이를 따로 써요.
+  if (!detailed && recommendedSize && product.category !== 'shoes' && (reviewPick || Object.keys(reviewParts).length)) {
+    notes.push('키·몸무게만 입력해서 비슷한 체형 후기를 우선했어요. 어깨·가슴 등을 직접 재서 넣으면 실측 비교로 더 자세히 추천해요.')
   }
   if (calibrated) notes.push('내 착용 기록으로 판정 기준을 보정했어요.')
   const learning = model ? learningStatus(model, product.category, brandKeyOf(product), regionKey) : null
@@ -451,6 +469,10 @@ export function generateFitComment(profile, product, calibration = {}, model = n
     perSize,
     verdicts,
     measured,
+    // 판정에 쓴 내 치수(공식 추정 + 후기 보정 + 직접 입력)와 후기로 보정한 부위. 비교 표가 같은 값을 보여주도록 넘겨요.
+    bodyValues: values,
+    reviewParts,
+    detailed,
     regionInfo,
     // 사이즈표를 못 읽었을 때만: 사이즈 표기의 뜻(근사/출처 확인 필요). 추천 계산에는 쓰지 않아요.
     sizeSystem: product.sizeChart ? null : sizeSystemHint({ category: product.category, gender: product.targetGender?.gender === 'male' ? 'male' : null, optionLabels: product.optionLabels || [] }),

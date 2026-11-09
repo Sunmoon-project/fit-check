@@ -32,7 +32,9 @@
         "*://www.bunjang.co.kr/*",
         "*://m.bunjang.co.kr/*",
         "*://fruitsfamily.com/*",
-        "*://www.fruitsfamily.com/*"
+        "*://www.fruitsfamily.com/*",
+        "*://*.arcteryx.co.kr/*",
+        "*://*.arcteryx.com/*"
       ],
       "js": [
         "content.js"
