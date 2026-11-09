@@ -1,6 +1,8 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { generateFitComment, bodyValuesForProfile } from '../lib/fitEngine.js'
 import { compareSizes } from '../lib/sizeCompare.js'
+import { resolveLearned, brandKeyOf } from '../lib/learnedModel.js'
+import LearningNote from './LearningNote.jsx'
 import { CATEGORY_LABEL } from '../data/measurements.js'
 import { recategorizeProduct } from '../lib/recategorize.js'
 import CategoryPicker from './CategoryPicker.jsx'
@@ -18,15 +20,23 @@ import SizeSummary from './SizeSummary.jsx'
 import FeedbackForm from './FeedbackForm.jsx'
 import TryOnPanel from './TryOnPanel.jsx'
 import { SimilarInWardrobe } from './Wardrobe.jsx'
+import { FitDistBar } from './FitVisuals.jsx'
 
-export default function ResultView({ product: parsedProduct, profile, calibration, feedbackCount, existingFeedback, onFeedback, onRestart, wardrobe = [], onSaveWardrobe }) {
+export default function ResultView({ product: parsedProduct, profile, calibration, feedbackCount, existingFeedback, onFeedback, onRestart, wardrobe = [], onSaveWardrobe, learningModel = null, onLearn, onResetLearning, onExportLearning, onTryOn }) {
   // 분류 신뢰도가 낮을 때 사용자가 고른 카테고리로 다시 분석해요 (자동 분류보다 우선).
   const [chosen, setChosen] = useState(null)
   const product = useMemo(() => (chosen ? recategorizeProduct(parsedProduct, chosen) : parsedProduct), [parsedProduct, chosen])
-  const result = useMemo(() => generateFitComment(profile, product, calibration), [profile, product, calibration])
+  const result = useMemo(() => generateFitComment(profile, product, calibration, learningModel), [profile, product, calibration, learningModel])
+  const learned = useMemo(() => (learningModel ? resolveLearned(learningModel, product.category, brandKeyOf(product), result.regionInfo && result.regionInfo.region !== 'unknown' ? result.regionInfo.region : null) : null), [learningModel, product, result])
+  // 상품을 분석할 때 후기에서 학습 샘플을 쌓아요(중복은 건너뜀). 결과는 App이 학습값으로 다시 내려줘요.
+  const learnRef = useRef(onLearn)
+  learnRef.current = onLearn
+  useEffect(() => {
+    learnRef.current?.(product)
+  }, [product])
   const compare = useMemo(
-    () => compareSizes({ chart: product.sizeChart, bodyValues: bodyValuesForProfile(profile).values, measured: result.measured, category: product.category, calibration: calibration || {} }),
-    [profile, product, calibration, result],
+    () => compareSizes({ chart: product.sizeChart, bodyValues: result.bodyValues || bodyValuesForProfile(profile).values, measured: result.measured, category: product.category, calibration: calibration || {}, learned, reviewParts: result.reviewParts, photoParts: result.photoParts }),
+    [profile, product, calibration, result, learned],
   )
   const [picked, setPicked] = useState(null)
   const [saving, setSaving] = useState(false)
@@ -92,11 +102,15 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
 
       <FitComment result={shownResult} />
 
+      <LearningNote learning={result.learning} onReset={onResetLearning} onExport={onExportLearning} />
+
       {isShoes ? (
         <ShoeCompare view={shoe} selectedSize={picked} onSelect={setPicked} />
       ) : (
         <>
           <SizeSummary compare={compare} recommendedSize={result.recommendedSize} category={product.category} />
+
+          <FitDistBar reviews={result.matched} title="비슷한 체형 핏 평가" />
 
           <MeasureMatch
             perSize={result.perSize}
@@ -108,7 +122,18 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
         </>
       )}
 
-      <TryOnPanel product={product} profile={profile} selectedSize={selectedSize} verdicts={verdicts} captureRef={captureRef} />
+      {onTryOn && !isShoes ? (
+        // 가상 피팅은 별도 탭에서 해요. 이 옷과 고른 사이즈를 그대로 넘겨요.
+        <button type="button" className="card tryon-link" onClick={() => onTryOn({ product, size: selectedSize, verdicts })}>
+          <span>
+            <strong>가상 피팅</strong>
+            <span className="muted small">내 사진에 이 옷({selectedSize || '-'})을 입혀 보기</span>
+          </span>
+          <span aria-hidden>→</span>
+        </button>
+      ) : (
+        <TryOnPanel product={product} profile={profile} selectedSize={selectedSize} verdicts={verdicts} captureRef={captureRef} />
+      )}
 
       <SimilarInWardrobe target={currentTarget} wardrobe={wardrobe} />
 

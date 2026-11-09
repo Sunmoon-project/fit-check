@@ -7,7 +7,7 @@
   </head>
   <body>
     <h1>핏체크</h1>
-    <p class="hint">체형 정보는 이 브라우저(chrome.storage.local)에만 저장되고 밖으로 전송되지 않아요.</p>
+    <p class="hint">키·몸무게만 넣어도 비슷한 체형 후기로 추천해요. 이 브라우저에만 저장돼요.</p>
     <form id="form" novalidate>
       <fieldset>
         <legend>성별</legend>
@@ -26,13 +26,17 @@
         </select>
       </label>
       <details>
-        <summary>직접 잰 치수 (선택)</summary>
+        <summary>직접 잰 치수 <span class="opt">선택 · 넣으면 더 자세해요</span></summary>
+        <p class="hint sub">비워 둔 치수는 키·몸무게와 비슷한 체형 후기로 추정해요. 칸을 누르면 재는 위치가 그림에 나와요.</p>
+        <div id="guide" class="guide" aria-live="polite"></div>
         <div class="two">
           <label>어깨너비<input name="m-shoulder" type="number" inputmode="decimal" /></label>
           <label>가슴둘레<input name="m-chest" type="number" inputmode="decimal" /></label>
           <label>허리둘레<input name="m-waist" type="number" inputmode="decimal" /></label>
           <label>엉덩이둘레<input name="m-hip" type="number" inputmode="decimal" /></label>
           <label>허벅지둘레<input name="m-thigh" type="number" inputmode="decimal" /></label>
+          <label>팔길이<input name="m-arm" type="number" inputmode="decimal" /></label>
+          <label>다리길이<input name="m-leg" type="number" inputmode="decimal" /></label>
           <label>발길이(mm)<input name="m-footLength" type="number" inputmode="decimal" /></label>
           <label>발볼
             <select name="footWidth">

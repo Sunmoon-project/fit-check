@@ -9,8 +9,10 @@
     "build": "vite build",
     "build:file": "vite build --mode file",
     "preview": "vite preview",
-    "smoke": "node scripts/smoke.mjs",
+    "start": "node server/start.js",
+    "smoke": "node scripts/smoke.mjs && node scripts/smokeImageSearch.mjs",
     "validate:fit": "node scripts/validateFit.mjs",
+    "eval:fit": "node scripts/evalFit.mjs",
     "validate:body": "node scripts/validateBody.mjs",
     "build:extension": "node scripts/buildExtension.mjs && node scripts/checkExtension.mjs"
   },

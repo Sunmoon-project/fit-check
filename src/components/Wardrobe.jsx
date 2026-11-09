@@ -5,6 +5,8 @@ import { parseImportText, LIMITS } from '../lib/wardrobeImport.js'
 import { trimNote } from '../lib/storage.js'
 import { SHOE_UNSUPPORTED_NOTE } from '../lib/shoeFit.js'
 import ReviewTab from './ReviewTab.jsx'
+import { EaseGauge, FitDistBar } from './FitVisuals.jsx'
+import { PART_LABEL, EXTRA_PART_LABEL } from '../data/measurements.js'
 
 const MAX_COMPARE = 4
 
@@ -28,6 +30,28 @@ function VerdictLine({ verdicts, item }) {
       {verdicts.map((v) => <span key={v.part} className={`v-${v.key}`}>{v.label} {v.verdict}</span>)}
       {item?.verdictStatus === 'converted' && item.verdictNote ? <span className="muted small wd-converted"> · {item.verdictNote}</span> : null}
     </span>
+  )
+}
+
+const LENGTH_KEYS = { topLength: '총장', outerLength: '총장', inseam: '총장', dressLength: '총장' }
+const partName = (k) => PART_LABEL[k] || EXTRA_PART_LABEL[k] || LENGTH_KEYS[k] || k
+
+// 확장(또는 결과 화면)에서 담은 정보 그대로: 부위별 여유 게이지, 그 사이즈 실측, 후기 핏 분포, 리뷰·사진
+function ItemDetail({ item, onClear }) {
+  const measures = item.measures ? Object.entries(item.measures).filter(([, v]) => typeof v === 'number') : []
+  const unit = (k) => (k === 'footLength' || k === 'footWidth' ? 'mm' : 'cm')
+  return (
+    <div className="wd-detail-body">
+      <EaseGauge verdicts={item.verdicts} />
+      {measures.length > 0 && (
+        <div className="wd-measures">
+          <span className="muted small">{item.size} 실측</span>
+          {measures.map(([k, v]) => <span key={k} className="wd-mchip">{partName(k)} <b>{v}{unit(k)}</b></span>)}
+        </div>
+      )}
+      <FitDistBar reviews={item.reviews} title="담은 후기 핏 평가" />
+      {item.reviews?.length > 0 && <ReviewTab reviews={item.reviews} onClear={onClear} />}
+    </div>
   )
 }
 
@@ -168,10 +192,10 @@ export default function Wardrobe({ items, onDelete, onBack, onImport, onClearRev
                       )}
                       <button type="button" className="btn text danger" onClick={() => remove(w.id)}>삭제</button>
                     </div>
-                    {w.reviews?.length > 0 && (
-                      <details className="wd-reviews">
-                        <summary className="small">리뷰 {w.reviews.length}건</summary>
-                        <ReviewTab reviews={w.reviews} onClear={onClearReviews ? () => onClearReviews(w.id) : null} />
+                    {(w.verdicts?.length > 0 || w.measures || w.reviews?.length > 0) && (
+                      <details className="wd-reviews wd-detail">
+                        <summary className="small">자세히 보기{w.reviews?.length ? ` · 리뷰 ${w.reviews.length}건` : ''}</summary>
+                        <ItemDetail item={w} onClear={onClearReviews ? () => onClearReviews(w.id) : null} />
                       </details>
                     )}
                   </div>

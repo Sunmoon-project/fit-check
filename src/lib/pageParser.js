@@ -41,6 +41,21 @@ function collectJsonLd(root) {
 
 const isType = (n, t) => (Array.isArray(n['@type']) ? n['@type'].includes(t) : n['@type'] === t)
 
+// JSON-LD Product에서 브랜드 이름과 품번(mpn, productID, sku 순)을 읽어요. 사이즈표 모음의 검색 단서로만 쓰고, 학습의 brand와는 따로 둬요.
+function ldBrandCode(nodes) {
+  for (const n of nodes || []) {
+    if (!isType(n, 'Product')) continue
+    const b = n.brand
+    const brand = typeof b === 'string' ? b : typeof b?.name === 'string' ? b.name : ''
+    const code = [n.mpn, n.productID, n.sku].find((v) => (typeof v === 'string' || typeof v === 'number') && String(v).trim()) ?? ''
+    // 통화 코드(KRW, JPY 등 영문 3글자)는 브랜드 지역 판단의 약한 근거로만 써요.
+    const offer = Array.isArray(n.offers) ? n.offers[0] : n.offers
+    const cur = typeof offer?.priceCurrency === 'string' && /^[A-Za-z]{3}$/.test(offer.priceCurrency.trim()) ? offer.priceCurrency.trim().toUpperCase() : ''
+    if (brand || code) return { chartBrand: brand.trim().slice(0, 40), chartCode: String(code).trim().slice(0, 40), priceCurrency: cur }
+  }
+  return { chartBrand: '', chartCode: '', priceCurrency: '' }
+}
+
 // 칸 글자: 요소 경계와 <br>에서 띄어쓰기를 넣어 '1'+'신발 길이'가 '1신발 길이'로 붙어도 읽을 수 있게 하고, 공백은 하나로 줄여요.
 // (textContent 그대로 쓰면 '<span>1</span><br>신발' 같은 줄바꿈이 사라져 단어가 붙어요. 열 번호 떼기는 productCore가 해요.)
 function cellTextOf(c) {
@@ -984,6 +999,7 @@ export function parsePage(root, pageUrl = '', opts = {}) {
     // 대상 성별은 최종 카테고리가 신발일 때만 옵션 범위를 근거로 써요 (근거 종류와 점수만 담고 원문은 담지 않아요)
     targetGender: classifyTargetGender({ name, breadcrumb: classifyInput.breadcrumb, jsonLdGender: classifyInput.jsonLdGender, optionLabels: [...optionLabels, ...shoeOptionLabels], isShoes: category === 'shoes' }),
     emoji: CATEGORY_EMOJI[category],
+    ...ldBrandCode(ld),
     sizeChart: sizeChart
       ? {
           unit: sizeChart.unit,

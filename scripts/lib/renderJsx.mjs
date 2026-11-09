@@ -9,7 +9,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 const ROOT = resolve(import.meta.dirname, '..', '..')
-const COMPONENTS = ['ResultView', 'ShoeCompare', 'CategoryPicker', 'SizeSummary', 'SimilarityCompare', 'Wardrobe', 'TryOnPanel']
+const COMPONENTS = ['ResultView', 'ShoeCompare', 'CategoryPicker', 'SizeSummary', 'SimilarityCompare', 'Wardrobe', 'TryOnPanel', 'SizeChartLibrary', 'FitComment', 'UsedListing', 'MeasureGuide']
 
 // 컴포넌트가 import 시점이나 렌더 중에 window/localStorage를 건드려도 죽지 않게 하는 최소한의 가짜.
 // 쓰는 동안에만 걸어 두고 끝나면 원래대로 돌려놔서, 뒤에 오는 smoke 검사(typeof window 등)에 새지 않게 해요.

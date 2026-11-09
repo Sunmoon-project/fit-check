@@ -1,10 +1,12 @@
 // 개발 서버(vite)에 붙는 작은 API.
 //   POST /api/product  { url }                          → 상품 페이지를 가져와 상품·사이즈표·리뷰 추출
 //   POST /api/tryon    { personImage, garmentImage, category, garmentName? } → Hugging Face IDM-VTON 가상 피팅 (무료)
-//   GET  /api/status                                    → 서버 기능 사용 가능 여부와 사용하는 Space
-// 키 없이도 동작해요. 선택 토큰(HF_TOKEN)은 서버에만 있고 브라우저로 보내지 않습니다.
+//   POST /api/image-search { imageUrl }                 → 사진 역검색(외부 서비스, 설정이 있을 때만). 미검증: server/imageSearch.js
+//   GET  /api/status                                    → 서버 기능 사용 가능 여부와 사용하는 Space, imageSearch 켜짐 여부
+// 키 없이도 동작해요. 선택 토큰(HF_TOKEN)과 사진 역검색 키(IMAGE_SEARCH_API_KEY)는 서버에만 있고 브라우저로 보내지 않습니다.
 import { safeFetchHtml, FetchError } from './safeFetch.js'
 import { parseProductHtml } from './productParser.js'
+import { createImageSearchService, ImageSearchError } from './imageSearch.js'
 import { runHfTryOn, isValidSpaceId, isTryOnSupported, DEFAULT_SPACE } from './hfTryOn.js'
 
 const MAX_BODY = 15 * 1024 * 1024 // 사진 두 장(data URI) 기준
@@ -78,12 +80,13 @@ async function handleProduct(req, res) {
 }
 
 async function handleTryOn(req, res, hf) {
-  const { personImage, garmentImage, category, garmentName } = await readJson(req)
+  const { personImage, garmentImage, category, garmentName, model } = await readJson(req)
   if (!isImageInput(personImage) || !isImageInput(garmentImage)) {
     return send(res, 400, { error: 'INVALID_IMAGE', message: '사진 형식을 확인해주세요 (PNG, JPG, WEBP).' })
   }
-  if (!isTryOnSupported(category)) {
-    return send(res, 400, { error: 'UNSUPPORTED', message: 'AI 합성은 상의·아우터만 지원해요. 무료 IDM-VTON Space는 상반신만 인식해요.' })
+  // model: 'leffa'(상의·하의·원피스) | 'idm'(상의·아우터). 모르는 값은 예전처럼 IDM-VTON이에요.
+  if (!isTryOnSupported(category, model)) {
+    return send(res, 400, { error: 'UNSUPPORTED', message: model === 'leffa' ? 'AI 합성은 상의·아우터·하의·원피스만 지원해요.' : 'AI 합성은 상의·아우터만 지원해요. 무료 IDM-VTON Space는 상반신만 인식해요.' })
   }
 
   const ctrl = new AbortController()
@@ -97,6 +100,7 @@ async function handleTryOn(req, res, hf) {
       space: hf.space,
       token: hf.token,
       signal: ctrl.signal,
+      model,
     })
     return send(res, 200, result)
   } catch (e) {
@@ -113,24 +117,37 @@ async function handleTryOn(req, res, hf) {
   }
 }
 
-export function fitCheckApi(env) {
+async function handleImageSearch(req, res, imageSearch) {
+  const { imageUrl } = await readJson(req)
+  try {
+    const r = await imageSearch.search(imageUrl)
+    return send(res, 200, { candidates: r.candidates, pages: r.pages })
+  } catch (e) {
+    if (e instanceof ImageSearchError) return send(res, e.status, { error: e.code, message: e.message })
+    throw e
+  }
+}
+
+export function fitCheckApi(env, opts = {}) {
   let space = env.HF_SPACE || DEFAULT_SPACE
   if (!isValidSpaceId(space)) {
     console.warn(`[api] HF_SPACE 형식이 올바르지 않아 기본값(${DEFAULT_SPACE})을 써요.`)
     space = DEFAULT_SPACE
   }
   const hf = { space, token: env.HF_TOKEN || '' }
+  const imageSearch = opts.imageSearch || createImageSearchService(env)
   const middleware = async (req, res, next) => {
     const path = (req.url || '').split('?')[0]
     if (!path.startsWith('/api/')) return next()
     try {
-      if (path === '/api/status' && req.method === 'GET') return send(res, 200, { tryon: true, provider: 'huggingface', space, token: Boolean(hf.token) })
+      if (path === '/api/status' && req.method === 'GET') return send(res, 200, { tryon: true, provider: 'huggingface', space, token: Boolean(hf.token), ...imageSearch.status() })
       if (req.method === 'POST') {
         const bad = checkPostRequest(req.headers)
         if (bad) return send(res, bad.status, { error: bad.error, message: bad.message })
       }
       if (path === '/api/product' && req.method === 'POST') return await handleProduct(req, res)
       if (path === '/api/tryon' && req.method === 'POST') return await handleTryOn(req, res, hf)
+      if (path === '/api/image-search' && req.method === 'POST') return await handleImageSearch(req, res, imageSearch)
       return send(res, 404, { error: 'NOT_FOUND' })
     } catch (e) {
       console.error('[api]', e)
@@ -139,6 +156,7 @@ export function fitCheckApi(env) {
   }
   return {
     name: 'fit-check-api',
+    middleware, // server/start.js(프로덕션·Docker)에서 Vite 없이 씀
     configureServer(server) {
       server.middlewares.use(middleware)
     },

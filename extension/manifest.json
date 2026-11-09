@@ -27,7 +27,14 @@
       "matches": [
         "*://www.musinsa.com/*",
         "*://www.29cm.co.kr/*",
-        "*://www.wconcept.co.kr/*"
+        "*://www.wconcept.co.kr/*",
+        "*://bunjang.co.kr/*",
+        "*://www.bunjang.co.kr/*",
+        "*://m.bunjang.co.kr/*",
+        "*://fruitsfamily.com/*",
+        "*://www.fruitsfamily.com/*",
+        "*://*.arcteryx.co.kr/*",
+        "*://*.arcteryx.com/*"
       ],
       "js": [
         "content.js"

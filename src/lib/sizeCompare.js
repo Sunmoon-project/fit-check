@@ -20,9 +20,9 @@ export const partUnit = (part) => (MM_PARTS.includes(part) ? 'mm' : 'cm')
 /**
  * chart: { rows, measures, display, category }  bodyValues: bodyValuesForProfile().values  measured: Set|Array(직접 잰 부위)
  * @returns {{ sizes: Array<{ size, label, rows: Array }>, measureOnlyParts: string[], hasComparable: boolean }}
- * row: { part, label, unit, garment, body, bodyKind('measured'|'estimated'|'standard'|null), ease, verdict, level, key, isLength, basis('rule'|'heuristic'|'none'), note }
+ * row: { part, label, unit, garment, body, bodyKind('measured'|'review'|'estimated'|'standard'|null; review = 후기로 보정한 추정), ease, verdict, level, key, isLength, basis('rule'|'heuristic'|'none'), note }
  */
-export function compareSizes({ chart, bodyValues = {}, measured = [], category, calibration = {} }) {
+export function compareSizes({ chart, bodyValues = {}, measured = [], category, calibration = {}, learned = null, reviewParts = {}, photoParts = [] }) {
   if (!chart?.measures) return { sizes: [], measureOnlyParts: [], hasComparable: false }
   const cat = category || chart.category
   const mine = measured instanceof Set ? measured : new Set(measured)
@@ -34,7 +34,7 @@ export function compareSizes({ chart, bodyValues = {}, measured = [], category, 
     const key = Object.keys(chart.measures).find((k) => k.toUpperCase() === size)
     const m = key == null ? null : chart.measures[key]
     if (!m) continue
-    const judged = new Map(partVerdicts(bodyValues, m, cat, calibration).map((v) => [v.part, v]))
+    const judged = new Map(partVerdicts(bodyValues, m, cat, calibration, learned).map((v) => [v.part, v]))
     const order = [...new Set([...(CATEGORY_PARTS[cat] || []).filter((p) => p in m), ...Object.keys(m)])]
     const rows = []
     for (const part of order) {
@@ -46,7 +46,7 @@ export function compareSizes({ chart, bodyValues = {}, measured = [], category, 
       if (v) {
         rows.push({
           part, label: v.label, unit: v.unit, garment, body: v.body,
-          bodyKind: isLength ? 'standard' : mine.has(part) ? 'measured' : 'estimated',
+          bodyKind: part === 'inseam' && mine.has('leg') ? 'leg' : isLength ? 'standard' : mine.has(part) ? 'measured' : reviewParts?.[part] ? 'review' : photoParts.includes(part) ? 'photo' : 'estimated',
           ease: v.ease, verdict: v.verdict, level: v.level, key: v.key, isLength, basis, note: basis === 'heuristic' ? '휴리스틱 기준' : '',
         })
         hasComparable = true

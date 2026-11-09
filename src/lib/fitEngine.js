@@ -5,6 +5,10 @@
 import { PART_LABEL, CATEGORY_PARTS } from '../data/measurements.js'
 import { estimateBody } from './bodyEstimate.js'
 import { detectReviewOutliers } from './reviewOutliers.js'
+import { resolveLearned, learningStatus, brandKeyOf } from './learnedModel.js'
+import { classifyBrandRegion, regionInputOf, regionLine } from './brandRegion.js'
+import { sizeSystemHint } from './sizeSystems.js'
+import { reviewBodyEstimate, REVIEW_EST_PARTS } from './reviewBodyEstimate.js'
 
 // ---------- 신발 허용 구간 (휴리스틱) ----------
 // d = 신발 사이즈(mm) - 발길이(mm). 브랜드/라스트마다 달라서 정확한 값이 아니라 일반적인 착용감을 바탕으로 한 기준이에요.
@@ -51,6 +55,7 @@ export const EASE_RULES = {
 // 기장 항목의 표준값 = 키 × 비율 (휴리스틱)
 const LENGTH_RATIO = { topLength: 0.39, outerLength: 0.41, inseam: 0.58, dressLength: 0.68 }
 const LENGTH_PARTS = Object.keys(LENGTH_RATIO)
+const LEG_RATIO = 0.45
 
 export const VERDICTS = [
   { key: 'tooTight', label: '작을 수 있음', lengthLabel: '짧을 수 있음' },
@@ -69,15 +74,18 @@ const isNum = (v) => typeof v === 'number' && Number.isFinite(v)
 
 // 신체 치수(추정 + 직접 입력) + 기장 표준값
 export function bodyValuesForProfile(profile) {
-  const { values, measured } = estimateBody(profile)
+  const { values, measured, photo } = estimateBody(profile)
   const out = { ...values }
   for (const [k, r] of Object.entries(LENGTH_RATIO)) out[k] = round1(profile.height * r)
-  return { values: out, measured }
+  // 다리길이를 직접 쟀으면 바지 총장 기준을 키 대신 다리길이 비율로 잡아요 (평균 다리길이 = 키 × LEG_RATIO).
+  if (measured.has('leg')) out.inseam = round1(values.leg * (LENGTH_RATIO.inseam / LEG_RATIO))
+  return { values: out, measured, photo }
 }
 
 // 보정 오프셋만큼 기준을 평행이동해서 판정
-export function classifyEase(part, ease, offset = 0) {
-  const r = EASE_RULES[part]
+// rule을 주면(학습값으로 보정된 기준) EASE_RULES 대신 그 기준을 써요. 없으면 기존 동작 그대로예요.
+export function classifyEase(part, ease, offset = 0, rule = null) {
+  const r = rule || EASE_RULES[part]
   if (!r) return null
   if (part === 'footLength') return classifyShoeEase(ease - offset)
   if (ease < r.tight + offset) return { ...VERDICTS[0], level: 0 }
@@ -89,7 +97,11 @@ export function classifyEase(part, ease, offset = 0) {
 
 // 한 사이즈의 부위별 판정
 // 반환: [{ part, label, body, garment, ease, verdict, level, key, unit, isLength }]
-export function partVerdicts(bodyValues, measuresForSize, category, calibration = {}) {
+// 학습값(resolveLearned 결과)이 있으면 부위별 기준과 브랜드 오프셋(cm)을 더해 써요. 신발(mm)에는 브랜드 오프셋을 쓰지 않아요.
+const ruleOf = (part, learned) => learned?.rules?.[part] || EASE_RULES[part]
+const offsetOf = (part, calibration, learned) => (calibration[part]?.offset || 0) + (part === 'footLength' ? 0 : learned?.offset || 0)
+
+export function partVerdicts(bodyValues, measuresForSize, category, calibration = {}, learned = null) {
   if (!measuresForSize) return []
   const order = [...new Set([...(CATEGORY_PARTS[category] || []), ...Object.keys(measuresForSize)])]
   const out = []
@@ -98,7 +110,7 @@ export function partVerdicts(bodyValues, measuresForSize, category, calibration 
     const body = bodyValues[part]
     if (!EASE_RULES[part] || !isNum(garment) || !isNum(body)) continue
     const ease = round1(garment - body)
-    const v = classifyEase(part, ease, calibration[part]?.offset || 0)
+    const v = classifyEase(part, ease, offsetOf(part, calibration, learned), learned?.rules?.[part] || null)
     const isLength = LENGTH_PARTS.includes(part)
     out.push({
       part,
@@ -163,17 +175,17 @@ function measuresOf(sizeChart, size) {
 }
 
 // 사이즈별 점수(0~100). 목표 여유분에서 멀수록 감점, 작을 수 있는 부위는 크게 감점.
-export function recommendSize(bodyValues, sizeChart, category, preferredFit = 'regular', calibration = {}) {
+export function recommendSize(bodyValues, sizeChart, category, preferredFit = 'regular', calibration = {}, learned = null) {
   if (!sizeChart?.measures) return null
   const perSize = []
   for (const size of chartSizes(sizeChart)) {
-    const verdicts = partVerdicts(bodyValues, measuresOf(sizeChart, size), category, calibration)
+    const verdicts = partVerdicts(bodyValues, measuresOf(sizeChart, size), category, calibration, learned)
     if (verdicts.length === 0) continue
     let sum = 0
     let wsum = 0
     for (const v of verdicts) {
-      const rule = EASE_RULES[v.part]
-      const off = calibration[v.part]?.offset || 0
+      const rule = ruleOf(v.part, learned)
+      const off = offsetOf(v.part, calibration, learned)
       const span = rule.relaxed - rule.tight
       let p = (Math.abs(v.ease - (targetEase(rule, preferredFit) + off)) / span) * 100
       if (v.level === 0) p += 40
@@ -301,10 +313,15 @@ function describeVerdicts(verdicts) {
 }
 
 // AI 핏 코멘트: 후기 투표 + 실측 비교를 합친 추천
-export function generateFitComment(profile, product, calibration = {}) {
-  const { values, measured } = bodyValuesForProfile(profile)
+// model: 학습값 묶음(learnedModel.js). 없거나 버전이 다르면 기존 동작 그대로예요. 출처가 브라우저든 서버든 같은 코드로 읽어요.
+export function generateFitComment(profile, product, calibration = {}, model = null) {
+  // 브랜드 지역(추정): 같은 지역 브랜드들로 모은 학습 오프셋을 고를 때만 판정에 영향을 줘요. 근거가 없으면 unknown이고 보정은 0이에요.
+  const regionInfo = classifyBrandRegion(regionInputOf(product))
+  const regionKey = regionInfo.region === 'unknown' ? null : regionInfo.region
+  const learned = model ? resolveLearned(model, product.category, brandKeyOf(product), regionKey) : null
+  const formula = bodyValuesForProfile(profile)
+  const measured = formula.measured
   const preferredFit = profile.preferredFit || 'regular'
-  const measureResult = recommendSize(values, product.sizeChart, product.category, preferredFit, calibration)
   const sizeList = chartSizes(product.sizeChart)
   const optionKeys = (product.optionLabels || []).map(normKey)
   // 추천은 사이즈표의 이름, 표가 없으면 구매 옵션의 이름 안에서만 해요.
@@ -312,6 +329,15 @@ export function generateFitComment(profile, product, calibration = {}) {
   const screened = screenReviews(product.reviews || [], product)
   const reviewList = screened.kept.map((r) => (r.size ? { ...r, size: canonicalSize(r.size, allowedKeys) } : r))
   const { matched, others } = splitReviews(profile, reviewList)
+  // 직접 잰 둘레 치수가 하나라도 있으면 '상세 입력'으로 보고 실측 비교를 우선해요. 없으면 비슷한 체형 후기를 우선해요.
+  const detailed = REVIEW_EST_PARTS.some((p) => measured.has(p))
+  // 직접 재지 않은 둘레는 비슷한 체형 후기(산 사이즈 + 핏 평가)로 공식 추정값을 보정해요. 신발은 신발 전용 로직을 써요.
+  const est = product.category === 'shoes' || !product.sizeChart?.measures
+    ? { values: formula.values, reviewParts: {} }
+    : reviewBodyEstimate({ values: formula.values, measured, reviews: matched, measuresOf: (size) => measuresOf(product.sizeChart, normKey(size)), rules: { ...EASE_RULES, ...(learned?.rules || {}) } })
+  const values = est.values
+  const reviewParts = est.reviewParts
+  const measureResult = recommendSize(values, product.sizeChart, product.category, preferredFit, calibration, learned)
   const disp = makeDisplay(product)
   const reviewPick = pickFromReviews(matched, sizeList)
   const topSim = matched[0]?.similarity ?? 0
@@ -340,7 +366,8 @@ export function generateFitComment(profile, product, calibration = {}) {
       recommendedSize = measureSize
       confidence = reviewPick.votes >= 2 && reviewPick.size === measureSize ? 'high' : 'medium'
       body.push(reviewSentence, `사이즈표 실측으로 보면 ${fitName} 핏 기준 ${disp(measureSize)}가 가장 잘 맞아요.`)
-    } else if (reviewPick.votes >= 3 && topSim >= 75 && !reviewSizeTooSmall) {
+    } else if ((reviewPick.votes >= 3 && topSim >= 75 && !reviewSizeTooSmall) || (!detailed && reviewPick.votes >= 2 && !reviewSizeTooSmall)) {
+      // 키·몸무게만 입력했으면 추정 치수보다 비슷한 체형의 실제 선택을 우선해요 (후기 2건 이상, 실측상 작을 수 있는 사이즈가 아닐 때).
       recommendedSize = reviewPick.size
       confidence = 'medium'
       body.push(reviewSentence, `다만 사이즈표 실측만 보면 ${disp(measureSize)}가 ${fitName} 핏에 더 가까워요.`)
@@ -392,9 +419,18 @@ export function generateFitComment(profile, product, calibration = {}) {
   const verdicts = perSize.find((p) => p.size === recommendedSize)?.verdicts || []
   if (verdicts.length) body.push(`${disp(recommendedSize)} 기준: ${describeVerdicts(verdicts)}`)
   if (verdicts.some((v) => !v.isLength && !measured.has(v.part))) {
-    notes.push('직접 잰 치수가 없는 부위는 키·몸무게·체형으로 추정했어요(±3~5cm).')
+    const fromReviews = verdicts.filter((v) => reviewParts[v.part]).map((v) => v.label)
+    notes.push(fromReviews.length
+      ? `직접 잰 치수가 없는 부위는 키·몸무게로 추정하고, ${fromReviews.join('·')}는 비슷한 체형 후기(산 사이즈·핏 평가)로 보정했어요(±3~5cm).`
+      : '직접 잰 치수가 없는 부위는 키·몸무게·체형으로 추정했어요(±3~5cm).')
+  }
+  // 1단계(키·몸무게만) 안내: 다음 단계(직접 잰 치수)로 더 자세해진다는 것을 알려요. 신발은 발길이를 따로 써요.
+  if (!detailed && recommendedSize && product.category !== 'shoes' && (reviewPick || Object.keys(reviewParts).length)) {
+    notes.push('키·몸무게만 입력해서 비슷한 체형 후기를 우선했어요. 어깨·가슴 등을 직접 재서 넣으면 실측 비교로 더 자세히 추천해요.')
   }
   if (calibrated) notes.push('내 착용 기록으로 판정 기준을 보정했어요.')
+  const learning = model ? learningStatus(model, product.category, brandKeyOf(product), regionKey) : null
+  if (learning?.used) notes.push('이 브라우저에 모은 후기로 기준을 조금 옮겼어요(정확도를 잰 값은 아니에요).')
   notes.push('후기와 사이즈표를 종합한 참고용 추천이에요. 소재와 신축성에 따라 다를 수 있어요.')
 
   const compared = verdicts.filter((v) => !v.isLength)
@@ -407,6 +443,16 @@ export function generateFitComment(profile, product, calibration = {}) {
     measuredParts: compared.filter((v) => measured.has(v.part)).length,
     estimatedParts: compared.filter((v) => !measured.has(v.part)).length,
     calibrated,
+    // 자세한 근거 줄(describeEvidence)에 쓰는 값. 모두 이 분석에서 센 값이고 정확도를 잰 값은 아니에요.
+    learnedState: !model ? 'none' : learning?.used ? 'used' : learning ? 'collecting' : 'none',
+    learnedCategorySamples: learned?.categorySamples ?? 0,
+    learnedTotalSamples: learned?.total ?? 0,
+    offsetSource: learned?.offsetSource ?? null,
+    offsetValue: learned?.offset ?? 0,
+    brandSamples: learned?.brandSamples ?? 0,
+    regionSamples: learned?.regionSamples ?? 0,
+    regionLine: regionLine(regionInfo),
+    partEase: compared.map((v) => ({ label: v.label, ease: v.ease, verdict: v.verdict, measured: measured.has(v.part) })),
     ...('reviewTotalOnPage' in product ? { reviewTotalOnPage: product.reviewTotalOnPage ?? null } : {}),
   }
 
@@ -426,6 +472,15 @@ export function generateFitComment(profile, product, calibration = {}) {
     perSize,
     verdicts,
     measured,
+    // 판정에 쓴 내 치수(공식 추정 + 후기 보정 + 직접 입력)와 후기로 보정한 부위. 비교 표가 같은 값을 보여주도록 넘겨요.
+    bodyValues: values,
+    reviewParts,
+    photoParts: [...(formula.photo || [])],
+    detailed,
+    regionInfo,
+    // 사이즈표를 못 읽었을 때만: 사이즈 표기의 뜻(근사/출처 확인 필요). 추천 계산에는 쓰지 않아요.
+    sizeSystem: product.sizeChart ? null : sizeSystemHint({ category: product.category, gender: product.targetGender?.gender === 'male' ? 'male' : null, optionLabels: product.optionLabels || [] }),
+    ...(learning ? { learning } : {}),
   }
 }
 
@@ -506,7 +561,34 @@ export function describeEvidence(evidence, confidence) {
     else if (e.estimatedParts > 0) reasons.push(`직접 잰 치수가 없어 ${e.estimatedParts}개 부위는 추정값으로 비교했어요.`)
     if (!reasons.length) reasons.push('후기와 사이즈표의 결과가 완전히 일치하지는 않아요.')
   }
-  return { summary: parts.join(' · '), reasons }
+  return { summary: parts.join(' · '), reasons, details: evidenceDetails(e) }
+}
+
+const signed = (v) => `${v > 0 ? '+' : ''}${v}`
+
+// 추천 사이즈 결과에 붙이는 자세한 근거 줄. 센 값(건수, 샘플 수, cm)만 보여주고, 정확도처럼 보이는 숫자는 만들지 않아요.
+// evidence에 해당 값이 없으면(예전 모양, 신발 등) 그 줄은 건너뛰어요.
+export function evidenceDetails(evidence) {
+  const e = evidence || {}
+  const lines = []
+  if (isNum(e.reviewTotal)) {
+    lines.push(
+      e.reviewTotal > 0
+        ? `후기 근거: 불러온 후기 ${e.reviewTotal}건 중 이상치 제외 ${e.reviewExcluded || 0}건, 비슷한 체형 ${e.reviewMatched}건, 그중 사이즈·핏을 밝힌 후기 ${e.reviewVotes}건`
+        : '후기 근거: 쓸 수 있는 후기가 없어요',
+    )
+  }
+  if (e.learnedState === 'used') lines.push(`학습값: 사용(이 종류 샘플 ${e.learnedCategorySamples}건, 이 브라우저에 모은 후기 기준)`)
+  else if (e.learnedState === 'collecting') lines.push(`학습값: 모으는 중(전체 샘플 ${e.learnedTotalSamples}건, 이 종류는 아직 적용할 차이가 없어요)`)
+  if (e.offsetSource === 'brand') lines.push(`브랜드 보정: ${signed(e.offsetValue)}cm (이 브랜드 샘플 ${e.brandSamples}건, 표본이 적을수록 0에 가깝게 줄여요)`)
+  else if (e.offsetSource === 'region') lines.push(`지역 보정: ${signed(e.offsetValue)}cm (같은 지역 브랜드 샘플 ${e.regionSamples}건, 검증 전 가설이라 모은 후기에서 확인된 만큼만 반영해요)`)
+  else if (e.learnedState === 'used' || e.learnedState === 'collecting') lines.push('브랜드·지역 보정: 없음(0cm, 모은 표본이 부족하거나 지역을 알 수 없어요)')
+  if (e.regionLine) lines.push(e.regionLine)
+  if (Array.isArray(e.partEase) && e.partEase.length) {
+    lines.push(`부위별 여유분 판정: ${e.partEase.map((p) => `${p.label} ${signed(p.ease)}cm ${p.verdict}${p.measured ? '' : '(추정)'}`).join(', ')}`)
+  }
+  if (lines.length) lines.push('위 수치는 센 값이고 규칙 기반 판정이에요. 정확도를 측정한 값은 아니에요.')
+  return lines
 }
 
 export const FIT_LABEL = {

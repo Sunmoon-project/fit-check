@@ -7,6 +7,12 @@ import { compareSizes, compactCompare } from './sizeCompare.js'
 import { summarizeSizeChart } from './sizeSummary.js'
 import { targetGenderNotice } from './targetGender.js'
 import { shoeViewFor, shoeComment, feelSizeText } from './shoeFit.js'
+import { resolveLearned, brandKeyOf } from './learnedModel.js'
+import { classifyBrandRegion, regionInputOf, regionLine } from './brandRegion.js'
+import { toSamples } from './learnSamples.js'
+import { chartRecordFromProduct } from './sizeChartDb.js'
+import { usedSiteOf, readListing, listingText } from './usedListing.js'
+import { analyzeUsedListing } from './usedAnalyze.js'
 // 사용자가 직접 적은 사이즈표: 열 이름(예: 어깨 가슴 총장)과 줄(예: M 50 57 68) → buildSizeChart 입력 모양.
 // 저장하지 않고 이번 분석에만 씁니다. 잘못된 줄은 버려요.
 export function manualChartRows(columnsText, linesText) {
@@ -89,18 +95,38 @@ function exportData(product, pageUrl, result) {
 }
 
 // 사이즈 탭별 비교 표용 값: 내 치수(직접 입력/추정) vs 옷 실측 vs 여유 → 판정. 실측만 있는 부위는 그대로 표시해요.
-function compareView(product, profile, result) {
+function compareView(product, profile, result, learned = null) {
   if (!product.sizeChart) return { view: null, failed: false }
   try {
-    const { values } = bodyValuesForProfile(profile)
-    const cmp = compareSizes({ chart: product.sizeChart, bodyValues: values, measured: result.measured, category: product.category })
+    const values = result.bodyValues || bodyValuesForProfile(profile).values
+    const cmp = compareSizes({ chart: product.sizeChart, bodyValues: values, measured: result.measured, category: product.category, learned, reviewParts: result.reviewParts, photoParts: result.photoParts })
     return { view: cmp.sizes.length ? { ...compactCompare(cmp), recommended: result.recommendedSize ?? null } : null, failed: false }
   } catch {
     return { view: null, failed: true }
   }
 }
 
+// 번개장터·후르츠패밀리 같은 중고 판매글: 후기가 없다는 전제로 판매글 글(실측·사이즈 표기)과 사이즈표 DB(opts.usedChartMatches)로 판정해요.
+// 진단 리포트에는 건수만 담아요. 이 사이트들의 실제 페이지는 확인하지 못했어요(일반 규칙으로 읽어요).
+function analyzeUsedPage(root, pageUrl, profile, extVersion, opts, site) {
+  const listing = readListing(root)
+  const empty = !listing.title && !listing.bodyText && !listing.description
+  if (empty) {
+    return {
+      status: 'no-data',
+      usedSite: true,
+      message: '이 중고 판매글에서 제목이나 설명을 읽지 못했어요. 페이지가 다 열린 뒤 다시 눌러보거나, 핏체크 웹 앱의 중고 상품 분석에 판매글을 붙여넣어 주세요.',
+      diagnostics: collectDiagnostics(root, pageUrl, extVersion, { used: { basis: 'none', siteKnown: true } }),
+    }
+  }
+  const out = analyzeUsedListing({ ...listing, text: listingText(listing) }, profile, { chartMatches: opts.usedChartMatches || [], pageUrl, site })
+  out.diagnostics = collectDiagnostics(root, pageUrl, extVersion, { used: { ...out.counts, basis: out.basis, siteKnown: true } })
+  return out
+}
+
 export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) {
+  const usedSite = usedSiteOf(pageUrl)
+  if (usedSite) return analyzeUsedPage(root, pageUrl, profile, extVersion, opts, usedSite)
   const product = parsePage(root, pageUrl, opts)
   if (!product) return { status: 'no-product', message: NOT_PRODUCT_MESSAGE }
 
@@ -124,9 +150,15 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     }
   }
 
-  const result = generateFitComment(profile, product)
+  // 학습값 묶음(opts.learned)은 선택이에요. 없으면 기존 동작 그대로입니다. 브랜드 키는 상품 주소의 알려진 쇼핑몰 도메인에서 가져와요.
+  const learnBrand = brandKeyOf({ ...product, url: product.url || pageUrl })
+  if (learnBrand) product.learnBrand = learnBrand
+  product.regionUrl = pageUrl // 브랜드 지역 판단의 도메인 근거 (product.url이 없을 때만 쓰여요)
+  const result = generateFitComment(profile, product, {}, opts.learned || null)
+  const regionKey = result.regionInfo && result.regionInfo.region !== 'unknown' ? result.regionInfo.region : null
+  const learned = opts.learned ? resolveLearned(opts.learned, product.category, learnBrand, regionKey) : null
   const shoe = canCompareShoe ? shoeViewFor(product, profile) : null
-  const cmpView = shoe ? { view: null, failed: false } : compareView(product, profile, result)
+  const cmpView = shoe ? { view: null, failed: false } : compareView(product, profile, result, learned)
   // 사이즈표의 표시 이름('1 (M)')이 있으면 그 이름으로 보여줍니다.
   const disp = (x) => product.sizeChart?.display?.[String(x).replace(/\s/g, '').toUpperCase()] || x
   const view = (r) => reviewView(r, disp)
@@ -159,6 +191,11 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
       excludedTotal: (result.excludedReviews || []).length,
     },
     exportData: exportData(product, pageUrl, result),
+    // 학습값 사용 상태({ used, total, categorySamples, text })와, 요청했을 때만 이 상품 후기에서 만든 학습 샘플(개인 식별 정보 없음)
+    learning: result.learning || null,
+    // 사이즈표를 읽은 경우에만 사이즈표 모음에 저장할 입력(후기·체형 없음). 요청했을 때만 만들어요.
+    chartRecord: opts.collectSamples ? chartRecordFromProduct(product, { pageUrl }) : null,
+    learnSamples: opts.collectSamples ? toSamples(product, { pageUrl }) : [],
     compareView: cmpView.view,
     shoeView: shoe,
     // 상품 대상 성별이 프로필 성별과 다를 때만 { gender, text, mismatch } (옷에도 같은 함수)
@@ -171,6 +208,10 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     // 신발은 옷용 문구('무난해요', '슬림 핏 기준')를 쓰지 않고 신발 판정에서 만든 글을 써요.
     summary: shoeText ? shoeText.summary : evidence?.summary || '',
     reasons: shoeText ? shoeText.reasons : evidence?.reasons || [],
+    // 자세한 근거 줄(후기 건수·제외, 학습값·샘플 수, 브랜드/지역 보정, 부위별 여유분). 신발은 지역 줄만 있어요.
+    details: shoeText ? [regionLine(result.regionInfo)].filter(Boolean) : evidence?.details || [],
+    regionInfo: result.regionInfo ? { region: result.regionInfo.region, label: result.regionInfo.label, confidence: result.regionInfo.confidence, line: regionLine(result.regionInfo) } : null,
+    sizeSystem: result.sizeSystem || null,
     headline: shoeText ? shoeText.headline : result.headline,
     body: shoeText ? shoeText.body : result.body,
     note: shoeText ? shoeText.note : result.note,

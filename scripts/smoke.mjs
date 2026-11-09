@@ -46,7 +46,7 @@ import { join, resolve as resolvePath } from 'node:path'
 import vm from 'node:vm'
 import { build as viteBuild } from 'vite'
 import { findSimilar, describeDiff, categoryGroup, makeWardrobeItem } from '../src/lib/wardrobe.js'
-import { isPrivateIp, decodeHtml } from '../server/safeFetch.js'
+import { isPrivateIp, decodeHtml, safeLookup } from '../server/safeFetch.js'
 import { checkPostRequest } from '../server/api.js'
 import {
   parseHeightCm, parseWeightKg, normalizeFit, normalizeRow, normalizeLines,
@@ -59,6 +59,25 @@ import { toContribution, toBand, toDomain, contributionKey, ALLOWED_DOMAINS, SCH
 import { MAX_STEPS, MAX_MS, STALL_LIMIT, STOP_REASONS, AUTO_TARGET, MORE_STEP, shouldStop, isSafeMoreButton, isReviewTab, isInnerScroller, loadTarget, loadResultText, toReportStop } from '../src/lib/reviewLoader.js'
 import { CONSENT_SUMMARY, CONSENT_VERSION } from '../src/data/consent.js'
 import { loadConsent, purgeStaleConsent, saveConsent, enqueueContribution, loadContribQueue, recordsForUpload } from '../src/lib/storage.js'
+
+import { toSamples, mergeSamples } from '../src/lib/learnSamples.js'
+import { trainModel, validateModel, resolveLearned, learningStatus, emptyModel, LEARN, LEARN_SCHEMA_VERSION, brandKeyOf } from '../src/lib/learnedModel.js'
+import { LEARN_KEY, localAdapter, chromeAdapter, loadLearning, addSamples, resetLearning, learnFromProduct } from '../src/lib/learnStore.js'
+import { EASE_RULES, classifyEase } from '../src/lib/fitEngine.js'
+import { classifyBrandRegion, regionLine, regionKeyOf, BRAND_REGION_DICT, REGION_SCORE, REGION_HYPOTHESIS_NOTE } from '../src/lib/brandRegion.js'
+import { representativeMeasure, sizeSystemHint, SIZE_SYSTEM_FLAG } from '../src/lib/sizeSystems.js'
+import { createSizeChartDb, SIZE_CHART_DB_KEY, SIZE_CHART_DB_VERSION, normalizeText, normalizeCode, brandKeyOfName, modelSimilarity, modelTokens, chartRecordFromProduct, toEntry } from '../src/lib/sizeChartDb.js'
+
+import { USED_SITES, USED_SITES_NOTE, usedSiteOf, parseListingText, readListing, listingText, isUsedListingPage } from '../src/lib/usedListing.js'
+import { analyzeUsedListing, findChartMatches, usedSearchQuery, usedVerdictFrom, USED_DB_MIN_SCORE, USED_NO_REVIEW_NOTE } from '../src/lib/usedAnalyze.js'
+import { createImageSearcher, IMAGE_SEARCH_DISABLED_TEXT } from '../src/lib/imageSearch.js'
+import { createLabelReader, LABEL_OCR_DISABLED_TEXT } from '../src/lib/labelOcr.js'
+import {
+  DEMO_NOTE, NO_DATA_MESSAGE, wilson, assignFolds, predictFromEase, withinSizes, sizeOrderOf, eligibleReview, parseEvalInput,
+  summarizeLabels, summarizeSizes, judge, evaluateReviews, evaluateSamples, makeDemoDataset, formatReport as formatEvalReport,
+} from './lib/fitEval.mjs'
+import { runEvalCli } from './lib/evalCli.mjs'
+import { buildLearnExport, EXPORT_KIND } from '../src/lib/learnExport.js'
 
 let passed = 0
 function test(name, fn) {
@@ -258,6 +277,15 @@ test('isPrivateIp: 내부망·IPv4-mapped IPv6 차단, 공인 주소 허용', ()
   for (const ip of ['8.8.8.8', '1.1.1.1', '172.32.0.1', '211.231.99.80', '2606:4700::1111']) {
     assert.equal(isPrivateIp(ip), false, ip)
   }
+})
+
+await atest('safeLookup(DNS 리바인딩 방지): 접속 순간 내부 IP면 거부하고, 실제 요청이 이 lookup을 쓴다', async () => {
+  const run = (opts) => new Promise((r) => safeLookup('localhost', opts, (e, a) => r(e ? e.code : a)))
+  assert.equal(await run({}), 'BLOCKED')
+  assert.equal(await run({ all: true }), 'BLOCKED')
+  const code = readFileSync(new URL('../server/safeFetch.js', import.meta.url), 'utf8')
+  assert.ok(/lookup:\s*safeLookup/.test(code), 'request()가 safeLookup으로 접속해야 해요')
+  assert.ok(!/\bfetch\(/.test(code), '전역 fetch는 lookup을 고정하지 못해서 쓰지 않아요')
 })
 
 test('decodeHtml: Content-Type·meta charset으로 EUC-KR 해석', () => {
@@ -1368,7 +1396,8 @@ test('확장 manifest: MV3, 최소 권한, 광범위 호스트 권한·원격 �
   assert.deepEqual(checkManifest(EXT_MANIFEST), [])
   assert.deepEqual([...EXT_MANIFEST.permissions].sort(), ['activeTab', 'scripting', 'storage'])
   assert.equal(EXT_MANIFEST.host_permissions, undefined)
-  assert.ok(EXT_MANIFEST.content_scripts[0].matches.length <= 5)
+  // 쇼핑몰마다 한 줄씩 늘어나요. 너무 넓은 주소는 checkManifest가 따로 막아요.
+  assert.ok(EXT_MANIFEST.content_scripts[0].matches.length <= 10)
   assert.equal(EXT_MANIFEST.background, undefined, 'service worker 없음')
 })
 
@@ -1544,7 +1573,7 @@ test('diagnose: 리뷰 불러오기 멈춘 이유(시간 한도·중단)가 리�
 })
 
 // 확장 content.js를 임시 폴더에 IIFE로 빌드해 가짜 DOM(node:vm)에서 fab 클릭(run) 경로를 실행합니다. 실제 무신사·크롬이 아니에요.
-async function runContentInFakeDom(pageHtml = null, extra = {}, measurements = {}) {
+async function runContentInFakeDom(pageHtml = null, extra = {}, measurements = {}, learnStore = null) {
   const root = resolvePath(import.meta.dirname, '..')
   const outDir = mkdtempSync(join(tmpdir(), 'fitcheck-content-'))
   try {
@@ -1595,7 +1624,13 @@ async function runContentInFakeDom(pageHtml = null, extra = {}, measurements = {
       ...extra,
       chrome: {
         runtime: { getManifest: () => ({ version: '0.0.0' }), onMessage: { addListener: (f) => { listeners.msg = f } } },
-        storage: { local: { get: (k, cb) => cb({ fitcheckProfile: profile }), set: (...a) => { storageCalls.push(['set', a]); a.find((x) => typeof x === 'function')?.() }, remove: (...a) => storageCalls.push(['remove', a]), clear: (...a) => storageCalls.push(['clear', a]) } },
+        // learnStore(Map)를 주면 학습값 키만 실제로 저장·삭제하는 가짜 chrome.storage.local이 돼요 (JSON 왕복으로 복사). 없으면 예전과 같아요.
+        storage: { local: {
+          get: (k, cb) => cb({ fitcheckProfile: profile, ...(learnStore ? Object.fromEntries([...learnStore].map(([key, v]) => [key, JSON.parse(v)])) : {}) }),
+          set: (...a) => { storageCalls.push(['set', a]); if (learnStore && a[0] && typeof a[0] === 'object') for (const [key, v] of Object.entries(a[0])) learnStore.set(key, JSON.stringify(v)); a.find((x) => typeof x === 'function')?.() },
+          remove: (...a) => { storageCalls.push(['remove', a]); if (learnStore && typeof a[0] === 'string') learnStore.delete(a[0]); a.find((x) => typeof x === 'function')?.() },
+          clear: (...a) => storageCalls.push(['clear', a]),
+        } },
       },
     }
     sandbox.window = Object.assign(sandbox.window, sandbox)
@@ -5068,6 +5103,1333 @@ test('이상치: 웹 결과 화면(서버 렌더)에 제외된 후기가 사유�
   assert.ok(/전체 7건/.test(txt), '전체 건수에는 제외된 후기도 센다')
   const plain = textOf(render(WEB.ResultView, { product: clothing, profile, calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop }))
   assert.ok(!plain.includes('제외된 후기') && !plain.includes('제외됨('))
+})
+
+// ---- 후기 학습 (FEAT-002): 가짜 데이터만 씁니다. 실제 쇼핑몰·실측 정확도 확인이 아니에요 ----
+const LRN_CHART = {
+  measures: {
+    S: { shoulder: 44, chest: 95, arm: 60 },
+    M: { shoulder: 46, chest: 105, arm: 61 },
+    L: { shoulder: 48, chest: 120, arm: 62 },
+  },
+}
+const LRN_BODIES = [[172, 68], [174, 70], [175, 70], [176, 72], [178, 74]]
+// M(가슴 여유 4~10cm)을 산 10명은 '작아요', L(여유 19~25cm)을 산 10명은 '잘 맞아요'. 닉네임·본문·사진은 개인정보 검사용 표식이에요.
+const lrnReviews = () => [
+  ...LRN_BODIES.flatMap(([h, w], i) => [0, 1].map((k) => ({ id: `m${i}${k}`, nick: `닉네임M${i}${k}`, gender: 'male', height: h, weight: w, size: 'M', fit: 'small', text: `SECRETTEXT-M-${i}-${k}`, view: { photos: [`https://img.example/p-m${i}${k}.jpg`], body: `SECRETBODY-M-${i}-${k}` } }))),
+  ...LRN_BODIES.flatMap(([h, w], i) => [0, 1].map((k) => ({ id: `l${i}${k}`, nick: `닉네임L${i}${k}`, gender: 'male', height: h, weight: w, size: 'L', fit: 'true', text: `SECRETTEXT-L-${i}-${k}`, view: { photos: [`https://img.example/p-l${i}${k}.jpg`], body: `SECRETBODY-L-${i}-${k}` } }))),
+]
+const lrnProduct = (extra = {}) => ({ name: '학습용 가짜 상품', category: 'top', sizeChart: LRN_CHART, reviews: lrnReviews(), optionLabels: ['S', 'M', 'L'], url: 'https://www.musinsa.com/products/1', ...extra })
+const memAdapter = (map = new Map(), limit = Infinity) => ({
+  async get(k) { return map.has(k) ? JSON.parse(map.get(k)) : null },
+  async set(k, v) { const t = JSON.stringify(v); if (t.length > limit) return false; map.set(k, t); return true },
+  async remove(k) { map.delete(k) },
+})
+// 직접 만든 샘플: 라벨 small/true/large별 가슴 여유분
+const synth = (cat, brand, label, n, chest, day = 20000, tag = '') => Array.from({ length: n }, (_, i) => ({ id: `${cat}-${brand}-${label}-${tag}${i}`, cat, brand, label, w: 1, e: { chest }, d: day }))
+const chestVerdictKey = (r, size) => r.perSize.find((p) => p.size === size).verdicts.find((v) => v.part === 'chest').key
+
+test('학습: 후기가 샘플로 바뀌고 개인 식별 정보(닉네임·본문·사진·키·몸무게)는 담기지 않는다', () => {
+  const samples = toSamples(lrnProduct())
+  assert.equal(samples.length, 20)
+  assert.deepEqual(Object.keys(samples[0]).sort(), ['brand', 'cat', 'd', 'e', 'id', 'label', 'w'])
+  assert.equal(samples[0].cat, 'top')
+  assert.equal(samples[0].brand, 'musinsa.com')
+  assert.equal(samples.filter((x) => x.label === 'small').length, 10)
+  assert.ok(samples.every((x) => x.w === 1 && Object.values(x.e).every((v) => Number.isInteger(v * 2))), '가중치 1, 여유분은 0.5cm 단위')
+  const json = JSON.stringify(samples)
+  for (const bad of ['닉네임', 'SECRETTEXT', 'SECRETBODY', 'img.example', '학습용 가짜 상품', 'musinsa.com/products', 'height', 'weight', 'gender', 'size']) assert.ok(!json.includes(bad), `${bad} 없음`)
+  assert.equal(new Set(samples.map((x) => x.id)).size, 20, '중복 방지 id는 후기마다 다르다')
+  assert.deepEqual(toSamples({ ...lrnProduct(), category: 'shoes' }), [], '신발은 만들지 않는다')
+  assert.deepEqual(toSamples({ ...lrnProduct(), sizeChart: null }), [], '사이즈표가 없으면 만들지 않는다')
+})
+
+test('학습: 이상치로 제외된 후기는 샘플이 되지 않고, 가중치 낮춘 후기는 labelWeight를 쓴다', () => {
+  const base = lrnProduct()
+  const bad = { gender: 'male', height: 300, weight: 70, size: 'M', fit: 'small', text: '불가능한 키' }
+  const contra = { gender: 'male', height: 175, weight: 70, size: 'M', fit: 'small', text: '어깨는 작아요 기장은 커요' }
+  assert.equal(toSamples({ ...base, reviews: [...base.reviews, bad, contra] }).length, 20, '제외된 후기 2건은 쓰지 않는다')
+  // M 사이즈 비슷한 체형 다수가 '작아요'인데 혼자 '커요'인 후기: 제외는 아니고 가중치만 줄어든다
+  const odd = { id: 'odd', gender: 'male', height: 175, weight: 70, size: 'M', fit: 'large', text: '라벨 이상치' }
+  const withOdd = toSamples({ ...base, reviews: [...base.reviews, odd] })
+  assert.equal(withOdd.length, 21)
+  assert.deepEqual(withOdd.filter((x) => x.w !== 1).map((x) => [x.label, x.w]), [['large', 0.4]])
+})
+
+test('학습: 표본 0건이면 prior 그대로, 라벨당 3건 미만이면 유지, 표본이 늘수록 prior에서 더 멀어지고 한계를 넘지 않는다', () => {
+  assert.deepEqual(trainModel([], EASE_RULES).categories, {})
+  assert.equal(resolveLearned(trainModel([], EASE_RULES), 'top').applied, false)
+  const few2 = [...synth('top', null, 'small', 2, 12), ...synth('top', null, 'true', 2, 20)]
+  assert.deepEqual(trainModel(few2, EASE_RULES).categories.top.rules, {}, '라벨당 2건은 추정하지 않는다')
+  const snug = (n) => trainModel([...synth('top', null, 'small', n, 8), ...synth('top', null, 'true', n, 14)], EASE_RULES).categories.top.rules.chest.snug
+  const [s3, s10, s100] = [snug(3), snug(10), snug(100)]
+  assert.ok(s3 > EASE_RULES.chest.snug && s3 < s10 && s10 < s100, `${s3} < ${s10} < ${s100}`)
+  assert.ok(s100 <= EASE_RULES.chest.snug + LEARN.maxShift, '이동 한계')
+  const rule = trainModel([...synth('top', null, 'small', 10, 8), ...synth('top', null, 'true', 10, 14)], EASE_RULES).categories.top.rules.chest
+  assert.ok(rule.tight < rule.snug && rule.snug < rule.regular && rule.regular < rule.relaxed, '경계 순서 유지')
+  assert.equal(EASE_RULES.chest.snug, 6, 'EASE_RULES 원본은 바뀌지 않는다')
+})
+
+test('학습: 견고 통계 - 라벨 묶음의 극단값 한 건이 경계를 크게 흔들지 않는다', () => {
+  const clean = [...synth('top', null, 'small', 9, 12), ...synth('top', null, 'true', 9, 20)]
+  const dirty = [...clean, { ...synth('top', null, 'small', 1, 90, 20000, 'x')[0] }]
+  const a = trainModel(clean, EASE_RULES).categories.top.rules.chest.snug
+  const b = trainModel(dirty, EASE_RULES).categories.top.rules.chest.snug
+  assert.ok(Math.abs(a - b) < 0.3, `${a} vs ${b}`)
+})
+
+test('학습: 브랜드 오프셋은 표본 수로 축소되고, 표본이 모자란 브랜드는 0이다', () => {
+  const rows = (n, brand) => synth('top', brand, 'small', n, 14, 20000, brand)
+  const m = trainModel([...rows(3, 'few'), ...rows(30, 'many'), ...rows(2, 'tiny')], EASE_RULES)
+  const b = m.brands.top
+  assert.ok(b.many.offset > b.few.offset && b.few.offset > 0, `${b.many.offset} > ${b.few.offset} > 0`)
+  assert.ok(b.many.offset <= LEARN.maxBrandOffset)
+  assert.equal(b.tiny, undefined, '2건은 오프셋을 만들지 않는다')
+  assert.equal(resolveLearned(m, 'top', 'tiny').offset, 0)
+  assert.equal(resolveLearned(m, 'top', 'many').offset, b.many.offset)
+  // 같은 여유분에서 '작아요'가 몰리면(오프셋 +) 같은 여유분이 더 타이트하게 판정된다
+  assert.ok(classifyEase('chest', 9, b.many.offset).level < classifyEase('chest', 9, 0).level)
+})
+
+test('학습: 스키마 버전이 다른 학습값 묶음은 쓰이지 않고, 저장된 다른 버전은 폐기된다', async () => {
+  const m = trainModel([...synth('top', null, 'small', 10, 12), ...synth('top', null, 'true', 10, 20)], EASE_RULES)
+  assert.ok(validateModel(m))
+  assert.equal(validateModel({ ...m, schemaVersion: LEARN_SCHEMA_VERSION + 1 }), null)
+  assert.equal(resolveLearned({ ...m, schemaVersion: 0 }, 'top'), null)
+  const baseline = generateFitComment(profile, lrnProduct())
+  const stale = generateFitComment(profile, lrnProduct(), {}, { ...m, schemaVersion: 0 })
+  assert.deepEqual(stale, baseline, '버전이 다른 묶음은 무시하고 기존 결과와 같다')
+  // 저장소: 샘플 스키마가 다르면 전부 폐기
+  const map = new Map([[LEARN_KEY, JSON.stringify({ schemaVersion: 0, samples: synth('top', null, 'small', 5, 12), model: m })]])
+  const st = await loadLearning(memAdapter(map))
+  assert.deepEqual([st.samples.length, st.model], [0, null])
+  assert.ok(!map.has(LEARN_KEY), '폐기하면 저장소에서도 지운다')
+  // 모델만 다른 버전이면 샘플로 다시 만든다
+  const map2 = new Map([[LEARN_KEY, JSON.stringify({ schemaVersion: LEARN_SCHEMA_VERSION, samples: [...synth('top', null, 'small', 10, 12), ...synth('top', null, 'true', 10, 20)], model: { ...m, schemaVersion: 0 } })]])
+  const st2 = await loadLearning(memAdapter(map2))
+  assert.equal(st2.samples.length, 20)
+  assert.ok(st2.model.categories.top.rules.chest, '샘플로 다시 학습')
+})
+
+await atest('학습 저장: 중복 후기는 한 번만 쌓이고, 저장 내용에 개인 식별 정보가 없다', async () => {
+  const map = new Map()
+  const ad = memAdapter(map)
+  const r1 = await learnFromProduct(ad, lrnProduct())
+  assert.deepEqual([r1.added, r1.total], [20, 20])
+  const r2 = await learnFromProduct(ad, lrnProduct())
+  assert.deepEqual([r2.added, r2.total], [0, 20], '같은 상품을 다시 분석해도 늘지 않는다')
+  const stored = map.get(LEARN_KEY)
+  for (const bad of ['닉네임', 'SECRETTEXT', 'SECRETBODY', 'img.example', '학습용 가짜 상품']) assert.ok(!stored.includes(bad), `${bad} 저장 안 됨`)
+  assert.equal(JSON.parse(stored).schemaVersion, LEARN_SCHEMA_VERSION)
+  await resetLearning(ad)
+  assert.equal((await loadLearning(ad)).samples.length, 0, '초기화하면 샘플이 없다')
+  assert.equal(map.size, 0)
+})
+
+await atest('학습 저장: 샘플 상한을 넘으면 오래된 샘플부터 버리고, 용량이 모자라면 줄여서 저장한다', async () => {
+  const ad = memAdapter()
+  const old = synth('top', null, 'small', 300, 12, 100, 'old')
+  const mid = synth('top', null, 'true', 300, 20, 200, 'new')
+  await addSamples(ad, old)
+  const r = await addSamples(ad, mid)
+  assert.equal(r.samples.length, LEARN.maxSamples)
+  assert.equal(r.dropped, 100)
+  assert.ok(r.samples.every((x) => x.d === 200 || x.id.includes('old')))
+  assert.equal(r.samples.filter((x) => x.d === 100).length, 200, '날짜가 오래된 것부터 100건 빠졌다')
+  assert.equal(mergeSamples([{ id: 'a', d: 1 }], [{ id: 'a', d: 2 }, { id: 'b', d: 3 }], 10).samples.length, 2, '같은 id는 합쳐진다')
+  // 저장소 용량 제한(쓰기 실패)이 있으면 절반으로 줄여 다시 시도
+  const tiny = memAdapter(new Map(), 30000)
+  const big = synth('top', null, 'small', 300, 12, 300, 'q')
+  const t = await addSamples(tiny, big)
+  assert.ok(t.saved && t.samples.length < 300 && t.samples.length > 0, `저장됨 ${t.samples.length}`)
+  assert.ok(t.dropped > 0)
+  // 글자 수 상한
+  const sized = await addSamples(memAdapter(), Array.from({ length: 400 }, (_, i) => ({ id: `z${i}`, cat: 'top', brand: null, label: i % 2 ? 'small' : 'true', w: 1, e: { shoulder: 1.5, chest: 12, waist: 8, hip: 9, thigh: 7, arm: 2, topLength: 2, outerLength: 2, inseam: 2, dressLength: 2, pad: 'x'.repeat(300) }, d: i })))
+  assert.ok(JSON.stringify(sized).length <= LEARN.maxBytes + 2000 && sized.samples.length < 400, '글자 수 상한')
+})
+
+await atest('학습 저장: localStorage 어댑터와 chrome.storage.local 어댑터가 같은 함수로 같은 결과를 낸다', async () => {
+  const ls = new Map()
+  const localLike = { getItem: (k) => (ls.has(k) ? ls.get(k) : null), setItem: (k, v) => void ls.set(k, String(v)), removeItem: (k) => void ls.delete(k) }
+  const cs = new Map()
+  const area = {
+    get: (k, cb) => cb(cs.has(k) ? { [k]: JSON.parse(cs.get(k)) } : {}),
+    set: (o, cb) => { for (const [k, v] of Object.entries(o)) cs.set(k, JSON.stringify(v)); cb() },
+    remove: (k, cb) => { cs.delete(k); cb() },
+  }
+  const a = localAdapter(localLike)
+  const b = chromeAdapter(area, {})
+  const ra = await learnFromProduct(a, lrnProduct())
+  const rb = await learnFromProduct(b, lrnProduct())
+  assert.deepEqual(ra, rb)
+  assert.equal(ls.get(LEARN_KEY), cs.get(LEARN_KEY), '저장 내용이 같다')
+  await resetLearning(a)
+  await resetLearning(b)
+  assert.deepEqual([ls.size, cs.size], [0, 0])
+  // 쓰기 실패(용량 초과)는 예외 없이 false
+  assert.equal(await localAdapter({ setItem() { throw new Error('quota') } }).set('k', 1), false)
+})
+
+await atest('학습 판정: 학습값이 없으면 기존 결과와 같고, 있으면 같은 여유분의 판정이 달라진다', async () => {
+  const product = lrnProduct()
+  const baseline = generateFitComment(profile, product, {})
+  assert.deepEqual(generateFitComment(profile, product, {}, null), baseline)
+  assert.deepEqual(generateFitComment(profile, product, {}, emptyModel()), baseline, '빈 묶음도 같다')
+  assert.equal('learning' in baseline, false)
+  const ad = memAdapter()
+  const { model } = await learnFromProduct(ad, product)
+  const learned = generateFitComment(profile, product, {}, model)
+  const keyOf = (r) => r.perSize.find((p) => p.size === 'M').verdicts.find((v) => v.part === 'chest')
+  assert.equal(chestVerdictKey(baseline, 'M'), 'regular')
+  assert.equal(chestVerdictKey(learned, 'M'), 'tight', '같은 여유분(+7.5cm)이 학습값으로 더 타이트하게 판정')
+  assert.equal(keyOf(baseline).ease, keyOf(learned).ease, '여유분 계산 자체는 같다')
+  assert.equal(learned.learning.used, true)
+  assert.equal(learned.learning.text, '학습값 사용 중(샘플 20건)')
+  assert.ok(learned.note.includes('이 브라우저에 모은 후기'))
+  // 다른 종류의 학습값은 이 상품에 적용되지 않는다
+  const other = generateFitComment(profile, { ...product, category: 'bottom' }, {}, model)
+  assert.equal(other.learning.used, false)
+  assert.deepEqual(other.perSize.map((p) => p.score), generateFitComment(profile, { ...product, category: 'bottom' }, {}).perSize.map((p) => p.score))
+  // 브랜드 오프셋: 같은 종류라도 브랜드 오프셋이 있는 브랜드만 달라진다
+  const bm = trainModel([...synth('top', 'brand-a', 'small', 20, 14, 20000, 'a'), ...synth('top', 'brand-b', 'true', 20, 8, 20000, 'b')], EASE_RULES)
+  const withBrand = (brand) => generateFitComment(profile, lrnProduct({ url: '', brand }), {}, bm)
+  assert.notEqual(withBrand('brand-a').perSize.map((p) => p.score).join(), withBrand('brand-c').perSize.map((p) => p.score).join(), '브랜드 오프셋이 점수에 반영')
+  assert.equal(brandKeyOf({ brand: ' Brand A ' }), 'branda')
+})
+
+test('학습 표시: 학습값이 있을 때만 상태 한 줄이 나온다', () => {
+  assert.equal(learningStatus(null, 'top'), null)
+  assert.equal(learningStatus(emptyModel(), 'top'), null)
+  const m = trainModel([...synth('top', null, 'small', 10, 12), ...synth('top', null, 'true', 10, 20)], EASE_RULES)
+  assert.equal(learningStatus(m, 'top').text, '학습값 사용 중(샘플 20건)')
+  assert.ok(learningStatus(m, 'bottom').text.startsWith('학습값 모으는 중'))
+})
+
+await atest('학습 표시: 확장 카드(가짜 DOM, vm)에 학습값 사용 중 표시가 있고 초기화 버튼이 저장된 학습값을 지운다', async () => {
+  const html = VIEW_HTML(chartTable(OPTION_LIST_LABELS()))
+  const first = analyzePage(fakeDocument(html), 'https://shop.example/products/1', buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular' }).profile, '0.1.0')
+  assert.equal(first.status, 'ok')
+  assert.equal(first.learning, null, '학습값이 없으면 표시도 없다')
+  const cat = first.category
+  const samples = [...synth(cat, null, 'small', 10, 12), ...synth(cat, null, 'true', 10, 20)]
+  const store = new Map([[LEARN_KEY, JSON.stringify({ schemaVersion: LEARN_SCHEMA_VERSION, samples, model: trainModel(samples, EASE_RULES) })]])
+  const { texts, created } = await runContentInFakeDom(html, {}, {}, store)
+  assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
+  assert.ok(texts.includes('학습값 사용 중(샘플 20건)'), '사용 중 표시')
+  assert.ok(texts.some((t) => t.includes('이 브라우저에만 저장돼요')))
+  const btn = created.find((e) => e.className === 'btn' && e.textContent === '학습값 초기화')
+  assert.ok(btn, '초기화 버튼')
+  btn.click()
+  for (let i = 0; i < 50 && !texts.some((t) => t.includes('학습값과 모은 샘플을 모두 지웠어요')); i++) await new Promise((r) => setTimeout(r, 10))
+  assert.equal(store.has(LEARN_KEY), false, '저장된 학습값이 지워졌다')
+  assert.ok(texts.some((t) => t.includes('학습값과 모은 샘플을 모두 지웠어요')))
+  // 학습값 없이 실행하면 표시도 버튼도 없다
+  const plain = await runContentInFakeDom(html)
+  assert.ok(!plain.texts.some((t) => t.includes('학습값 사용 중')) && !plain.created.some((e) => e.textContent === '학습값 초기화'))
+})
+
+test('학습 표시: 웹 결과 화면(서버 렌더)에 학습값 사용 중 표시와 초기화 버튼이 있고, 없으면 나오지 않는다', () => {
+  const clothing = { ...PRODUCTS['https://shop-a.example.com/goods/12345'], source: 'demo' }
+  const samples = [...synth(clothing.category, null, 'small', 10, 12), ...synth(clothing.category, null, 'true', 10, 20)]
+  const props = { product: clothing, profile, calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop }
+  const withModel = textOf(render(WEB.ResultView, { ...props, learningModel: trainModel(samples, EASE_RULES), onResetLearning: noop }))
+  assert.ok(withModel.includes('학습값 사용 중(샘플 20건)') && withModel.includes('학습값 초기화') && withModel.includes('이 브라우저에만 저장돼요'))
+  const without = textOf(render(WEB.ResultView, props))
+  assert.ok(!without.includes('학습값'))
+})
+
+
+// ---- 사이즈표 모음 DB (전부 직접 만든 가짜 데이터예요. 실제 쇼핑몰 데이터가 아니고 검색 점수의 정확도는 측정하지 않았어요) ----
+const chartMemAdapter = (initial = {}) => {
+  const m = new Map(Object.entries(initial).map(([k, v]) => [k, JSON.stringify(v)]))
+  return {
+    m,
+    async get(k) { return m.has(k) ? JSON.parse(m.get(k)) : null },
+    async set(k, v) { m.set(k, JSON.stringify(v)); return true },
+    async remove(k) { m.delete(k) },
+  }
+}
+const CHART = { unit: 'cm', headers: ['사이즈', '가슴단면'], rows: [['S', 50], ['M', 53]], measures: { S: { chest: 100 }, M: { chest: 106 } } }
+const rec = (o = {}) => ({ brand: 'Nike', model: 'Nike Club Fleece Hoodie 후드 티셔츠', code: 'BV2654-010', category: 'top', gender: 'male', url: 'https://shop.example/p/1?utm=a#x', sizeChart: CHART, ...o })
+
+test('사이즈표 DB: 정규화(대소문자·공백·특수문자)와 브랜드 별칭(한글/영문)', () => {
+  assert.equal(normalizeText('  Club-Fleece_HOODIE!! '), 'club fleece hoodie')
+  assert.equal(normalizeCode(' bv2654-010 '), 'BV2654010')
+  assert.equal(brandKeyOfName('나이키'), brandKeyOfName('NIKE'))
+  assert.equal(brandKeyOfName('뉴발란스'), brandKeyOfName('New  Balance'))
+  assert.equal(brandKeyOfName('The North Face'), brandKeyOfName('노스페이스'))
+  assert.notEqual(brandKeyOfName('나이키'), brandKeyOfName('아디다스'))
+  assert.equal(brandKeyOfName(''), null)
+  assert.ok(modelSimilarity(modelTokens('후드 티셔츠'), modelTokens('후드  티셔츠!')) === 1)
+  assert.equal(modelSimilarity(modelTokens('모델 1000'), modelTokens('모델 2000')), 0.5, '숫자 토큰은 같아야만 겹쳐요')
+})
+
+await atest('사이즈표 DB: 한글 브랜드로 저장하고 영문 별칭으로 찾는다 (점수·근거 포함)', async () => {
+  const db = createSizeChartDb(chartMemAdapter())
+  await db.put(rec({ brand: '나이키' }))
+  const r = await db.search({ brand: 'nike', model: 'club fleece hoodie' })
+  assert.equal(r.length, 1)
+  assert.ok(r[0].score >= 60 && r[0].score < 90)
+  assert.ok(r[0].reasons.some((x) => x.includes('브랜드 일치')) && r[0].reasons.some((x) => x.includes('모델명 유사도')))
+  assert.deepEqual(r[0].entry.sizeChart.rows, CHART.rows)
+  assert.deepEqual(await db.search({}), [], '질의가 비면 빈 배열')
+})
+
+await atest('사이즈표 DB: 품번 정확 일치가 최고 점수, 유사 모델명은 그보다 낮다', async () => {
+  const db = createSizeChartDb(chartMemAdapter())
+  await db.put(rec({ url: 'https://shop.example/p/1' }))
+  await db.put(rec({ model: 'Nike Club Fleece Hoodie Black', code: 'ZZ9999-001', url: 'https://shop.example/p/2' }))
+  await db.put(rec({ brand: 'Adidas', model: '삼선 트랙 팬츠', code: 'AD1234', category: 'bottom', url: 'https://shop.example/p/3' }))
+  const byCode = await db.search({ code: 'bv2654 010' })
+  assert.equal(byCode.length, 1)
+  assert.ok(byCode[0].score >= 90 && byCode[0].reasons[0] === '품번 정확 일치')
+  const byModel = await db.search({ brand: '나이키', model: 'Nike Club Fleece Hoodie Black', category: 'top', gender: 'male' })
+  assert.equal(byModel[0].entry.code, 'ZZ9999-001', '모델명이 더 가까운 쪽이 먼저')
+  assert.ok(byModel.length === 2 && byModel[0].score > byModel[1].score)
+  const both = await db.search({ brand: 'nike', model: 'Nike Club Fleece Hoodie Black', code: 'BV2654-010' })
+  assert.equal(both[0].entry.code, 'BV2654-010', '품번 일치가 모델명 일치보다 앞')
+  assert.ok(both[0].score > both[1].score)
+  assert.ok(!(await db.search({ brand: 'nike', model: 'Club Fleece Hoodie' })).some((x) => x.entry.brandKey === brandKeyOfName('adidas')), '다른 브랜드·모델은 후보에서 빠짐')
+})
+
+await atest('사이즈표 DB: 카테고리·성별이 다르면 점수가 내려간다', async () => {
+  const db = createSizeChartDb(chartMemAdapter())
+  await db.put(rec({ url: 'https://shop.example/p/1', code: '' }))
+  const q = { brand: 'nike', model: 'Club Fleece Hoodie' }
+  const base = (await db.search({ ...q, category: 'top', gender: 'male' }))[0].score
+  const catBad = await db.search({ ...q, category: 'shoes', gender: 'male' })
+  const genBad = await db.search({ ...q, category: 'top', gender: 'female' })
+  assert.ok(catBad[0].score <= base - 30, `카테고리 불일치 ${catBad[0].score} vs ${base}`)
+  assert.ok(genBad[0].score <= base - 20, `성별 불일치 ${genBad[0].score} vs ${base}`)
+  assert.ok(catBad[0].reasons.some((x) => x.includes('카테고리 불일치')) && genBad[0].reasons.some((x) => x.includes('성별 불일치')))
+  // 품번이 맞아도 카테고리·성별이 다르면 같은 품번의 일치 상품보다 낮다
+  await db.put(rec({ url: 'https://shop.example/p/9', code: 'KEEP-123', category: 'shoes', gender: 'female' }))
+  const c = await db.search({ code: 'KEEP-123', category: 'top', gender: 'male' })
+  assert.ok(c[0].score >= 90 && c[0].score < 100)
+})
+
+await atest('사이즈표 DB: 같은 상품(주소 또는 브랜드+품번)은 중복 저장하지 않고 갱신한다', async () => {
+  const db = createSizeChartDb(chartMemAdapter())
+  const a = await db.put(rec(), 1000)
+  assert.deepEqual([a.saved, a.updated], [true, false])
+  // 같은 주소(쿼리·해시만 다름) -> 갱신
+  const b = await db.put(rec({ url: 'https://shop.example/p/1?other=1', sizeChart: { ...CHART, rows: [['S', 51], ['M', 54], ['L', 57]] } }), 2000)
+  assert.deepEqual([b.saved, b.updated, b.total], [true, true, 1])
+  // 주소가 달라도 브랜드(별칭)+품번이 같으면 같은 상품
+  const c = await db.put(rec({ brand: '나이키', url: 'https://other.example/x', code: 'bv2654 010' }), 3000)
+  assert.deepEqual([c.updated, c.total], [true, 1])
+  const l = await db.list()
+  assert.equal(l.length, 1)
+  assert.equal(l[0].updatedAt, 3000)
+  assert.equal(l[0].url, 'https://other.example/x', '주소는 쿼리 없이 저장')
+  // 다른 상품은 따로
+  await db.put(rec({ url: 'https://shop.example/p/2', code: 'OTHER1' }), 4000)
+  assert.equal((await db.list()).length, 2)
+})
+
+await atest('사이즈표 DB: 건수·글자 수 상한을 넘으면 오래 갱신되지 않은 항목부터 정리한다', async () => {
+  const db = createSizeChartDb(chartMemAdapter(), { limits: { maxEntries: 5 } })
+  for (let i = 0; i < 8; i++) await db.put(rec({ url: `https://shop.example/p/${i}`, code: `C${i}XYZ`, model: `모델 ${i}` }), 1000 + i)
+  const l = await db.list()
+  assert.equal(l.length, 5)
+  assert.deepEqual(l.map((e) => e.code), ['C7XYZ', 'C6XYZ', 'C5XYZ', 'C4XYZ', 'C3XYZ'], '가장 오래된 3건이 빠짐')
+  const small = createSizeChartDb(chartMemAdapter(), { limits: { maxBytes: 1500 } })
+  for (let i = 0; i < 10; i++) await small.put(rec({ url: `https://shop.example/p/${i}`, code: `C${i}XYZ` }), 1000 + i)
+  const sl = await small.list()
+  assert.ok(sl.length >= 1 && sl.length < 10 && sl[0].code === 'C9XYZ')
+})
+
+await atest('사이즈표 DB: 스키마 버전이 다르면 폐기하고, 비우기는 저장값을 지운다', async () => {
+  const ad = chartMemAdapter({ [SIZE_CHART_DB_KEY]: { schemaVersion: SIZE_CHART_DB_VERSION + 1, entries: [{ id: 'x', sizeChart: CHART, model: 'old' }] } })
+  const db = createSizeChartDb(ad)
+  assert.deepEqual(await db.list(), [])
+  assert.equal(ad.m.has(SIZE_CHART_DB_KEY), false, '버전이 다른 값은 저장소에서도 지움')
+  await db.put(rec())
+  assert.equal(ad.m.has(SIZE_CHART_DB_KEY), true)
+  await db.clear()
+  assert.equal(ad.m.has(SIZE_CHART_DB_KEY), false)
+  assert.deepEqual(await db.search({ brand: 'nike', model: 'hoodie' }), [])
+})
+
+await atest('사이즈표 DB: 어댑터만 바꿔도 같은 인터페이스로 동작한다 (localStorage / chrome.storage / 직접 만든 어댑터)', async () => {
+  const mem = new Map()
+  const ls = localAdapter({ getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => void mem.set(k, v), removeItem: (k) => void mem.delete(k) })
+  const area = { d: {}, get(k, cb) { cb({ [k]: this.d[k] }) }, set(o, cb) { Object.assign(this.d, JSON.parse(JSON.stringify(o))); cb() }, remove(k, cb) { delete this.d[k]; cb() } }
+  const custom = (() => { const calls = []; const a = chartMemAdapter(); return { calls, get: (k) => (calls.push('get'), a.get(k)), set: (k, v) => (calls.push('set'), a.set(k, v)), remove: (k) => (calls.push('remove'), a.remove(k)) } })()
+  for (const adapter of [ls, chromeAdapter(area, {}), custom]) {
+    const db = createSizeChartDb(adapter)
+    assert.deepEqual(Object.keys(db).sort(), ['clear', 'list', 'put', 'search'])
+    assert.equal((await db.put(rec())).saved, true)
+    assert.equal((await db.search({ code: 'BV2654-010' }))[0].score >= 90, true)
+    await db.clear()
+    assert.equal((await db.list()).length, 0)
+  }
+  assert.ok(mem.size === 0 && !('x' in area.d) && custom.calls.includes('set'))
+})
+
+test('사이즈표 DB: 사이즈표가 없거나 상품 단서가 없으면 저장 입력이 되지 않고, 후기·체형 필드는 버린다', () => {
+  assert.equal(chartRecordFromProduct({ name: 'x', category: 'top', sizeChart: null }), null)
+  assert.equal(toEntry(rec({ sizeChart: { rows: [] } })), null)
+  assert.equal(toEntry({ sizeChart: CHART }), null, '주소·품번·모델명이 없음')
+  const withExtra = chartRecordFromProduct({ name: '재킷', category: 'outer', url: 'https://shop.example/p/5', reviews: [{ text: 'SECRETREVIEW' }], height: 175, sizeChart: CHART, targetGender: { gender: 'male' } })
+  const e = toEntry({ ...withExtra, reviews: [{ text: 'SECRETREVIEW' }], profile: { height: 175 } })
+  const json = JSON.stringify(e)
+  assert.ok(!json.includes('SECRETREVIEW') && !json.includes('175') && !/reviews|profile/.test(json))
+  assert.equal(e.gender, 'male')
+})
+
+test('가짜 HTML: JSON-LD Product의 브랜드와 품번을 사이즈표 모음용으로 읽는다 (학습의 brand와는 별개)', () => {
+  const ld = '<script type="application/ld+json">{"@type":"Product","name":"x","brand":{"name":"스투시"},"mpn":"ST-1234"}</script>'
+  const p = parsePage(fakeDocument(wrapBody(ld + chartTable(OPTION_LIST_LABELS()))), 'https://shop.example/products/7')
+  assert.deepEqual([p.chartBrand, p.chartCode], ['스투시', 'ST-1234'])
+  assert.equal(p.brand, undefined)
+  const none = parsePage(fakeDocument(wrapBody(chartTable(OPTION_LIST_LABELS()))), 'https://shop.example/products/7')
+  assert.deepEqual([none.chartBrand, none.chartCode], ['', ''])
+})
+
+await atest('사이즈표 DB: 확장(가짜 DOM, vm)이 사이즈표를 읽은 상품만 저장하고 후기 글은 저장하지 않으며 비우기 버튼이 지운다', async () => {
+  const html = VIEW_HTML(chartTable(OPTION_LIST_LABELS()))
+  const store = new Map()
+  const { texts, created } = await runContentInFakeDom(html, {}, {}, store)
+  assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
+  assert.ok(store.has(SIZE_CHART_DB_KEY), '사이즈표를 읽었으니 저장')
+  const saved = JSON.parse(store.get(SIZE_CHART_DB_KEY))
+  assert.equal(saved.schemaVersion, SIZE_CHART_DB_VERSION)
+  assert.equal(saved.entries.length, 1)
+  assert.deepEqual(saved.entries[0].sizeChart.headers.slice(1), ['총장', '어깨', '가슴', '소매'])
+  const raw = store.get(SIZE_CHART_DB_KEY)
+  for (const piece of ['ZQOTHER', '소재가 부드럽고', 'onerror', '"height"', '"weight"']) assert.ok(!raw.includes(piece), piece)
+  assert.ok(texts.some((t) => t.includes('이 브라우저에만 저장돼요')))
+  const btn = created.find((e) => e.className === 'btn' && e.textContent === '사이즈표 모음 비우기')
+  assert.ok(btn, '비우기 버튼')
+  btn.click()
+  for (let i = 0; i < 50 && store.has(SIZE_CHART_DB_KEY); i++) await new Promise((r) => setTimeout(r, 10))
+  assert.equal(store.has(SIZE_CHART_DB_KEY), false)
+  // 사이즈표를 못 읽은 상품은 저장하지 않고 버튼도 없다
+  const noChartStore = new Map()
+  const nc = await runContentInFakeDom(wrapBody(NOCHART_HTML), {}, {}, noChartStore)
+  assert.equal(noChartStore.has(SIZE_CHART_DB_KEY), false)
+  assert.ok(!nc.created.some((e) => e.textContent === '사이즈표 모음 비우기'))
+})
+
+test('사이즈표 DB: 웹 화면(서버 렌더)에 목록·점수 근거·저장 위치 안내·비우기 버튼이 있다', async () => {
+  const db = createSizeChartDb(chartMemAdapter())
+  await db.put(rec({ brand: '나이키' }), 1000)
+  const entries = await db.list()
+  const html = render(WEB.SizeChartLibrary, { db, initialEntries: entries, onBack: noop })
+  const text = textOf(html)
+  assert.ok(text.includes('사이즈표 모음 1') && text.includes('Nike Club Fleece Hoodie') && text.includes('BV2654-010'))
+  assert.ok(text.includes('이 브라우저에만 저장돼요') && text.includes('사이즈표 모음 비우기') && text.includes('검색'))
+  assert.ok(!text.includes('아직 저장된 사이즈표가 없어요'))
+  const empty = textOf(render(WEB.SizeChartLibrary, { db, initialEntries: [], onBack: noop }))
+  assert.ok(empty.includes('아직 저장된 사이즈표가 없어요'))
+  assert.ok(/<button[^>]*disabled[^>]*>사이즈표 모음 비우기/.test(render(WEB.SizeChartLibrary, { db, initialEntries: [], onBack: noop })))
+})
+
+// ---- 브랜드 지역 · 사이즈 체계 · 지역 오프셋 · 자세한 근거 (모두 직접 만든 가짜 입력이에요. 실제 사이트/규격 원문 확인이나 정확도 측정이 아니에요) ----
+test('브랜드 지역: 근거별로 점수를 합산하고, 근거가 없거나 엇갈리면 unknown', () => {
+  const kinds = (r) => r.evidence.map((e) => e.kind)
+  const dict = classifyBrandRegion({ brand: '유니클로' })
+  assert.deepEqual([dict.region, kinds(dict)], ['jp', ['brandDict']])
+  assert.equal(dict.estimated, true)
+  assert.equal(classifyBrandRegion({ name: 'Nike Club Fleece Hoodie' }).region, 'us', '브랜드 칸이 비면 상품명 앞쪽 별칭')
+  assert.equal(classifyBrandRegion({ originLabel: '일본 브랜드' }).region, 'jp')
+  assert.equal(classifyBrandRegion({ optionLabels: ['US 8', 'US 9'] }).region, 'us')
+  assert.equal(classifyBrandRegion({ optionLabels: ['JP 26', 'JP 27'] }).region, 'jp')
+  assert.equal(classifyBrandRegion({ optionLabels: ['EU 40', 'EU 41'] }).region, 'eu')
+  assert.equal(classifyBrandRegion({ optionLabels: ['250', '260', '270'] }).evidence[0].kind, 'sizeNotation')
+  assert.equal(classifyBrandRegion({ priceCurrency: 'jpy', url: 'https://shop.example/p/1' }).evidence[0].kind, 'currency')
+  const both = classifyBrandRegion({ priceCurrency: 'JPY', url: 'https://item.example.co.jp/p/1' })
+  assert.deepEqual([both.region, both.scores.jp], ['jp', REGION_SCORE.currency + REGION_SCORE.domain])
+  assert.equal(classifyBrandRegion({ priceText: '12,000엔' }).evidence[0].region, 'jp')
+  // 합산: 브랜드 사전(미국 3) + 사이즈 표기(미국 2) → 미국, 근거 2개
+  const sum = classifyBrandRegion({ brand: 'Nike', optionLabels: ['US 9'] })
+  assert.deepEqual([sum.region, sum.scores.us, sum.evidence.length, sum.confidence], ['us', 5, 2, 'high'])
+  // 근거 없음 / 약한 근거 하나(도메인만) / 동점 → unknown
+  const none = classifyBrandRegion({ brand: '무명브랜드', name: '아무 상품', url: 'https://shop.example/p/1' })
+  assert.deepEqual([none.region, none.evidence.length], ['unknown', 0])
+  assert.equal(classifyBrandRegion({}).region, 'unknown')
+  assert.equal(classifyBrandRegion({ url: 'https://shop.example.co.kr/p/1' }).region, 'unknown', '도메인만으로는 판단하지 않아요')
+  assert.equal(classifyBrandRegion({ brand: 'Nike', originLabel: '일본 브랜드' }).region, 'jp', '쇼핑몰 표시가 사전보다 높은 점수')
+  assert.equal(classifyBrandRegion({ brand: 'Nike', priceCurrency: 'JPY', optionLabels: ['JP 26'], originLabel: '' }).region, 'unknown', '3점 대 3점이면 판단하지 않아요')
+  // 사전의 모든 항목은 추정 표시를 달고 있어요
+  assert.ok(Object.values(BRAND_REGION_DICT).every((v) => v.estimated === true))
+})
+
+test('브랜드 지역: 화면 한 줄에 (추정)과 근거가 들어가고, 키는 판단 못 하면 null', () => {
+  const line = regionLine(classifyBrandRegion({ brand: '유니클로', url: 'https://www.uniqlo.co.jp/p/1' }))
+  assert.ok(line.startsWith('브랜드 지역: 일본(추정) 근거: ') && line.includes('브랜드 사전(추정)') && line.includes('도메인'), line)
+  assert.ok(regionLine(classifyBrandRegion({})).includes('알 수 없음'))
+  assert.equal(regionKeyOf({ brand: 'Nike' }), 'us')
+  assert.equal(regionKeyOf({ brand: '무명' }), null)
+  assert.ok(REGION_HYPOTHESIS_NOTE.includes('검증 전 가설') && !/\d+\s*cm/.test(REGION_HYPOTHESIS_NOTE), '가설 문구에 고정 수치가 없다')
+})
+
+test('사이즈 체계 변환표: 모든 값에 근사/출처 확인 필요 플래그가 있고, 없는 값은 만들지 않는다', () => {
+  const kr = representativeMeasure({ category: 'top', gender: 'male', label: '100' })
+  assert.deepEqual(kr.measures, { chest: 100 })
+  assert.deepEqual([kr.approximate, kr.needsSource, kr.flag], [true, true, SIZE_SYSTEM_FLAG])
+  assert.equal(SIZE_SYSTEM_FLAG, '근사/출처 확인 필요')
+  assert.equal(representativeMeasure({ category: 'top', gender: null, label: '100' }), null, '성별을 모르면 숫자 호칭을 풀지 않는다')
+  assert.equal(representativeMeasure({ category: 'top', gender: 'female', label: '100' }), null)
+  assert.equal(representativeMeasure({ category: 'top', gender: 'male', label: 'M' }), null, '알파벳은 근거를 확인하지 못해 비워 둔다')
+  assert.equal(representativeMeasure({ category: 'top', gender: 'male', label: '97' }), null)
+  assert.deepEqual(representativeMeasure({ category: 'bottom', label: '30' }).measures, { waist: 76.2 })
+  assert.deepEqual(representativeMeasure({ category: 'shoes', label: '260' }).measures, { footLength: 260 })
+  assert.ok([representativeMeasure({ category: 'bottom', label: '30' }), representativeMeasure({ category: 'shoes', label: '260' })].every((m) => m.approximate && m.needsSource && m.flag === SIZE_SYSTEM_FLAG))
+  const hint = sizeSystemHint({ category: 'top', gender: 'male', optionLabels: ['95', '100', '100', 'XL'] })
+  assert.deepEqual(hint.lines.length, 2)
+  assert.ok(hint.title.includes(SIZE_SYSTEM_FLAG) && hint.note.includes('추천 계산에는 쓰지 않았어요'))
+  assert.equal(sizeSystemHint({ category: 'top', gender: 'male', optionLabels: ['S', 'M'] }), null)
+  assert.ok(readFileSync(resolvePath(import.meta.dirname, '../docs/사이즈체계_출처확인.md'), 'utf8').includes('확인 TODO'), '출처 확인 문서가 있다')
+})
+
+test('지역 오프셋: 같은 지역 표본이 충분하면 모델에 쌓이고, 부족하면 0, 브랜드 오프셋이 있으면 브랜드가 우선', () => {
+  const reg = (region, n, tag, label = 'small') => Array.from({ length: n }, (_, i) => ({ id: `r-${region}-${tag}${i}`, cat: 'top', brand: `${tag}${i % 10}`, region, label, w: 1, e: { chest: 14 }, d: 20000 }))
+  const few = trainModel(reg('us', LEARN.regionMin - 1, 'f'), EASE_RULES)
+  assert.equal(few.regions, undefined, '표본이 모자라면 지역 오프셋을 만들지 않는다')
+  assert.equal(resolveLearned(few, 'top', null, 'us').offset, 0)
+  const some = trainModel(reg('us', 10, 'a'), EASE_RULES)
+  const many = trainModel(reg('us', 60, 'b'), EASE_RULES)
+  const o10 = some.regions.top.us.offset
+  const o60 = many.regions.top.us.offset
+  assert.ok(o10 > 0 && o60 > o10 && o60 <= LEARN.maxRegionOffset, `0 < ${o10} < ${o60} <= ${LEARN.maxRegionOffset}`)
+  const r = resolveLearned(many, 'top', 'nobrand', 'us')
+  assert.deepEqual([r.offset, r.offsetSource, r.regionSamples], [o60, 'region', 60])
+  assert.deepEqual([resolveLearned(many, 'top', null, 'jp').offset, resolveLearned(many, 'top', null, null).offset], [0, 0], '다른 지역·지역 모름은 보정 0')
+  assert.equal(resolveLearned(many, 'bottom', null, 'us').offset, 0, '다른 종류에는 적용 안 됨')
+  // 브랜드 오프셋(3건 이상 브랜드)이 있으면 지역 값을 더하지 않고 브랜드 값을 쓴다
+  const mixed = trainModel([...reg('us', 30, 'c'), ...synth('top', 'zbrand', 'true', 6, 8, 20000, 'zb').map((x) => ({ ...x, region: 'us' }))], EASE_RULES)
+  const m = resolveLearned(mixed, 'top', 'zbrand', 'us')
+  assert.equal(m.offset, m.brandOffset)
+  assert.notEqual(m.offset, m.regionOffset)
+  assert.ok(m.regionOffset > 0, '지역 값은 따로 계산돼 있다')
+  // 지역을 모르는 샘플은 지역 집계에 들어가지 않는다
+  assert.equal(trainModel(synth('top', 'q', 'small', 30, 14), EASE_RULES).regions, undefined)
+})
+
+await atest('지역 오프셋: 샘플에 지역이 담기고, 지역 학습값이 같은 지역 상품의 판정만 바꾼다 (되돌리면 실패)', async () => {
+  const withNike = toSamples(lrnProduct({ brand: 'Nike' }))
+  assert.ok(withNike.length > 0 && withNike.every((x) => x.region === 'us'))
+  assert.ok(toSamples(lrnProduct()).every((x) => !('region' in x)), '지역을 모르면 담지 않는다')
+  const model = trainModel(Array.from({ length: 40 }, (_, i) => ({ id: `u${i}`, cat: 'top', brand: `b${i % 20}`, region: 'us', label: 'small', w: 1, e: { chest: 16 }, d: 20000 })), EASE_RULES)
+  const us = generateFitComment(profile, lrnProduct({ brand: 'Nike', url: '' }), {}, model)
+  const none = generateFitComment(profile, lrnProduct({ brand: '무명', url: 'https://shop.example/p/1' }), {}, model)
+  const baseline = generateFitComment(profile, lrnProduct({ brand: 'Nike', url: '' }), {}, null)
+  assert.equal(us.evidence.offsetSource, 'region')
+  assert.ok(us.evidence.offsetValue > 0)
+  assert.equal(none.evidence.offsetSource, null)
+  assert.equal(none.evidence.offsetValue, 0)
+  assert.notEqual(us.perSize.map((p) => p.score).join(), none.perSize.map((p) => p.score).join(), '같은 지역 상품만 점수가 달라진다')
+  assert.equal(baseline.evidence.offsetSource, null)
+  assert.equal(us.regionInfo.region, 'us')
+})
+
+await atest('자세한 근거 줄: 후기 건수·제외, 학습값 샘플 수, 브랜드/지역 보정, 부위별 여유분, 브랜드 지역이 나오고 정확도처럼 보이는 문구는 없다', async () => {
+  const model = trainModel([...synth('top', null, 'small', 10, 12), ...synth('top', null, 'true', 10, 20)], EASE_RULES)
+  const base = lrnProduct()
+  const bad = { gender: 'male', height: 300, weight: 70, size: 'M', fit: 'small', text: '불가능한 키' }
+  const r = generateFitComment(profile, { ...base, brand: 'Nike', reviews: [...base.reviews, bad] }, {}, model)
+  const d = describeEvidence(r.evidence, r.confidence).details
+  const all = d.join('\n')
+  assert.ok(d.some((l) => l.startsWith('후기 근거: 불러온 후기 21건 중 이상치 제외 1건')), all)
+  assert.ok(d.includes('학습값: 사용(이 종류 샘플 20건, 이 브라우저에 모은 후기 기준)'), all)
+  assert.ok(d.some((l) => l.startsWith('브랜드·지역 보정: 없음(0cm')), all)
+  assert.ok(d.some((l) => l.startsWith('브랜드 지역: 미국(추정) 근거: ')), all)
+  assert.ok(d.some((l) => l.startsWith('부위별 여유분 판정: ') && /가슴 \+?-?\d/.test(l)), all)
+  assert.ok(d[d.length - 1].includes('정확도를 측정한 값은 아니에요'))
+  assert.ok(!/정확도 \d|\d+\s*%\s*정확/.test(all))
+  // 학습값이 없으면 학습 줄은 나오지 않고 후기·부위·지역 줄은 나온다
+  const plain = describeEvidence(generateFitComment(profile, base, {}, null).evidence, 'low').details.join('\n')
+  assert.ok(plain.includes('후기 근거') && plain.includes('부위별 여유분 판정') && !plain.includes('학습값'))
+  assert.deepEqual(describeEvidence({}, 'low').details, [])
+})
+
+await atest('지역·근거 표시: 확장 카드(가짜 DOM, vm)에 브랜드 지역(추정)과 자세한 근거가 나오고, 사이즈표가 없으면 변환표 참고값이 플래그와 함께 나온다', async () => {
+  const ld = '<script type="application/ld+json">{"@type":"Product","name":"x","brand":{"name":"나이키"},"offers":{"priceCurrency":"USD"}}</script>'
+  const { texts } = await runContentInFakeDom(wrapBody(ld + VIEW_HTML(chartTable(OPTION_LIST_LABELS()))))
+  assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
+  assert.ok(texts.some((t) => t.startsWith('브랜드 지역: 미국(추정) 근거: ') && t.includes('브랜드 사전(추정)') && t.includes('통화 USD')), '지역 근거 줄')
+  assert.ok(texts.includes('추천에 쓰인 근거 (자세히)'))
+  assert.ok(texts.some((t) => t.startsWith('후기 근거: 불러온 후기 ')))
+  assert.ok(texts.some((t) => t.startsWith('부위별 여유분 판정: ')))
+  assert.ok(texts.some((t) => t.includes('검증 전 가설')))
+  const unknown = await runContentInFakeDom(VIEW_HTML(chartTable(OPTION_LIST_LABELS())))
+  assert.ok(unknown.texts.some((t) => t.startsWith('브랜드 지역: 알 수 없음')), '근거가 없으면 알 수 없음')
+  // 판단 결과 자체는 analyzePage에도 담겨요
+  const out = analyzePage(fakeDocument(wrapBody(ld + VIEW_HTML(chartTable(OPTION_LIST_LABELS())))), 'https://shop.example/products/1', buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular' }).profile, '0.1.0')
+  assert.equal(out.regionInfo.region, 'us')
+  assert.ok(out.details.length >= 3)
+})
+
+test('지역·근거 표시: 웹 결과 화면(서버 렌더)에 브랜드 지역(추정)·자세한 근거·가설 안내가 나오고, 사이즈표가 없으면 변환표 참고값이 나온다', () => {
+  const clothing = { ...PRODUCTS['https://shop-a.example.com/goods/12345'], source: 'demo', brand: 'Nike' }
+  const props = { product: clothing, profile, calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop }
+  const text = textOf(render(WEB.ResultView, props))
+  assert.ok(text.includes('브랜드 지역: 미국(추정) 근거: 브랜드 사전(추정): 미국'), '지역 줄')
+  assert.ok(text.includes('후기 근거: 불러온 후기') && text.includes('부위별 여유분 판정:'))
+  assert.ok(text.includes('검증 전 가설'))
+  const noChart = textOf(render(WEB.FitComment, { result: generateFitComment(profile, { name: '셔츠', category: 'top', optionLabels: ['95', '100'], reviews: [], sizeChart: null, targetGender: { gender: 'male' } }, {}, null) }))
+  assert.ok(noChart.includes('사이즈 표기 참고값(근사/출처 확인 필요)') && noChart.includes('100 → 가슴둘레 호칭 약 100cm'))
+})
+
+import { reviewBodyEstimate } from '../src/lib/reviewBodyEstimate.js'
+
+test('후기 보정 추정: 비슷한 체형이 산 사이즈·핏 평가로 직접 재지 않은 둘레만 옮기고, 후기가 1건이거나 직접 잰 부위는 그대로 둔다 (가짜 데이터)', () => {
+  const chart = { L: { shoulder: 48, chest: 112 } }
+  const reviews = [{ size: 'L', fit: 'true', similarity: 100 }, { size: 'L', fit: 'true', similarity: 100 }]
+  const base = { shoulder: 45.5, chest: 97.5, topLength: 68 }
+  const r = reviewBodyEstimate({ values: base, measured: new Set(), reviews, measuresOf: (s) => chart[s], rules: EASE_RULES })
+  // 정사이즈 가슴 여유 (6+14)/2=10 → 역산 102. 공식 97.5(가중 2)와 후기 2건(가중 2) 평균 = 99.75 → 0.5 단위 100
+  assert.equal(r.values.chest, 100)
+  assert.equal(r.reviewParts.chest.n, 2)
+  assert.equal(r.values.topLength, 68, '기장은 건드리지 않아요')
+  const measured = reviewBodyEstimate({ values: base, measured: new Set(['chest']), reviews, measuresOf: (s) => chart[s], rules: EASE_RULES })
+  assert.equal(measured.values.chest, 97.5, '직접 잰 가슴은 그대로')
+  assert.ok(!measured.reviewParts.chest)
+  const one = reviewBodyEstimate({ values: base, measured: new Set(), reviews: reviews.slice(0, 1), measuresOf: (s) => chart[s], rules: EASE_RULES })
+  assert.deepEqual(one.reviewParts, {}, '후기 1건이면 보정하지 않아요')
+  // '작아요'는 더 큰 몸으로 역산해요
+  const small = reviewBodyEstimate({ values: base, measured: new Set(), reviews: reviews.map((x) => ({ ...x, fit: 'small' })), measuresOf: (s) => chart[s], rules: EASE_RULES })
+  assert.ok(small.values.chest > r.values.chest)
+  // 아무리 많아도 공식값에서 6cm 넘게 옮기지 않아요
+  const far = reviewBodyEstimate({ values: base, measured: new Set(), reviews: Array.from({ length: 20 }, () => ({ size: 'L', fit: 'small', similarity: 100 })), measuresOf: (s) => ({ L: { chest: 140 } })[s], rules: EASE_RULES })
+  assert.equal(far.values.chest, 103.5)
+})
+
+test('단계형 추천: 키·몸무게만이면 비슷한 체형 후기 2건을 우선하고, 가슴을 직접 재면 실측 비교를 우선한다 (가짜 데이터)', () => {
+  const product = {
+    name: '스웻셔츠', mall: 'shop', category: 'top',
+    sizeChart: { measures: { M: { shoulder: 47, chest: 104 }, L: { shoulder: 49, chest: 112 } } },
+    reviews: [
+      { id: 1, nick: 'a', rating: 5, text: '정사이즈', gender: 'male', height: 175, weight: 70, size: 'L', fit: 'true' },
+      { id: 2, nick: 'b', rating: 5, text: '정사이즈', gender: 'male', height: 176, weight: 70, size: 'L', fit: 'true' },
+    ],
+    notes: [],
+  }
+  const simple = { gender: 'male', height: 175, weight: 70, preferredFit: 'regular', usual: { top: '', bottom: '' }, measurements: {} }
+  const r = generateFitComment(simple, product)
+  assert.equal(r.detailed, false)
+  assert.equal(r.recommendedSize, 'L', '키·몸무게만이면 후기 우선')
+  assert.ok(r.reviewParts.chest, '가슴은 후기로 보정')
+  assert.ok(r.note.includes('비슷한 체형 후기를 우선'))
+  const cmp = compareSizes({ chart: product.sizeChart, bodyValues: r.bodyValues, measured: r.measured, category: 'top', reviewParts: r.reviewParts })
+  assert.equal(cmp.sizes[0].rows.find((x) => x.part === 'chest').bodyKind, 'review', '비교 표에 (후기 추정)')
+  const det = generateFitComment({ ...simple, measurements: { chest: 96 } }, product)
+  assert.equal(det.detailed, true)
+  assert.equal(det.recommendedSize, 'M', '가슴을 재면 실측 비교 우선')
+  assert.equal(det.bodyValues.chest, 96)
+})
+
+
+// ---- 중고 판매글 분석 (번개장터·후르츠패밀리). 아래 글·HTML은 전부 직접 만든 가짜예요. 실제 사이트에서 확인한 것이 아니에요 ----
+const usedProfile = buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular' }).profile
+const U_TITLE = '[M] 나이키 Club Fleece Hoodie 후드 티셔츠'
+
+test('중고 판매글 파서: 사이즈 표기(알파벳·숫자·FREE·신발 mm·허리 인치)와 브랜드·모델·품번을 읽는다', () => {
+  const a = parseListingText('사이즈: L\n품번: BV2654-010', { title: '나이키 Club Fleece 후드 L' })
+  assert.deepEqual(a.sizes.map((x) => x.label), ['L'])
+  assert.equal(a.brand.key, 'nike')
+  assert.equal(a.code, 'BV2654-010')
+  assert.ok(a.model.includes('Club Fleece') && !/\bL$/.test(a.model))
+  assert.deepEqual(parseListingText('셔츠 100사이즈').sizes.map((x) => [x.label, x.kind]), [['100', 'kr-top']])
+  assert.deepEqual(parseListingText('프리사이즈 FREE size 가디건').sizes.map((x) => x.label), ['FREE'])
+  const shoe = parseListingText('뉴발란스 530 270mm 새상품', { title: '뉴발란스 530 270' })
+  assert.equal(shoe.category, 'shoes')
+  assert.ok(shoe.sizes.some((x) => x.label === '270' && x.kind === 'mm'))
+  const jeans = parseListingText('리바이스 501 청바지 W32 허리 40 허벅지 30')
+  assert.ok(jeans.sizes.some((x) => x.label === '32' && x.kind === 'inch') && jeans.category === 'bottom')
+  assert.ok(!parseListingText('S급 상태 좋아요 직거래').sizes.length, 'S급은 사이즈가 아니라 상태')
+  assert.equal(parseListingText('번호: 없음').code, '')
+})
+
+test('중고 판매글 파서: 실측 줄(가슴·총장·어깨·소매), 단면이면 ×2, cm 생략, 둘레는 그대로', () => {
+  const p = parseListingText('가슴단면 55cm 총장 70 어깨 47 소매 60', { title: '후드 티셔츠' }).measuresBySize.default
+  assert.equal(p.chest.cm, 110)
+  assert.equal(p.chest.kind, 'section')
+  assert.equal(p.topLength.cm, 70, 'cm 생략도 읽어요')
+  assert.equal(p.shoulder.cm, 47)
+  assert.equal(p.arm.cm, 60)
+  const circ = parseListingText('가슴둘레 108 어깨 46', { title: '셔츠' }).measuresBySize.default
+  assert.equal(circ.chest.cm, 108)
+  assert.equal(circ.chest.kind, 'circ')
+  const trail = parseListingText('가슴 55(단면) 총장 70', { title: '티셔츠' }).measuresBySize.default
+  assert.equal(trail.chest.cm, 110, '뒤에 붙은 (단면)도 인식')
+  const bare = parseListingText('단면 55 총장 70', { title: '맨투맨' }).measuresBySize.default
+  assert.equal(bare.chest.cm, 110)
+  assert.equal(bare.chest.inferred, true, '부위 없는 단면은 가슴으로 짐작한 값이라 표시')
+  const bottom = parseListingText('허리 40 밑위 30 허벅지 30 총장 100', { title: '청바지' }).measuresBySize.default
+  assert.equal(bottom.waist.cm, 80)
+  assert.equal(bottom.thigh.cm, 60)
+  assert.equal(bottom.rise.cm, 30)
+  assert.equal(bottom.inseam.cm, 100)
+  assert.equal(parseListingText('허리 30인치', { title: '청바지' }).measuresBySize.default.waist.cm, 76.2)
+})
+
+test('중고 판매글 파서: 비현실적인 값은 버리고 단면/둘레가 애매한 값도 버리며 건수를 센다', () => {
+  const r = parseListingText('가슴 5 어깨 200 소매 999 총장 3 허리 72 가슴단면 55', { title: '티셔츠' })
+  const d = r.measuresBySize.default
+  assert.deepEqual(Object.keys(d).sort(), ['chest', 'waist'].sort())
+  assert.equal(d.chest.cm, 110)
+  assert.equal(d.waist.cm, 72, '72는 허리 둘레로만 가능한 값')
+  assert.ok(r.counts.droppedCount >= 4)
+  const amb = parseListingText('가슴 72', { title: '티셔츠' })
+  assert.deepEqual(amb.measuresBySize, {}, '72는 단면(×2=144)일 수도 둘레일 수도 있어 쓰지 않아요')
+  assert.equal(amb.counts.ambiguousCount, 1)
+  assert.deepEqual(parseListingText('상품 가격 100 제품 55', { title: '티셔츠' }).measuresBySize, {}, '상품·제품의 "품"은 가슴으로 읽지 않아요')
+})
+
+test('중고 판매글 파서: 사이즈별 실측(M: …, L: …)은 사이즈별로 나눠 읽는다', () => {
+  const r = parseListingText('M 가슴 55 총장 70\nL 가슴 58 총장 72', { title: '후드 티셔츠' })
+  assert.deepEqual(r.namedSizes, ['M', 'L'])
+  assert.equal(r.measuresBySize.M.chest.cm, 110)
+  assert.equal(r.measuresBySize.L.chest.cm, 116)
+  assert.equal(r.measuresBySize.L.topLength.cm, 72)
+})
+
+const dbWith = async (...recs) => {
+  const db = createSizeChartDb(chartMemAdapter())
+  for (const r of recs) await db.put(r)
+  return db
+}
+
+test('중고 분석 판정 규칙: 핵심 부위가 없으면 판정하지 않고, 선호 핏에 따라 타이트/넉넉을 다르게 본다', () => {
+  assert.equal(usedVerdictFrom([], 'regular'), null)
+  assert.equal(usedVerdictFrom([{ part: 'topLength', level: 0 }], 'regular'), null, '총장만으로는 판정 안 함')
+  assert.equal(usedVerdictFrom([{ part: 'chest', level: 0 }], 'regular'), 'small')
+  assert.equal(usedVerdictFrom([{ part: 'chest', level: 1 }], 'regular'), 'small')
+  assert.equal(usedVerdictFrom([{ part: 'chest', level: 1 }], 'slim'), 'fit')
+  assert.equal(usedVerdictFrom([{ part: 'chest', level: 4 }], 'regular'), 'large')
+  assert.equal(usedVerdictFrom([{ part: 'chest', level: 4 }], 'relaxed'), 'fit')
+  assert.equal(usedVerdictFrom([{ part: 'chest', level: 2 }, { part: 'shoulder', level: 3 }], 'regular'), 'fit')
+})
+
+await atest('중고 분석 우선순위 1: 판매글 실측이 있으면 사이즈표 DB가 있어도 실측을 쓴다 (후기 없음 카드)', async () => {
+  const db = await dbWith(rec({ brand: '나이키', model: 'Nike Club Fleece Hoodie 후드 티셔츠', sizeChart: { ...CHART, measures: { S: { chest: 80 }, M: { chest: 82 } } } }))
+  const listing = { title: U_TITLE, text: `${U_TITLE}\n품번 BV2654-010\n가슴단면 55 총장 70 어깨 47 소매 60` }
+  const matches = await findChartMatches(db, usedSearchQuery(listing))
+  assert.ok(matches[0].score >= 90, '품번이 같아 DB 후보도 있음')
+  const r = analyzeUsedListing(listing, usedProfile, { chartMatches: matches })
+  assert.equal(r.status, 'used')
+  assert.equal(r.basis, 'listing')
+  assert.equal(r.verdict, 'fit')
+  assert.equal(r.verdictLabel, '맞음')
+  assert.equal(r.approx, false)
+  assert.ok(['low', 'medium'].includes(r.confidence), '확신도 높음은 주지 않아요')
+  assert.equal(r.confidence, 'medium')
+  assert.equal(r.noReviewNote, USED_NO_REVIEW_NOTE)
+  assert.equal(r.priority.find((x) => x.id === 'chart-db').state, 'skipped')
+  assert.ok(r.details.some((l) => l.startsWith('판매글에서 읽은 실측: 가슴 55(단면→둘레 110)')))
+  assert.ok(r.details.some((l) => l.startsWith('가슴: 옷 110cm − 내 ')))
+  assert.ok(r.reasons.includes(USED_NO_REVIEW_NOTE))
+  // 작은 실측이면 '작음', 큰 실측이면 '큼'
+  assert.equal(analyzeUsedListing({ title: '티셔츠', text: '티셔츠 가슴단면 44 어깨 40' }, usedProfile).verdictLabel, '작음')
+  assert.equal(analyzeUsedListing({ title: '티셔츠', text: '티셔츠 가슴단면 66 어깨 58' }, usedProfile).verdictLabel, '큼')
+})
+
+await atest('중고 분석 우선순위 2: 판매글 실측이 없고 DB 점수가 기준 이상이면 DB 사이즈표를 쓰고 근사로 표시한다', async () => {
+  const db = await dbWith(rec({ brand: '나이키', model: 'Nike Club Fleece Hoodie 후드 티셔츠' }))
+  const listing = { title: U_TITLE, text: `${U_TITLE}\n품번 BV2654-010\n상태 좋아요` }
+  const r = analyzeUsedListing(listing, usedProfile, { chartMatches: await findChartMatches(db, usedSearchQuery(listing)) })
+  assert.equal(r.basis, 'chart-db')
+  assert.equal(r.approx, true)
+  assert.equal(r.verdictLabel, '맞음', 'M 가슴 106 vs 내 97.5')
+  assert.ok(r.basisLabel.includes('근사'))
+  assert.ok(r.details.some((l) => l.startsWith('사이즈표 DB(근사/추정): 점수 ') && l.includes('품번 정확 일치')))
+  assert.equal(r.priority.find((x) => x.id === 'listing').state, 'none')
+  // 점수가 기준 아래면 쓰지 않아요
+  const weak = [{ score: USED_DB_MIN_SCORE - 1, reasons: ['모델명 유사도 40%(+24)'], entry: { id: 'x', brand: 'a', model: 'b', category: 'top', sizeChart: CHART } }]
+  const r2 = analyzeUsedListing({ title: U_TITLE, text: U_TITLE }, usedProfile, { chartMatches: weak })
+  assert.notEqual(r2.basis, 'chart-db')
+  assert.ok(r2.priority.find((x) => x.id === 'chart-db').text.includes('기준'))
+  // 판매 사이즈를 모르면 DB 기준 추천 사이즈만 알려주고 판정은 하지 않아요
+  const r3 = analyzeUsedListing({ title: '나이키 Club Fleece Hoodie 후드 티셔츠', text: '나이키 Club Fleece Hoodie 후드 티셔츠 품번 BV2654-010' }, usedProfile, { chartMatches: await findChartMatches(db, usedSearchQuery({ title: '나이키 Club Fleece Hoodie 후드 티셔츠', text: '나이키 Club Fleece Hoodie 후드 티셔츠 품번 BV2654-010' })) })
+  assert.equal(r3.verdict, null)
+  assert.ok(r3.recommended)
+  assert.equal(r3.confidence, 'low')
+})
+
+test('중고 분석 우선순위 3: 실측도 DB도 없으면 사이즈 표기 기본값으로만 가늠하고 확신도는 낮음·근사/추정으로 표시한다', () => {
+  const r = analyzeUsedListing({ title: '뉴발란스 530 270', text: '뉴발란스 530 270mm 사이즈' }, usedProfile)
+  assert.equal(r.basis, 'default')
+  assert.equal(r.approx, true)
+  assert.equal(r.confidence, 'low')
+  assert.equal(r.verdictLabel, '맞음')
+  assert.ok(r.details.some((l) => l.startsWith('사이즈 표기 참고값(근사/출처 확인 필요)')))
+  assert.ok(r.details.some((l) => l.startsWith('브랜드 지역: 미국(추정)')))
+  const small = analyzeUsedListing({ title: '뉴발란스 530 250', text: '뉴발란스 530 250mm' }, usedProfile)
+  assert.equal(small.verdictLabel, '작음')
+  const big = analyzeUsedListing({ title: '뉴발란스 530 290', text: '뉴발란스 530 290mm' }, usedProfile)
+  assert.equal(big.verdictLabel, '큼')
+  // 국내 호칭(95/100/105)은 미국 브랜드로 추정되면 쓰지 않고, 근거가 없으면 판정하지 않아요
+  assert.equal(analyzeUsedListing({ title: '나이키 후드티 100', text: '나이키 후드티 100사이즈' }, usedProfile).basis, 'none')
+  const kr = analyzeUsedListing({ title: '무신사 스탠다드 셔츠 100', text: '셔츠 100사이즈 남성' }, usedProfile)
+  assert.equal(kr.basis, 'default')
+  const none = analyzeUsedListing({ title: '후드티', text: '후드티 상태 좋아요' }, usedProfile)
+  assert.equal(none.basis, 'none')
+  assert.equal(none.verdict, null)
+  assert.equal(none.verdictLabel, null)
+  assert.ok(none.headline.includes('근거가 부족'))
+})
+
+const BUNJANG_HTML = `<html><head><meta property="og:title" content="[L] 나이키 후드 티셔츠 ">
+<meta property="og:description" content="새상품 직거래 가능"><meta property="og:image" content="https://img.example.com/a.jpg"></head>
+<body><div class="product-description"><p>가슴단면 55</p><p>총장 70 어깨 47 소매 60</p></div><div class="comments">댓글 영역</div>
+<img src="https://img.example.com/b.jpg"><img src="data:image/png;base64,AAA"><img src="http://insecure.example/c.jpg"></body></html>`
+const FRUITS_HTML = `<html><head><script type="application/ld+json">{"@type":"Product","name":"Stussy 스투시 후드 M","description":"M 사이즈\\n가슴 단면 56 총장 71","image":["https://cdn.example.com/f1.jpg"],"offers":{"price":"85000","priceCurrency":"KRW"}}</script></head><body><h1>Stussy 후드</h1></body></html>`
+
+test('중고 판매글 읽기: 번개장터·후르츠패밀리 주소를 알아보고, og 태그·JSON-LD·본문 영역에서 제목·본문·가격·사진을 읽는다 (가짜 HTML)', () => {
+  assert.equal(usedSiteOf('https://m.bunjang.co.kr/products/1').id, 'bunjang')
+  assert.equal(usedSiteOf('https://bunjang.co.kr/products/1').id, 'bunjang')
+  assert.equal(usedSiteOf('https://www.fruitsfamily.com/products/1').id, 'fruitsfamily')
+  assert.equal(usedSiteOf('https://www.musinsa.com/products/1'), null)
+  assert.equal(usedSiteOf('https://evil-bunjang.co.kr.example.com/'), null, '비슷한 이름의 다른 도메인은 거부')
+  assert.ok(USED_SITES_NOTE.includes('추정') && USED_SITES_NOTE.includes('확인하지 못했어요'))
+  const b = readListing(fakeDocument(BUNJANG_HTML))
+  assert.equal(b.title, '[L] 나이키 후드 티셔츠')
+  assert.equal(b.description, '새상품 직거래 가능')
+  assert.ok(b.bodyText.includes('가슴단면 55') && b.bodyText.includes('총장 70'))
+  assert.ok(!b.bodyText.includes('댓글'))
+  assert.deepEqual(b.photos, ['https://img.example.com/a.jpg', 'https://img.example.com/b.jpg'], 'https 사진만, data:·http는 버림')
+  const f = readListing(fakeDocument(FRUITS_HTML))
+  assert.equal(f.title, 'Stussy 스투시 후드 M')
+  assert.equal(f.price.amount, 85000)
+  assert.equal(f.price.currency, 'KRW')
+  assert.deepEqual(f.photos, ['https://cdn.example.com/f1.jpg'])
+  assert.ok(listingText(f).includes('가슴 단면 56'))
+  assert.equal(isUsedListingPage(fakeDocument(BUNJANG_HTML), 'https://m.bunjang.co.kr/products/1'), true)
+  assert.equal(isUsedListingPage(fakeDocument(BUNJANG_HTML), 'https://shop.example/p/1'), false)
+  assert.equal(isUsedListingPage(fakeDocument('<html><body>x</body></html>'), 'https://m.bunjang.co.kr/'), false, '제목이 없으면 판매글로 보지 않아요')
+})
+
+test('중고 판매글: analyzePage가 중고 사이트 주소면 판매글 결과 카드를 만들고, 진단에는 건수만 담는다', () => {
+  const out = analyzePage(fakeDocument(BUNJANG_HTML), 'https://m.bunjang.co.kr/products/1', usedProfile, '0.1.0')
+  assert.equal(out.status, 'used')
+  assert.equal(out.site.name, '번개장터')
+  assert.equal(out.basis, 'listing')
+  assert.equal(out.verdictLabel, '맞음')
+  assert.equal(out.reviewViews, undefined, '후기 구역 없음')
+  assert.deepEqual(out.counts, { measureCount: 4, sizeCount: 1, droppedCount: 0, ambiguousCount: 0, photoCount: 2 })
+  const report = formatReport(out.diagnostics)
+  assert.ok(report.includes('중고 판매글 읽기: 실측 4개, 사이즈 표기 1개, 버린 값 0개, 사진 2개, 사용한 근거 판매글 실측, 알려진 중고 사이트 주소 예'))
+  for (const secret of ['나이키', '후드', '가슴단면', 'img.example.com', '직거래']) assert.ok(!report.includes(secret), `리포트에 판매글 글이 없어야 해요: ${secret}`)
+  // 읽을 글이 없으면 no-data(진단 포함, 리뷰 불러오기 대상 아님 표시)
+  const empty = analyzePage(fakeDocument('<html><body>x</body></html>'), 'https://fruitsfamily.com/x', usedProfile, '0.1.0')
+  assert.equal(empty.status, 'no-data')
+  assert.equal(empty.usedSite, true)
+  assert.ok(formatReport(empty.diagnostics).includes('사용한 근거 없음'))
+  // 중고 사이트가 아닌 주소에서는 기존 흐름 그대로
+  assert.notEqual(analyzePage(fakeDocument(BUNJANG_HTML), 'https://shop.example/p/1', usedProfile, '0.1.0').status, 'used')
+  // 중고 분석이 아닐 때 진단 리포트에는 중고 줄이 없다
+  assert.ok(!formatReport(collectDiagnostics(fakeDocument(BUNJANG_HTML), 'https://shop.example/p/1', '0.1.0')).includes('중고 판매글 읽기'))
+})
+
+await atest('중고 판매글 content.js(가짜 DOM, vm): 번개장터·후르츠패밀리 가짜 HTML이 결과 카드로 그려지고 후기 불러오기는 하지 않는다', async () => {
+  const b = await runContentInFakeDom(BUNJANG_HTML, { location: { href: 'https://m.bunjang.co.kr/products/1' } })
+  assert.ok(!b.texts.some((t) => t.includes('분석 중 문제가 생겼어요')), b.texts.join('|'))
+  assert.ok(b.texts.includes('맞음'), '판정 글자')
+  assert.ok(b.texts.some((t) => t.includes('후기 없이 계산했어요')))
+  assert.ok(b.texts.some((t) => t.startsWith('근거: 판매글 실측')))
+  assert.ok(b.texts.some((t) => t.startsWith('판매글에서 읽은 실측: 가슴 55(단면→둘레 110)')))
+  assert.ok(b.texts.includes('문제가 있나요? 진단 리포트'))
+  assert.ok(!b.texts.some((t) => t.includes('리뷰 불러오는 중')), '중고 판매글은 후기 불러오기를 하지 않아요')
+  assert.ok(!b.texts.some((t) => t.includes('리뷰 원문')))
+  const f = await runContentInFakeDom(FRUITS_HTML, { location: { href: 'https://www.fruitsfamily.com/products/9' } })
+  assert.ok(f.texts.includes('맞음') || f.texts.includes('작음') || f.texts.includes('큼'))
+  assert.ok(f.texts.some((t) => t.startsWith('후르츠패밀리')) || f.texts.some((t) => t.includes('후르츠패밀리')))
+  assert.ok(!f.texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
+  // 같은 HTML이라도 중고 사이트 주소가 아니면 중고 카드가 아니에요
+  const other = await runContentInFakeDom(BUNJANG_HTML)
+  assert.ok(!other.texts.some((t) => t.includes('후기 없이 계산했어요')))
+})
+
+await atest('중고 판매글 content.js(가짜 DOM, vm): 이 브라우저의 사이즈표 모음에 비슷한 상품이 있으면 DB 근거로 쓴다', async () => {
+  const store = new Map([[SIZE_CHART_DB_KEY, JSON.stringify({ schemaVersion: SIZE_CHART_DB_VERSION, entries: [toEntry(rec({ brand: '나이키', model: 'Nike Club Fleece Hoodie 후드 티셔츠' }))].map((e) => ({ ...e, id: 'e1' })) })]])
+  const html = `<html><head><meta property="og:title" content="[M] 나이키 Club Fleece Hoodie 후드 티셔츠"><meta property="og:description" content="품번 BV2654-010 새상품"></head><body></body></html>`
+  const { texts } = await runContentInFakeDom(html, { location: { href: 'https://bunjang.co.kr/products/5' } }, {}, store)
+  assert.ok(texts.some((t) => t.startsWith('근거: 사이즈표 DB(근사) (근사/추정)')), texts.filter((t) => t.includes('근거')).join('|'))
+  assert.ok(texts.some((t) => t.startsWith('사이즈표 DB(근사/추정): 점수 ')))
+})
+
+await atest('중고 판매글 웹: 중고 상품 분석 화면이 후기 없는 결과, 우선순위 근거, 사진 역검색·라벨 인식 준비 중 안내를 보여주고 App에 연결돼 있다', async () => {
+  const result = analyzeUsedListing({ title: U_TITLE, text: `${U_TITLE}\n가슴단면 55 총장 70 어깨 47` }, usedProfile)
+  const html = render(WEB.UsedListing, { profile: usedProfile, db: null, imageSearcher: createImageSearcher(null), onBack: noop, initialResult: result })
+  const text = textOf(html)
+  assert.ok(text.includes('중고 상품 분석') && text.includes('번개장터·후르츠패밀리'))
+  assert.ok(text.includes('맞음') && text.includes('근거: 판매글 실측'))
+  assert.ok(text.includes(USED_NO_REVIEW_NOTE) && text.includes('근거 우선순위: ① 판매글 실측'))
+  assert.ok(text.includes('사진 역검색') && text.includes(IMAGE_SEARCH_DISABLED_TEXT) && text.includes(LABEL_OCR_DISABLED_TEXT))
+  assert.ok(text.includes('추정이고 실제 사이트에서 확인하지 못했어요'))
+  assert.ok(html.includes('<textarea') && /aria-label="사진 주소"[^>]*disabled/.test(html), '사진 주소 입력은 공급자가 없으면 비활성')
+  const noResult = textOf(render(WEB.UsedListing, { profile: usedProfile, db: null, imageSearcher: createImageSearcher(null), onBack: noop }))
+  assert.ok(!noResult.includes('추천 이유'))
+  const app = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
+  assert.ok(app.includes('<UsedListing') && app.includes('중고 상품 분석') && app.includes('createImageSearcher(null)'))
+})
+
+test('중고 판매글 manifest: 번개장터·후르츠패밀리가 content_scripts matches에 있고 검사를 통과한다 (도메인은 추정)', () => {
+  const m = EXT_MANIFEST.content_scripts.find((c) => c.js.includes('content.js')).matches
+  for (const x of ['*://bunjang.co.kr/*', '*://www.bunjang.co.kr/*', '*://m.bunjang.co.kr/*', '*://fruitsfamily.com/*', '*://www.fruitsfamily.com/*']) assert.ok(m.includes(x), x)
+  assert.deepEqual(checkManifest(EXT_MANIFEST), [])
+  for (const s of USED_SITES) for (const h of s.hosts) assert.ok(m.includes(`*://${h}/*`), `${h}가 usedListing 사이트 목록과 manifest에 둘 다 있어야 해요`)
+  const build = readFileSync(new URL('./buildExtension.mjs', import.meta.url), 'utf8')
+  assert.ok(build.includes('번개장터') && build.includes('추정'), '도메인이 추정이라는 설명이 빌드 스크립트에 있어요')
+})
+
+await atest('사진 역검색·라벨 글자 인식 자리: 기본은 비활성이고, 공급자를 꽂으면 후보가 사이즈표 DB 검색에 쓰인다 (가짜 공급자)', async () => {
+  const off = createImageSearcher(null)
+  assert.equal(off.enabled, false)
+  assert.deepEqual(await off.search(['https://a.example/1.jpg']), { status: 'disabled', candidates: [], message: IMAGE_SEARCH_DISABLED_TEXT })
+  const calls = []
+  const fake = createImageSearcher({ async searchByImage(arg) { calls.push(arg); return [{ brand: '나이키', model: 'Nike Club Fleece Hoodie 후드 티셔츠', code: 'BV2654-010', extra: 'x'.repeat(500) }, {}] } })
+  const found = await fake.search(['https://a.example/1.jpg', 'http://insecure.example/2.jpg', 'https://a.example/1.jpg'])
+  assert.deepEqual(calls[0].urls, ['https://a.example/1.jpg'], 'https 중복 없는 주소만 공급자에 보내요')
+  assert.equal(found.status, 'ok')
+  assert.equal(found.candidates.length, 1)
+  assert.deepEqual(Object.keys(found.candidates[0]).sort(), ['brand', 'code', 'model'])
+  assert.equal((await fake.search([])).status, 'no-photo')
+  assert.equal((await createImageSearcher({ searchByImage: async () => { throw new Error('x') } }).search(['https://a.example/1.jpg'])).status, 'error')
+  // 글에는 단서가 없고 사진 후보만 있어도 DB에서 찾고 '사진 검색 후보'로 표시해요
+  const db = await dbWith(rec({ brand: '나이키', model: 'Nike Club Fleece Hoodie 후드 티셔츠' }))
+  const listing = { title: '후드티 M', text: '후드티 M 사이즈' }
+  assert.equal((await findChartMatches(db, usedSearchQuery(listing))).length, 0)
+  const matches = await findChartMatches(db, usedSearchQuery(listing), found.candidates)
+  assert.equal(matches[0].viaPhoto, true)
+  const r = analyzeUsedListing(listing, usedProfile, { chartMatches: matches })
+  assert.equal(r.basis, 'chart-db')
+  assert.ok(r.details.some((l) => l.includes('사진 검색 후보로 찾음')))
+  // 라벨 글자 인식
+  const reader = createLabelReader(null)
+  assert.equal(reader.enabled, false)
+  assert.equal((await reader.read('https://a.example/tag.jpg')).status, 'disabled')
+  const on = createLabelReader({ textFromImage: async () => 'SIZE M\nSTYLE NO BV2654-010' })
+  const read = await on.read('https://a.example/tag.jpg')
+  assert.equal(read.status, 'ok')
+  assert.deepEqual(read.fields.sizes, ['M'])
+  assert.equal(read.fields.code, 'BV2654-010')
+  assert.equal((await createLabelReader({ textFromImage: async () => '' }).read('x')).status, 'empty')
+  assert.equal((await createLabelReader({ textFromImage: async () => { throw new Error('x') } }).read('x')).status, 'error')
+})
+
+test('중고 판매글: 읽기·분석 모듈은 네트워크를 쓰지 않는다 (소스 검사)', () => {
+  for (const f of ['usedListing.js', 'usedAnalyze.js', 'imageSearch.js', 'labelOcr.js']) {
+    const src = readFileSync(new URL(`../src/lib/${f}`, import.meta.url), 'utf8')
+    assert.ok(!/\b(fetch|XMLHttpRequest|sendBeacon|WebSocket)\b\s*\(/.test(src), f)
+  }
+})
+
+// ---- 성공 기준 지표 측정 (eval:fit). 전부 직접 만든 가짜·합성 데이터이고, 실제 정확도를 잰 것이 아니에요 ----
+const recs = (spec) => spec.flatMap(([n, actual, predicted, high]) => Array.from({ length: n }, () => ({ actual, predicted, high, priorPredicted: 'true', priorHigh: false, learnedApplied: true })))
+
+test('평가 지표: Wilson 구간은 알려진 값과 맞고 경계(0건, 전부 적중)를 처리한다', () => {
+  const w = wilson(9, 10)
+  assert.ok(Math.abs(w.lo - 0.5958) < 0.002 && Math.abs(w.hi - 0.9821) < 0.002, `${w.lo} ${w.hi}`)
+  assert.equal(wilson(0, 0), null)
+  assert.equal(wilson(20, 20).hi, 1)
+  assert.ok(wilson(0, 20).lo === 0 && wilson(0, 20).hi > 0)
+  assert.ok(wilson(90, 100).hi - wilson(90, 100).lo < wilson(9, 10).hi - wilson(9, 10).lo, '표본이 많을수록 구간이 좁다')
+})
+
+test('평가 지표: 확신 높음 적중률과 적용 범위, 기준선(항상 정사이즈), 혼동행렬', () => {
+  // 확신 높음 5건(4건 적중), 그 밖 5건. 실제 라벨: true 5건
+  const L = summarizeLabels(recs([
+    [3, 'true', 'true', true], [1, 'small', 'true', true], [1, 'large', 'large', true], // 높음 5건 중 4건 적중
+    [1, 'true', 'true', false], [2, 'small', 'small', false], [1, 'true', 'large', false], [1, 'large', 'small', false],
+  ]))
+  assert.equal(L.n, 10)
+  assert.equal(L.high.k, 4)
+  assert.equal(L.high.n, 5)
+  assert.equal(L.high.rate, 0.8)
+  assert.equal(L.coverage.rate, 0.5)
+  assert.equal(L.accuracy.rate, 0.7)
+  assert.equal(L.baselineAll.rate, 0.5) // 실제 true가 5건
+  assert.equal(L.baselineHigh.rate, 0.6) // 높음 5건 중 true 3건
+  assert.equal(L.matrix.small.true, 1)
+  assert.equal(L.matrix.large.small, 1)
+  assert.equal(L.precisionRecall.small.support, 3)
+  assert.ok(L.high.ci.lo < 0.8 && L.high.ci.hi > 0.8)
+})
+
+test('평가 지표: 확신 높음 판정 기준(경계에서 떨어진 정도, 부위 수)과 라벨 예측', () => {
+  assert.equal(predictFromEase({ chest: 2, shoulder: -1 }).label, 'small')
+  assert.equal(predictFromEase({ chest: 12, shoulder: 3 }).label, 'true')
+  assert.equal(predictFromEase({ chest: 30, shoulder: 9 }).label, 'large')
+  assert.equal(predictFromEase({ chest: 12, shoulder: 3 }).high, true)
+  assert.equal(predictFromEase({ chest: 7, shoulder: 3 }).high, false, '경계(snug 6)에서 1cm라 확신 낮음')
+  assert.equal(predictFromEase({ chest: 12 }).high, false, '비교 부위가 1개면 확신 높음이 아님')
+  assert.equal(predictFromEase({ chest: 30, shoulder: 3 }).label, 'true', '한 부위만 크면 large가 아님')
+  assert.equal(predictFromEase({}).label, null)
+  // 학습값(rules·offset)이 판정 경계를 옮긴다
+  assert.equal(predictFromEase({ chest: 9, shoulder: 3 }).label, 'true')
+  assert.equal(predictFromEase({ chest: 9, shoulder: 3 }, { rules: {}, offset: 5 }).label, 'small')
+})
+
+test('평가 지표: ±1 사이즈 판정 (이름 표기 차이, 순서에 없는 사이즈, 경계)', () => {
+  const order = ['S', 'M', 'L', 'XL']
+  assert.equal(withinSizes(order, 'M', 'L'), true)
+  assert.equal(withinSizes(order, 'M', 'M'), true)
+  assert.equal(withinSizes(order, 'S', 'L'), false)
+  assert.equal(withinSizes(order, 'S', 'M', 0), false)
+  assert.equal(withinSizes(['1(S)', '2(M)', '3(L)'], '2(M)', 'L'), true)
+  assert.equal(withinSizes(order, 'XXL', 'M'), null)
+  assert.equal(withinSizes(order, null, 'M'), null)
+  assert.deepEqual(sizeOrderOf({ rows: [['s'], ['m']], measures: { M: {}, L: {} } }), ['S', 'M', 'L'])
+  const S = summarizeSizes([{ hit: true, exact: true, priorHit: true, baselineHit: false }, { hit: true, exact: false, priorHit: false, baselineHit: true }, { hit: false, exact: false, priorHit: false, baselineHit: false }])
+  assert.equal(S.within1.k, 2)
+  assert.equal(S.exact.k, 1)
+  assert.equal(S.baselineWithin1.k, 1)
+})
+
+test('평가 분할: 시드 고정, 모든 단위가 정확히 한 묶음에만 들어가고 크기가 고르다', () => {
+  const a = assignFolds(103, 5, 7)
+  assert.deepEqual(a, assignFolds(103, 5, 7))
+  assert.notDeepEqual(a, assignFolds(103, 5, 8))
+  assert.equal(a.length, 103)
+  const sizes = [0, 1, 2, 3, 4].map((f) => a.filter((x) => x === f).length)
+  assert.equal(sizes.reduce((x, y) => x + y, 0), 103)
+  assert.ok(Math.max(...sizes) - Math.min(...sizes) <= 1, sizes.join())
+  const data = makeDemoDataset(5, { products: 6, reviewsPer: 20 })
+  const r = evaluateReviews(data.products, { folds: 4, seed: 5 })
+  const all = r.folds.flatMap((f) => f.test)
+  assert.equal(new Set(all).size, all.length, '떼어 둔 후기가 겹치지 않는다')
+  assert.equal(all.length, r.eligible, '모든 후기가 한 번씩 평가된다')
+  assert.equal(r.label.n, r.eligible)
+  assert.ok(r.folds.every((f) => f.trainSamples < 120), '떼어 둔 후기는 학습에서 빠진다')
+  // 상품 단위 분할: 한 상품의 후기는 한 묶음에만 있다
+  const byProduct = evaluateReviews(data.products, { folds: 3, seed: 5, groupBy: 'product' })
+  const foldOfProduct = new Map()
+  for (const f of byProduct.folds) {
+    for (const key of f.test) {
+      const pi = key.split(':')[0]
+      assert.ok(!foldOfProduct.has(pi) || foldOfProduct.get(pi) === f.fold, '상품이 두 묶음에 걸침')
+      foldOfProduct.set(pi, f.fold)
+    }
+  }
+})
+
+test('평가 입력: 평가할 수 없는 후기(라벨·체형·성별·사이즈 없음)는 걸러낸다', () => {
+  const p = { category: 'top', sizeChart: { measures: { M: { chest: 100 } } } }
+  const ok = { size: 'M', fit: 'true', height: 175, weight: 70, gender: 'male' }
+  assert.equal(eligibleReview(p, ok), true)
+  assert.equal(eligibleReview(p, { ...ok, fit: undefined }), false)
+  assert.equal(eligibleReview(p, { ...ok, gender: undefined }), false)
+  assert.equal(eligibleReview(p, { ...ok, height: null }), false)
+  assert.equal(eligibleReview(p, { ...ok, size: 'XL' }), false, '사이즈표에 없는 사이즈')
+  assert.equal(eligibleReview({ ...p, category: 'shoes' }, ok), false)
+  assert.equal(eligibleReview({ category: 'top' }, ok), false)
+  assert.ok(parseEvalInput({ foo: 1 }).error)
+  assert.equal(parseEvalInput({ products: [] }).mode, 'reviews')
+  assert.equal(parseEvalInput({ samples: [{ cat: 'top', label: 'true', e: { chest: 1 } }, { bad: 1 }] }).samples.length, 1)
+})
+
+test('평가 판정: 달성·미달·보류 (표본 부족이면 판정 보류)', () => {
+  const mk = (highHit, highN, sizeHit, sizeN) => {
+    const rows = [
+      [highHit, 'small', 'small', true], [highN - highHit, 'small', 'true', true], // 확신 높음
+      [30, 'true', 'true', false], [20, 'large', 'large', false], [20, 'small', 'small', false],
+    ]
+    const size = sizeN ? summarizeSizes(Array.from({ length: sizeN }, (_, i) => ({ hit: i < sizeHit, exact: false, priorHit: false, baselineHit: false }))) : { n: 0, reason: '없음' }
+    return { label: summarizeLabels(recs(rows)), size }
+  }
+  assert.equal(judge(mk(57, 60, 57, 60)).status, 'met') // 95%, 95%
+  assert.equal(judge(mk(50, 60, 57, 60)).status, 'unmet') // 확신 높음 83%
+  assert.equal(judge(mk(57, 60, 50, 60)).status, 'unmet') // ±1 83%
+  const fewHigh = judge(mk(9, 10, 57, 60))
+  assert.equal(fewHigh.status, 'hold', '확신 높음 판정이 10건이면 보류')
+  assert.ok(fewHigh.checks.find((c) => c.id === 'high').text.includes('판정 보류'))
+  const noSize = judge(mk(57, 60, 0, 0))
+  assert.equal(noSize.status, 'hold', '사이즈 평가가 없으면 보류')
+  assert.ok(noSize.checks.find((c) => c.id === 'size').text.includes('판정 보류'))
+  // 90% 이상이어도 ‘항상 정사이즈’ 기준선을 못 넘으면 달성이 아님
+  const baselineHeavy = { label: summarizeLabels(recs([[95, 'true', 'true', true], [5, 'true', 'small', true], [30, 'true', 'true', false]])), size: summarizeSizes(Array.from({ length: 40 }, () => ({ hit: true, exact: false, priorHit: false, baselineHit: false }))) }
+  assert.equal(judge(baselineHeavy).checks.find((c) => c.id === 'baseline').state, 'fail')
+  assert.equal(judge(baselineHeavy).status, 'unmet')
+  // 후기 50건 미만이면 경고
+  assert.ok(judge({ label: summarizeLabels(recs([[10, 'true', 'true', true]])), size: { n: 0, reason: 'x' } }).warnings.some((w) => w.includes('적어요')))
+})
+
+test('평가 샘플 모드(여유분 기반): 경계가 뚜렷한 샘플은 확신 높음이 모두 적중하고 ±1은 평가하지 않는다', () => {
+  const mk = (label, e, n) => Array.from({ length: n }, () => ({ cat: 'top', brand: null, label, w: 1, e }))
+  const samples = [...mk('small', { chest: 2, shoulder: -1 }, 20), ...mk('true', { chest: 12, shoulder: 3 }, 20), ...mk('large', { chest: 30, shoulder: 9 }, 20)]
+  const r = evaluateSamples(samples, { folds: 5 })
+  assert.equal(r.label.n, 60)
+  assert.equal(r.label.high.rate, 1)
+  assert.equal(r.label.high.n, r.label.coverage.k)
+  assert.ok(r.label.coverage.rate > 0.9)
+  assert.equal(r.size.within1, undefined)
+  const j = judge(r)
+  assert.equal(j.status, 'hold')
+  assert.ok(j.checks.find((c) => c.id === 'size').text.includes('판정 보류'))
+  const text = formatEvalReport(r).join('\n')
+  assert.ok(text.includes('평가할 수 없어요') && text.includes('여유분 기반 평가'))
+})
+
+test('eval:fit --demo: 맨 위와 맨 아래에 합성 표시, 판정 문구에도 실제 달성이 아님을 적고, 같은 시드면 결과가 같다', () => {
+  const a = runEvalCli(['--demo'])
+  assert.equal(a.code, 0)
+  assert.ok(a.lines[0].includes(DEMO_NOTE), '맨 위')
+  assert.ok(a.lines[a.lines.length - 1].includes(DEMO_NOTE), '맨 아래')
+  const verdict = a.lines.find((l) => l.startsWith('[3] 목표 판정'))
+  assert.ok(verdict.includes('실제 달성이 아님'), verdict)
+  assert.deepEqual(a.lines, runEvalCli(['--demo']).lines)
+  assert.notDeepEqual(a.lines, runEvalCli(['--demo', '--seed', '3']).lines)
+  const text = a.lines.join('\n')
+  for (const key of ['확신 높음', '적용 범위', '전체 정확도', '혼동행렬', 'precision', '±1', '항상 정사이즈', '학습값 없는 현재 규칙', '95% 구간']) assert.ok(text.includes(key), key)
+  // 합성이 아닌 입력의 보고서에는 합성 문구가 붙지 않는다
+  const real = runEvalCli(['--file', 'x.json'], { readFile: () => JSON.stringify({ products: makeDemoDataset(2, { products: 4, reviewsPer: 20 }).products }) })
+  assert.ok(!real.lines.join('\n').includes('합성'))
+  assert.ok(!real.lines.join('\n').includes('실제 달성'))
+  // 파일에 synthetic 표시가 있으면 합성 문구를 붙인다
+  const marked = runEvalCli(['--file', 'x.json'], { readFile: () => JSON.stringify(makeDemoDataset(2, { products: 4, reviewsPer: 20 })) })
+  assert.ok(marked.lines[0].includes(DEMO_NOTE) && marked.lines[marked.lines.length - 1].includes(DEMO_NOTE))
+})
+
+test('eval:fit: 데이터가 없으면 측정하지 않았다고 말하고 사용법을 보여준다, 잘못된 입력은 오류', () => {
+  const none = runEvalCli([])
+  assert.equal(none.code, 0)
+  assert.equal(none.lines[0], NO_DATA_MESSAGE)
+  assert.ok(none.lines[0].includes('측정하지 않았어요'))
+  assert.ok(none.lines.join('\n').includes('--file') && none.lines.join('\n').includes('--demo'))
+  assert.ok(!none.lines.join('\n').includes('%'), '수치를 지어내지 않는다')
+  assert.equal(runEvalCli(['--file', 'nope.json'], { readFile: () => { throw new Error('ENOENT') } }).code, 1)
+  assert.equal(runEvalCli(['--file', 'x'], { readFile: () => '{"a":1}' }).code, 1)
+  assert.equal(runEvalCli(['--file', 'x'], { readFile: () => 'not json' }).code, 1)
+  assert.equal(runEvalCli(['--folds', '1']).code, 1)
+  assert.equal(runEvalCli(['--bogus']).code, 1)
+  const empty = runEvalCli(['--file', 'x'], { readFile: () => '{"products":[]}' })
+  assert.ok(empty.lines[0].includes('측정하지 않았어요'))
+})
+
+test('eval:fit: 표본이 적은 실제(가짜) 파일은 판정 보류와 경고를 출력한다', () => {
+  const tiny = makeDemoDataset(1, { products: 2, reviewsPer: 8 })
+  const r = runEvalCli(['--file', 'x'], { readFile: () => JSON.stringify({ products: tiny.products }) })
+  const text = r.lines.join('\n')
+  assert.ok(text.includes('판정 보류'), text)
+  assert.ok(text.includes('적어요'))
+  assert.ok(text.includes('[95% 구간'))
+  assert.ok(!text.includes('목표 달성'))
+})
+
+test('학습 샘플 내보내기: 허용 목록 필드만 담고 키·몸무게·성별·사이즈·본문·주소·id는 없다', () => {
+  const dirty = [{
+    id: 'abc', cat: 'top', brand: 'musinsa.com', region: 'kr', label: 'true', w: 1, e: { chest: 12.5, shoulder: 'x' }, d: 20000,
+    height: 175, weight: 70, gender: 'male', size: 'M', text: '키 175 몸무게 70 후기 본문', url: 'https://shop.example/p/1', name: '상품명', nickname: '닉',
+  }, { cat: 'top', label: 'bogus', e: { chest: 1 } }, { cat: 'top', label: 'small', e: {} }]
+  const out = buildLearnExport(dirty)
+  assert.equal(out.kind, EXPORT_KIND)
+  assert.equal(out.count, 1)
+  assert.deepEqual(out.samples[0], { cat: 'top', brand: 'musinsa.com', region: 'kr', label: 'true', w: 1, e: { chest: 12.5 }, d: 20000 })
+  const json = JSON.stringify(out)
+  for (const bad of ['height', 'weight', 'gender', '"size"', '"text"', 'url', 'nickname', '"id"', '175', '후기 본문', 'shop.example', '상품명']) assert.ok(!json.includes(bad), bad)
+  // 실제 학습 샘플 변환 결과를 내보내도 같다
+  const clothing = PRODUCTS['https://shop-a.example.com/goods/12345']
+  const exported = buildLearnExport(toSamples(clothing, { now: 0 }))
+  const allowed = new Set(['cat', 'brand', 'region', 'label', 'w', 'e', 'd'])
+  assert.ok(exported.samples.every((s) => Object.keys(s).every((k) => allowed.has(k))))
+  assert.equal(buildLearnExport(null).count, 0)
+  // 내보낸 파일은 그대로 평가 입력이 된다
+  assert.equal(parseEvalInput(JSON.parse(json)).mode, 'samples')
+})
+
+test('학습 샘플 내보내기: 웹 결과 화면에는 내보내기 연결이 있을 때만 버튼이 나온다', () => {
+  const clothing = { ...PRODUCTS['https://shop-a.example.com/goods/12345'], source: 'demo' }
+  const samples = [...synth(clothing.category, null, 'small', 10, 12), ...synth(clothing.category, null, 'true', 10, 20)]
+  const props = { product: clothing, profile, calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop, learningModel: trainModel(samples, EASE_RULES), onResetLearning: noop }
+  assert.ok(textOf(render(WEB.ResultView, { ...props, onExportLearning: noop })).includes('학습 샘플 내보내기(JSON)'))
+  assert.ok(!textOf(render(WEB.ResultView, props)).includes('학습 샘플 내보내기'))
+})
+
+test('평가 모듈: 네트워크를 쓰지 않고, README·문서는 실제 측정 수치가 없다고 밝힌다', () => {
+  for (const f of ['../scripts/lib/fitEval.mjs', '../scripts/lib/evalCli.mjs', '../scripts/evalFit.mjs', '../src/lib/learnExport.js']) {
+    const src = readFileSync(new URL(f, import.meta.url), 'utf8')
+    assert.ok(!/\b(fetch|XMLHttpRequest|sendBeacon|WebSocket)\b\s*\(/.test(src) && !/node:https?|node:net/.test(src), f)
+  }
+  assert.equal(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).scripts['eval:fit'], 'node scripts/evalFit.mjs')
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
+  assert.ok(readme.includes('eval:fit') && readme.includes('실제 데이터로 측정한 수치는 아직 없'))
+  const doc = readFileSync(new URL('../docs/평가_핏정확도.md', import.meta.url), 'utf8')
+  for (const key of ['라벨 잡음', '표본 수', '편향', 'Wilson', '합성 데이터, 실제 정확도 아님', '확장 내보내기는 추후', '실제 데이터로 측정한 수치는 아직 없']) assert.ok(doc.includes(key), key)
+})
+
+import { TRYON_MODELS } from '../server/hfTryOn.js'
+
+await atest('hfTryOn(Leffa, 가짜 fetch): 하의는 dress_code·lower_body로 leffa_predict_vt를 부르고, 이유 없는 거절(null)은 토큰 안내로 바꾼다', async () => {
+  clearTryOnCache()
+  const LB = 'https://franciszzj-leffa.hf.space'
+  const api = `${LB}/gradio_api`
+  const calls = []
+  const mk = (sse) => async (url, opts = {}) => {
+    calls.push({ url, opts })
+    if (url === `${LB}/config`) return resp({ api_prefix: '/gradio_api' })
+    if (url === `${api}/upload`) return resp([`/tmp/gradio/up${calls.length}.png`])
+    if (url === `${api}/call/leffa_predict_vt`) return resp({ event_id: 'lf1' })
+    if (url === `${api}/call/leffa_predict_vt/lf1`) return resp(sse, { type: 'text/event-stream' })
+    if (url === `${api}/file=/tmp/gradio/lf.png`) return resp(new Uint8Array([9]), { type: 'image/png' })
+    return resp('nf', { status: 404, type: 'text/plain' })
+  }
+  assert.equal(isTryOnSupported('bottom'), false, '기본(IDM-VTON)은 하의 미지원 그대로')
+  assert.equal(isTryOnSupported('bottom', 'leffa') && isTryOnSupported('dress', 'leffa'), true)
+  assert.equal(isTryOnSupported('shoes', 'leffa'), false)
+  assert.equal(TRYON_MODELS.leffa.space, 'franciszzj/Leffa')
+  const ok = `event: complete\ndata: ${JSON.stringify([{ path: '/tmp/gradio/lf.png' }, { path: '/tmp/m.png' }, { path: '/tmp/d.png' }])}\n\n`
+  const r = await runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'bottom', model: 'leffa', fetchImpl: mk(ok) })
+  assert.equal(r.image, 'data:image/png;base64,CQ==')
+  assert.ok(r.model.startsWith('Leffa'))
+  const { data } = JSON.parse(calls.find((c) => c.url === `${api}/call/leffa_predict_vt`).opts.body)
+  assert.deepEqual(data.slice(2), ['False', 30, 2.5, 42, 'dress_code', 'lower_body', 'False'])
+  assert.ok(data[0].path && data[1].path, '두 사진을 먼저 올린 경로')
+  await assert.rejects(
+    runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'top', model: 'leffa', fetchImpl: mk('event: error\ndata: null\n\n') }),
+    (e) => e.code === 'LEFFA_REJECTED' && e.message.includes('IDM-VTON'),
+  )
+  // 운영자의 HF_TOKEN은 제3자 Space(Leffa)로 보내지 않아요
+  calls.length = 0
+  clearTryOnCache()
+  await runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'dress', model: 'leffa', token: 'hf_secret', fetchImpl: mk(ok) })
+  assert.ok(calls.length > 0 && calls.every((c) => !c.opts.headers?.Authorization), 'Leffa 요청에는 Authorization이 없어요')
+  await assert.rejects(runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'shoes', model: 'leffa', fetchImpl: mk(ok) }), (e) => e.code === 'UNSUPPORTED')
+})
+
+test('웹 렌더: 확장에서 담은 옷장 항목은 부위별 여유 게이지·실측·후기 핏 분포·리뷰를 자세히 보기에 그린다 (가짜 데이터)', () => {
+  const item = {
+    id: 'x1', savedAt: 1, product: { name: '스웻셔츠', mall: 'musinsa', category: 'top', image: null, url: 'https://shop.example/x1' },
+    size: 'L', measures: { shoulder: 49, chest: 112, topLength: 70 },
+    verdicts: [{ part: 'chest', label: '가슴', verdict: '적당', key: 'regular', ease: 10.5 }, { part: 'shoulder', label: '어깨', verdict: '넉넉', key: 'relaxed', ease: 3.5 }],
+    reviews: [
+      { nick: 'a', text: '좋아요', photos: ['https://img.example.com/1.jpg'], height: 175, weight: 70, size: 'L', fitLabel: '잘 맞아요', similarity: 95 },
+      { nick: 'b', text: '커요', photos: [], height: 176, weight: 71, size: 'L', fitLabel: '커요', similarity: 90 },
+    ],
+  }
+  const html = render(WEB.Wardrobe, { items: [item], onDelete: noop, onBack: noop })
+  const txt = textOf(html)
+  assert.ok(txt.includes('자세히 보기 · 리뷰 2건'))
+  assert.ok(html.includes('fv-gauge') && txt.includes('+10.5cm') && txt.includes('+3.5cm'), '여유 게이지')
+  assert.ok(html.includes('class="on l2"') && html.includes('class="on l3"'), '판정 칸 위치')
+  assert.ok(txt.includes('L 실측') && txt.includes('가슴 112cm') && txt.includes('총장 70cm'), '실측 칩')
+  assert.ok(txt.includes('담은 후기 핏 평가') && txt.includes('정사이즈 50%') && txt.includes('커요 50%'), '핏 분포(확장 fitLabel 기준)')
+  assert.ok(txt.includes('사진 모아보기'), '리뷰 탭')
+})
+
+test('웹 렌더: 결과 화면은 onTryOn이 있으면 사진 합성 대신 가상 피팅 바로가기를, TryOnPanel은 모델 선택을 보여준다', () => {
+  const clothing = { ...PRODUCTS['https://shop-a.example.com/goods/12345'], source: 'demo' }
+  const props = { product: clothing, profile, calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop }
+  const linked = textOf(render(WEB.ResultView, { ...props, onTryOn: noop }))
+  assert.ok(linked.includes('가상 피팅') && linked.includes('내 사진에 이 옷'))
+  assert.ok(!linked.includes('AI로 합성하기'), '패널은 탭으로 옮겨요')
+  const inline = textOf(render(WEB.ResultView, props))
+  assert.ok(inline.includes('AI로 합성하기'), 'onTryOn이 없으면 예전처럼 패널')
+  const panel = textOf(render(WEB.TryOnPanel, { product: { ...clothing, category: 'bottom' }, profile, verdicts: [], selectedSize: 'M', captureRef: { current: null } }))
+  assert.ok(panel.includes('IDM-VTON') && panel.includes('Leffa (실험적)') && panel.includes('상의·하의·원피스'))
+})
+
+import { measureFromPose, anchorLayout, ellipseCircumference, rowWidth } from '../src/lib/photoBody.js'
+
+// 가짜 정면 전신: 400×1000 사진, 키 175cm. 눈 y=100, 발뒤꿈치 y=900 → 사진 속 키 800/0.935 ≈ 855.6px → 0.2045cm/px
+function fakePose({ shoulderPx = 170, chestPx = 230, waistPx = 200, hipPx = 250, vis = 1, armGap = 600 } = {}) {
+  const W = 400
+  const H = 1000
+  const lm = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: vis }))
+  const set = (i, x, y) => { lm[i] = { x: x / W, y: y / H, visibility: vis } }
+  set(2, 190, 100); set(5, 210, 100)
+  set(11, 200 - shoulderPx / 2, 250); set(12, 200 + shoulderPx / 2, 250)
+  set(23, 160, 550); set(24, 240, 550)
+  set(27, 170, 880); set(28, 230, 880); set(29, 170, 900); set(30, 230, 900)
+  // 팔: 기본은 몸통에서 멀리(잘라내지 않음). armGap을 주면 팔 중심선 사이 거리를 그만큼으로
+  const ax = armGap / 2
+  set(13, 200 - ax, 400); set(14, 200 + ax, 400); set(15, 200 - ax, 560); set(16, 200 + ax, 560)
+  const mask = new Float32Array(W * H)
+  // 몸통 높이별 너비: 가슴(어깨~골반 33%), 허리(62%), 엉덩이(108%) 근처를 그 너비로 칠해요
+  const widthAt = (y) => { const t = (y - 250) / 300; return t < 0.47 ? chestPx : t < 0.85 ? waistPx : hipPx }
+  for (let y = 250; y < 600; y++) { const w = widthAt(y); for (let x = Math.round(200 - w / 2); x < Math.round(200 + w / 2); x++) mask[y * W + x] = 1 }
+  return { landmarks: lm, width: W, height: H, mask, maskW: W, maskH: H }
+}
+
+test('사진 체형 추정(가짜 관절·윤곽): 키로 축척을 잡아 어깨·둘레를 재고 공식값과 섞어 ±12% 안으로 묶는다', () => {
+  assert.ok(Math.abs(ellipseCircumference(30, 1) - Math.PI * 30) < 0.01, '원이면 πd')
+  const m = new Float32Array([0, 1, 1, 1, 0, 0, 1, 0])
+  assert.equal(rowWidth(m, 8, 1, 0, 2), 3)
+  assert.equal(rowWidth(m, 8, 1, 0, 4), null, '사람 밖')
+  const formula = { shoulder: 45.5, chest: 97.5, waist: 80, hip: 94 }
+  const r = measureFromPose({ ...fakePose(), heightCm: 175, formula })
+  assert.equal(r.ok, true)
+  const cmPerPx = 175 / (800 / 0.935)
+  assert.ok(Math.abs(r.raw.shoulder - 170 * cmPerPx * 1.27) <= 0.5, `어깨 ${r.raw.shoulder}`)
+  assert.ok(Math.abs(r.raw.chest - ellipseCircumference(230 * cmPerPx, 0.72) * 1.08) <= 0.5, `가슴 ${r.raw.chest}`)
+  assert.ok(r.raw.waist < r.raw.chest && r.raw.hip > r.raw.waist, '허리는 가장 좁고 엉덩이는 넓게')
+  for (const k of ['shoulder', 'chest', 'waist', 'hip']) {
+    assert.ok(r.values[k] >= formula[k] * 0.88 - 0.5 && r.values[k] <= formula[k] * 1.12 + 0.5, `${k} ±12%`)
+  }
+  assert.deepEqual(r.warnings, [])
+  // 넓은 사람은 공식보다 크게, 좁은 사람은 작게
+  const big = measureFromPose({ ...fakePose({ shoulderPx: 190, chestPx: 190 }), heightCm: 175, formula })
+  const small = measureFromPose({ ...fakePose({ shoulderPx: 150, chestPx: 150 }), heightCm: 175, formula })
+  assert.ok(big.values.shoulder > r.values.shoulder && small.values.shoulder < r.values.shoulder)
+  assert.ok(big.values.chest > small.values.chest)
+  // 팔이 붙어 몸통이 너무 넓으면 가슴·허리는 빼고 안내
+  const arms = measureFromPose({ ...fakePose({ chestPx: 300, waistPx: 290 }), heightCm: 175, formula })
+  assert.equal(arms.values.chest, undefined)
+  assert.ok(arms.warnings.some((w) => w.includes('팔을 몸에서')))
+  // 팔이 허리 옆에 붙어 윤곽에 섞이면(허리 윤곽 280px) 두 팔 중심선 안쪽까지만 몸통으로 봐요
+  const merged = measureFromPose({ ...fakePose({ waistPx: 250, armGap: 260 }), heightCm: 175, formula })
+  const armHalfCm = (0.055 * (800 / 0.935) / 2) * cmPerPx
+  assert.ok(Math.abs(merged.raw.waist - ellipseCircumference(260 * cmPerPx - 2 * armHalfCm, 0.75)) <= 0.5, `허리 ${merged.raw.waist}`)
+  // 팔에 20% 넘게 가리면 그 부위는 빼고, 허리가 가슴·엉덩이보다 넓으면(헐렁한 옷) 허리를 빼요
+  const hidden = measureFromPose({ ...fakePose({ waistPx: 280, armGap: 200 }), heightCm: 175, formula })
+  assert.equal(hidden.raw.waist, undefined)
+  assert.ok(hidden.warnings.some((w) => w.includes('팔')))
+  const loose = measureFromPose({ ...fakePose({ chestPx: 200, waistPx: 240, hipPx: 220 }), heightCm: 175, formula })
+  assert.equal(loose.raw.waist, undefined)
+  assert.ok(loose.warnings.some((w) => w.includes('헐렁한 옷')))
+  // 발이 안 보이면 실패, 키가 없으면 실패
+  assert.equal(measureFromPose({ ...fakePose({ vis: 0.2 }), heightCm: 175, formula }).ok, false)
+  assert.equal(measureFromPose({ ...fakePose(), heightCm: 0, formula }).ok, false)
+  // 미리보기 배치: 상의는 어깨 사이 가운데, 하의는 골반 기준
+  const top = anchorLayout(r.anchors, 'top')
+  assert.ok(Math.abs(top.leftPct + top.widthPct / 2 - 50) < 0.01 && top.widthPct > (170 / 400) * 100)
+  const bottom = anchorLayout(r.anchors, 'bottom')
+  assert.ok(bottom.topPct > top.topPct)
+})
+
+test('사진 추정값 반영: 직접 잰 값 > 사진 추정 > 키·몸무게 공식 순서로 쓰고 비교 표에 (사진 추정)으로 표시한다 (가짜 데이터)', () => {
+  const base = { gender: 'male', height: 175, weight: 70, preferredFit: 'regular', usual: { top: '', bottom: '' }, measurements: {} }
+  const plain = estimateBody(base)
+  const withPhoto = estimateBody({ ...base, photoBody: { shoulder: 48, chest: 102, at: 1 } })
+  assert.equal(withPhoto.values.shoulder, 48)
+  assert.equal(withPhoto.values.chest, 102)
+  assert.equal(withPhoto.values.waist, plain.values.waist, '사진에 없는 부위는 공식값')
+  assert.deepEqual([...withPhoto.photo].sort(), ['chest', 'shoulder'])
+  const both = estimateBody({ ...base, photoBody: { chest: 102 }, measurements: { chest: 96 } })
+  assert.equal(both.values.chest, 96, '직접 잰 값이 이겨요')
+  assert.ok(!both.photo.has('chest') && both.measured.has('chest'))
+  const product = { name: '셔츠', mall: 'shop', category: 'top', sizeChart: { measures: { M: { shoulder: 47, chest: 104 }, L: { shoulder: 49, chest: 112 } } }, reviews: [], notes: [] }
+  const r = generateFitComment({ ...base, photoBody: { shoulder: 48, chest: 102 } }, product)
+  assert.deepEqual([...r.photoParts].sort(), ['chest', 'shoulder'])
+  assert.equal(r.detailed, false, '사진 추정은 직접 잰 치수로 치지 않아요')
+  const cmp = compareSizes({ chart: product.sizeChart, bodyValues: r.bodyValues, measured: r.measured, category: 'top', reviewParts: r.reviewParts, photoParts: r.photoParts })
+  assert.equal(cmp.sizes[0].rows.find((x) => x.part === 'chest').bodyKind, 'photo')
+  assert.equal(cmp.sizes[0].rows.find((x) => x.part === 'chest').body, 102)
+})
+
+test('치수 재는 법: 입력 칸 부위마다 안내가 있고, 그림과 설명을 보여준다', () => {
+  const html = textOf(render(WEB.MeasureGuide, {}))
+  for (const f of BODY_FIELDS) if (f.key !== 'footLength') assert.ok(html.includes(f.label), `${f.label} 안내 없음`)
+  assert.ok(html.includes('다리길이'), '다리길이')
+  assert.ok(html.includes('어깨 끝 뼈'), '처음엔 어깨 설명')
+})
+
+import { bodyValuesForProfile as bvLeg } from '../src/lib/fitEngine.js'
+test('다리길이: 직접 재면 바지 총장 기준이 키 대신 다리길이로 바뀌고 (다리길이로 계산)으로 표시, 확장 프로필에도 저장된다', () => {
+  const base = { gender: 'male', height: 175, weight: 70, measurements: {} }
+  assert.equal(bvLeg(base).values.inseam, 101.5, '안 재면 키 × 0.58')
+  const long = bvLeg({ ...base, measurements: { leg: 85 } })
+  assert.equal(long.values.inseam, Math.round(85 * (0.58 / 0.45) * 10) / 10)
+  const chart = { category: 'bottom', rows: [['30']], measures: { 30: { waist: 80, inseam: 104 } } }
+  const row = (r) => compareSizes({ chart, bodyValues: r.values, measured: r.measured, category: 'bottom' }).sizes[0].rows.find((x) => x.part === 'inseam')
+  assert.equal(row(bvLeg(base)).bodyKind, 'standard')
+  assert.equal(row(long).bodyKind, 'leg')
+  assert.ok(row(long).ease < row(bvLeg(base)).ease, '다리가 길면 같은 바지가 더 짧게 판정')
+  assert.equal(buildProfile({ gender: 'male', height: '175', weight: '70', measurements: { leg: '82', arm: '60' } }).profile.measurements.leg, 82)
+  assert.ok(readFileSync('extension/popup.html', 'utf8').includes('name="m-leg"'), '팝업에 다리길이 칸')
 })
 
 console.log(`\n${passed}개 통과`)
