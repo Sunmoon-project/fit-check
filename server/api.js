@@ -80,12 +80,13 @@ async function handleProduct(req, res) {
 }
 
 async function handleTryOn(req, res, hf) {
-  const { personImage, garmentImage, category, garmentName } = await readJson(req)
+  const { personImage, garmentImage, category, garmentName, model } = await readJson(req)
   if (!isImageInput(personImage) || !isImageInput(garmentImage)) {
     return send(res, 400, { error: 'INVALID_IMAGE', message: '사진 형식을 확인해주세요 (PNG, JPG, WEBP).' })
   }
-  if (!isTryOnSupported(category)) {
-    return send(res, 400, { error: 'UNSUPPORTED', message: 'AI 합성은 상의·아우터만 지원해요. 무료 IDM-VTON Space는 상반신만 인식해요.' })
+  // model: 'leffa'(상의·하의·원피스) | 'idm'(상의·아우터). 모르는 값은 예전처럼 IDM-VTON이에요.
+  if (!isTryOnSupported(category, model)) {
+    return send(res, 400, { error: 'UNSUPPORTED', message: model === 'leffa' ? 'AI 합성은 상의·아우터·하의·원피스만 지원해요.' : 'AI 합성은 상의·아우터만 지원해요. 무료 IDM-VTON Space는 상반신만 인식해요.' })
   }
 
   const ctrl = new AbortController()
@@ -99,6 +100,7 @@ async function handleTryOn(req, res, hf) {
       space: hf.space,
       token: hf.token,
       signal: ctrl.signal,
+      model,
     })
     return send(res, 200, result)
   } catch (e) {

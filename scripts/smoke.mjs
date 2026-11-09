@@ -6242,4 +6242,38 @@ test('평가 모듈: 네트워크를 쓰지 않고, README·문서는 실제 측
   for (const key of ['라벨 잡음', '표본 수', '편향', 'Wilson', '합성 데이터, 실제 정확도 아님', '확장 내보내기는 추후', '실제 데이터로 측정한 수치는 아직 없']) assert.ok(doc.includes(key), key)
 })
 
+import { TRYON_MODELS } from '../server/hfTryOn.js'
+
+await atest('hfTryOn(Leffa, 가짜 fetch): 하의는 dress_code·lower_body로 leffa_predict_vt를 부르고, 이유 없는 거절(null)은 토큰 안내로 바꾼다', async () => {
+  clearTryOnCache()
+  const LB = 'https://franciszzj-leffa.hf.space'
+  const api = `${LB}/gradio_api`
+  const calls = []
+  const mk = (sse) => async (url, opts = {}) => {
+    calls.push({ url, opts })
+    if (url === `${LB}/config`) return resp({ api_prefix: '/gradio_api' })
+    if (url === `${api}/upload`) return resp([`/tmp/gradio/up${calls.length}.png`])
+    if (url === `${api}/call/leffa_predict_vt`) return resp({ event_id: 'lf1' })
+    if (url === `${api}/call/leffa_predict_vt/lf1`) return resp(sse, { type: 'text/event-stream' })
+    if (url === `${api}/file=/tmp/gradio/lf.png`) return resp(new Uint8Array([9]), { type: 'image/png' })
+    return resp('nf', { status: 404, type: 'text/plain' })
+  }
+  assert.equal(isTryOnSupported('bottom'), false, '기본(IDM-VTON)은 하의 미지원 그대로')
+  assert.equal(isTryOnSupported('bottom', 'leffa') && isTryOnSupported('dress', 'leffa'), true)
+  assert.equal(isTryOnSupported('shoes', 'leffa'), false)
+  assert.equal(TRYON_MODELS.leffa.space, 'franciszzj/Leffa')
+  const ok = `event: complete\ndata: ${JSON.stringify([{ path: '/tmp/gradio/lf.png' }, { path: '/tmp/m.png' }, { path: '/tmp/d.png' }])}\n\n`
+  const r = await runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'bottom', model: 'leffa', fetchImpl: mk(ok) })
+  assert.equal(r.image, 'data:image/png;base64,CQ==')
+  assert.ok(r.model.startsWith('Leffa'))
+  const { data } = JSON.parse(calls.find((c) => c.url === `${api}/call/leffa_predict_vt`).opts.body)
+  assert.deepEqual(data.slice(2), ['False', 30, 2.5, 42, 'dress_code', 'lower_body', 'False'])
+  assert.ok(data[0].path && data[1].path, '두 사진을 먼저 올린 경로')
+  await assert.rejects(
+    runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'top', model: 'leffa', fetchImpl: mk('event: error\ndata: null\n\n') }),
+    (e) => e.code === 'LEFFA_REJECTED' && e.message.includes('HF_TOKEN'),
+  )
+  await assert.rejects(runHfTryOn({ personImage: PNG_1PX, garmentImage: PNG_1PX, category: 'shoes', model: 'leffa', fetchImpl: mk(ok) }), (e) => e.code === 'UNSUPPORTED')
+})
+
 console.log(`\n${passed}개 통과`)
