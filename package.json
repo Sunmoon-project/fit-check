@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "smoke": "node scripts/smoke.mjs && node scripts/smokeImageSearch.mjs",
     "validate:fit": "node scripts/validateFit.mjs",
+    "eval:fit": "node scripts/evalFit.mjs",
     "validate:body": "node scripts/validateBody.mjs",
     "build:extension": "node scripts/buildExtension.mjs && node scripts/checkExtension.mjs"
   },
