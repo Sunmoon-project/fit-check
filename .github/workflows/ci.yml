@@ -1,0 +1,35 @@
+# CI: push·PR마다 GitHub이 자동으로 테스트하고 빌드해요. 하나라도 실패하면 PR에 ❌가 떠요.
+name: CI
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run smoke
+      - run: npm run build
+      - run: npm run build:extension
+
+  docker:
+    # 테스트가 통과해야 Docker 이미지를 빌드하고, 컨테이너를 띄워 실제로 응답하는지 확인해요.
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t fit-check .
+      - name: 컨테이너 기동 확인
+        run: |
+          docker run -d --name app -p 3000:3000 fit-check
+          for i in $(seq 1 20); do curl -fs localhost:3000/healthz && break; sleep 1; done
+          curl -fs localhost:3000/ | grep -q '<div id="root"'
+          curl -fs localhost:3000/api/status
+          docker rm -f app

@@ -70,10 +70,20 @@ npm run dev      # http://localhost:5173
 | `npm run build` | 화면 파일만 빌드 (`dist/`) |
 | `npm run build:file` | 서버 없이 여는 HTML 파일 하나 빌드 (`dist/fit-check.html`) |
 | `npm run preview` | 빌드 결과를 API와 함께 실행 |
+| `npm start` | 프로덕션 서버(`server/start.js`): `dist/` + API를 한 포트(기본 3000)로 서빙. 먼저 `npm run build` |
 | `npm run smoke` | 추천 로직·파서·보안 검사 스모크 테스트 |
 
 > ⚠️ API(`/api/status`, `/api/product`, `/api/tryon`)는 Vite 개발·미리보기 서버에 붙는 플러그인이에요.
-> `dist/` 폴더만 정적 호스팅에 올리면 **상품 링크 분석과 AI 합성이 동작하지 않아요.** `npm run preview`로 실행하거나 별도 서버가 필요해요.
+> `dist/` 폴더만 정적 호스팅에 올리면 **상품 링크 분석과 AI 합성이 동작하지 않아요.** `npm run build && npm start`(또는 아래 Docker)로 실행하세요.
+
+### Docker로 실행 (배포용)
+
+```bash
+docker build -t fit-check .
+docker run -p 3000:3000 --env-file .env fit-check   # http://localhost:3000, 헬스체크: /healthz
+```
+
+GitHub Actions(`.github/workflows/ci.yml`)가 push·PR마다 smoke·빌드·확장 빌드를 돌리고, Docker 이미지를 빌드해 컨테이너가 실제로 응답하는지 확인해요.
 
 ### 서버 없이 파일 하나로 보기
 
