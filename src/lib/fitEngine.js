@@ -5,6 +5,7 @@
 import { PART_LABEL, CATEGORY_PARTS } from '../data/measurements.js'
 import { estimateBody } from './bodyEstimate.js'
 import { detectReviewOutliers } from './reviewOutliers.js'
+import { resolveLearned, learningStatus, brandKeyOf } from './learnedModel.js'
 
 // ---------- 신발 허용 구간 (휴리스틱) ----------
 // d = 신발 사이즈(mm) - 발길이(mm). 브랜드/라스트마다 달라서 정확한 값이 아니라 일반적인 착용감을 바탕으로 한 기준이에요.
@@ -76,8 +77,9 @@ export function bodyValuesForProfile(profile) {
 }
 
 // 보정 오프셋만큼 기준을 평행이동해서 판정
-export function classifyEase(part, ease, offset = 0) {
-  const r = EASE_RULES[part]
+// rule을 주면(학습값으로 보정된 기준) EASE_RULES 대신 그 기준을 써요. 없으면 기존 동작 그대로예요.
+export function classifyEase(part, ease, offset = 0, rule = null) {
+  const r = rule || EASE_RULES[part]
   if (!r) return null
   if (part === 'footLength') return classifyShoeEase(ease - offset)
   if (ease < r.tight + offset) return { ...VERDICTS[0], level: 0 }
@@ -89,7 +91,11 @@ export function classifyEase(part, ease, offset = 0) {
 
 // 한 사이즈의 부위별 판정
 // 반환: [{ part, label, body, garment, ease, verdict, level, key, unit, isLength }]
-export function partVerdicts(bodyValues, measuresForSize, category, calibration = {}) {
+// 학습값(resolveLearned 결과)이 있으면 부위별 기준과 브랜드 오프셋(cm)을 더해 써요. 신발(mm)에는 브랜드 오프셋을 쓰지 않아요.
+const ruleOf = (part, learned) => learned?.rules?.[part] || EASE_RULES[part]
+const offsetOf = (part, calibration, learned) => (calibration[part]?.offset || 0) + (part === 'footLength' ? 0 : learned?.offset || 0)
+
+export function partVerdicts(bodyValues, measuresForSize, category, calibration = {}, learned = null) {
   if (!measuresForSize) return []
   const order = [...new Set([...(CATEGORY_PARTS[category] || []), ...Object.keys(measuresForSize)])]
   const out = []
@@ -98,7 +104,7 @@ export function partVerdicts(bodyValues, measuresForSize, category, calibration 
     const body = bodyValues[part]
     if (!EASE_RULES[part] || !isNum(garment) || !isNum(body)) continue
     const ease = round1(garment - body)
-    const v = classifyEase(part, ease, calibration[part]?.offset || 0)
+    const v = classifyEase(part, ease, offsetOf(part, calibration, learned), learned?.rules?.[part] || null)
     const isLength = LENGTH_PARTS.includes(part)
     out.push({
       part,
@@ -163,17 +169,17 @@ function measuresOf(sizeChart, size) {
 }
 
 // 사이즈별 점수(0~100). 목표 여유분에서 멀수록 감점, 작을 수 있는 부위는 크게 감점.
-export function recommendSize(bodyValues, sizeChart, category, preferredFit = 'regular', calibration = {}) {
+export function recommendSize(bodyValues, sizeChart, category, preferredFit = 'regular', calibration = {}, learned = null) {
   if (!sizeChart?.measures) return null
   const perSize = []
   for (const size of chartSizes(sizeChart)) {
-    const verdicts = partVerdicts(bodyValues, measuresOf(sizeChart, size), category, calibration)
+    const verdicts = partVerdicts(bodyValues, measuresOf(sizeChart, size), category, calibration, learned)
     if (verdicts.length === 0) continue
     let sum = 0
     let wsum = 0
     for (const v of verdicts) {
-      const rule = EASE_RULES[v.part]
-      const off = calibration[v.part]?.offset || 0
+      const rule = ruleOf(v.part, learned)
+      const off = offsetOf(v.part, calibration, learned)
       const span = rule.relaxed - rule.tight
       let p = (Math.abs(v.ease - (targetEase(rule, preferredFit) + off)) / span) * 100
       if (v.level === 0) p += 40
@@ -301,10 +307,12 @@ function describeVerdicts(verdicts) {
 }
 
 // AI 핏 코멘트: 후기 투표 + 실측 비교를 합친 추천
-export function generateFitComment(profile, product, calibration = {}) {
+// model: 학습값 묶음(learnedModel.js). 없거나 버전이 다르면 기존 동작 그대로예요. 출처가 브라우저든 서버든 같은 코드로 읽어요.
+export function generateFitComment(profile, product, calibration = {}, model = null) {
+  const learned = model ? resolveLearned(model, product.category, brandKeyOf(product)) : null
   const { values, measured } = bodyValuesForProfile(profile)
   const preferredFit = profile.preferredFit || 'regular'
-  const measureResult = recommendSize(values, product.sizeChart, product.category, preferredFit, calibration)
+  const measureResult = recommendSize(values, product.sizeChart, product.category, preferredFit, calibration, learned)
   const sizeList = chartSizes(product.sizeChart)
   const optionKeys = (product.optionLabels || []).map(normKey)
   // 추천은 사이즈표의 이름, 표가 없으면 구매 옵션의 이름 안에서만 해요.
@@ -395,6 +403,8 @@ export function generateFitComment(profile, product, calibration = {}) {
     notes.push('직접 잰 치수가 없는 부위는 키·몸무게·체형으로 추정했어요(±3~5cm).')
   }
   if (calibrated) notes.push('내 착용 기록으로 판정 기준을 보정했어요.')
+  const learning = model ? learningStatus(model, product.category, brandKeyOf(product)) : null
+  if (learning?.used) notes.push('이 브라우저에 모은 후기로 기준을 조금 옮겼어요(정확도를 잰 값은 아니에요).')
   notes.push('후기와 사이즈표를 종합한 참고용 추천이에요. 소재와 신축성에 따라 다를 수 있어요.')
 
   const compared = verdicts.filter((v) => !v.isLength)
@@ -426,6 +436,7 @@ export function generateFitComment(profile, product, calibration = {}) {
     perSize,
     verdicts,
     measured,
+    ...(learning ? { learning } : {}),
   }
 }
 

@@ -60,6 +60,11 @@ import { MAX_STEPS, MAX_MS, STALL_LIMIT, STOP_REASONS, AUTO_TARGET, MORE_STEP, s
 import { CONSENT_SUMMARY, CONSENT_VERSION } from '../src/data/consent.js'
 import { loadConsent, purgeStaleConsent, saveConsent, enqueueContribution, loadContribQueue, recordsForUpload } from '../src/lib/storage.js'
 
+import { toSamples, mergeSamples } from '../src/lib/learnSamples.js'
+import { trainModel, validateModel, resolveLearned, learningStatus, emptyModel, LEARN, LEARN_SCHEMA_VERSION, brandKeyOf } from '../src/lib/learnedModel.js'
+import { LEARN_KEY, localAdapter, chromeAdapter, loadLearning, addSamples, resetLearning, learnFromProduct } from '../src/lib/learnStore.js'
+import { EASE_RULES, classifyEase } from '../src/lib/fitEngine.js'
+
 let passed = 0
 function test(name, fn) {
   try {
@@ -1544,7 +1549,7 @@ test('diagnose: 리뷰 불러오기 멈춘 이유(시간 한도·중단)가 리�
 })
 
 // 확장 content.js를 임시 폴더에 IIFE로 빌드해 가짜 DOM(node:vm)에서 fab 클릭(run) 경로를 실행합니다. 실제 무신사·크롬이 아니에요.
-async function runContentInFakeDom(pageHtml = null, extra = {}, measurements = {}) {
+async function runContentInFakeDom(pageHtml = null, extra = {}, measurements = {}, learnStore = null) {
   const root = resolvePath(import.meta.dirname, '..')
   const outDir = mkdtempSync(join(tmpdir(), 'fitcheck-content-'))
   try {
@@ -1595,7 +1600,13 @@ async function runContentInFakeDom(pageHtml = null, extra = {}, measurements = {
       ...extra,
       chrome: {
         runtime: { getManifest: () => ({ version: '0.0.0' }), onMessage: { addListener: (f) => { listeners.msg = f } } },
-        storage: { local: { get: (k, cb) => cb({ fitcheckProfile: profile }), set: (...a) => { storageCalls.push(['set', a]); a.find((x) => typeof x === 'function')?.() }, remove: (...a) => storageCalls.push(['remove', a]), clear: (...a) => storageCalls.push(['clear', a]) } },
+        // learnStore(Map)를 주면 학습값 키만 실제로 저장·삭제하는 가짜 chrome.storage.local이 돼요 (JSON 왕복으로 복사). 없으면 예전과 같아요.
+        storage: { local: {
+          get: (k, cb) => cb({ fitcheckProfile: profile, ...(learnStore ? Object.fromEntries([...learnStore].map(([key, v]) => [key, JSON.parse(v)])) : {}) }),
+          set: (...a) => { storageCalls.push(['set', a]); if (learnStore && a[0] && typeof a[0] === 'object') for (const [key, v] of Object.entries(a[0])) learnStore.set(key, JSON.stringify(v)); a.find((x) => typeof x === 'function')?.() },
+          remove: (...a) => { storageCalls.push(['remove', a]); if (learnStore && typeof a[0] === 'string') learnStore.delete(a[0]); a.find((x) => typeof x === 'function')?.() },
+          clear: (...a) => storageCalls.push(['clear', a]),
+        } },
       },
     }
     sandbox.window = Object.assign(sandbox.window, sandbox)
@@ -5068,6 +5079,239 @@ test('이상치: 웹 결과 화면(서버 렌더)에 제외된 후기가 사유�
   assert.ok(/전체 7건/.test(txt), '전체 건수에는 제외된 후기도 센다')
   const plain = textOf(render(WEB.ResultView, { product: clothing, profile, calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop }))
   assert.ok(!plain.includes('제외된 후기') && !plain.includes('제외됨('))
+})
+
+// ---- 후기 학습 (FEAT-002): 가짜 데이터만 씁니다. 실제 쇼핑몰·실측 정확도 확인이 아니에요 ----
+const LRN_CHART = {
+  measures: {
+    S: { shoulder: 44, chest: 95, arm: 60 },
+    M: { shoulder: 46, chest: 105, arm: 61 },
+    L: { shoulder: 48, chest: 120, arm: 62 },
+  },
+}
+const LRN_BODIES = [[172, 68], [174, 70], [175, 70], [176, 72], [178, 74]]
+// M(가슴 여유 4~10cm)을 산 10명은 '작아요', L(여유 19~25cm)을 산 10명은 '잘 맞아요'. 닉네임·본문·사진은 개인정보 검사용 표식이에요.
+const lrnReviews = () => [
+  ...LRN_BODIES.flatMap(([h, w], i) => [0, 1].map((k) => ({ id: `m${i}${k}`, nick: `닉네임M${i}${k}`, gender: 'male', height: h, weight: w, size: 'M', fit: 'small', text: `SECRETTEXT-M-${i}-${k}`, view: { photos: [`https://img.example/p-m${i}${k}.jpg`], body: `SECRETBODY-M-${i}-${k}` } }))),
+  ...LRN_BODIES.flatMap(([h, w], i) => [0, 1].map((k) => ({ id: `l${i}${k}`, nick: `닉네임L${i}${k}`, gender: 'male', height: h, weight: w, size: 'L', fit: 'true', text: `SECRETTEXT-L-${i}-${k}`, view: { photos: [`https://img.example/p-l${i}${k}.jpg`], body: `SECRETBODY-L-${i}-${k}` } }))),
+]
+const lrnProduct = (extra = {}) => ({ name: '학습용 가짜 상품', category: 'top', sizeChart: LRN_CHART, reviews: lrnReviews(), optionLabels: ['S', 'M', 'L'], url: 'https://www.musinsa.com/products/1', ...extra })
+const memAdapter = (map = new Map(), limit = Infinity) => ({
+  async get(k) { return map.has(k) ? JSON.parse(map.get(k)) : null },
+  async set(k, v) { const t = JSON.stringify(v); if (t.length > limit) return false; map.set(k, t); return true },
+  async remove(k) { map.delete(k) },
+})
+// 직접 만든 샘플: 라벨 small/true/large별 가슴 여유분
+const synth = (cat, brand, label, n, chest, day = 20000, tag = '') => Array.from({ length: n }, (_, i) => ({ id: `${cat}-${brand}-${label}-${tag}${i}`, cat, brand, label, w: 1, e: { chest }, d: day }))
+const chestVerdictKey = (r, size) => r.perSize.find((p) => p.size === size).verdicts.find((v) => v.part === 'chest').key
+
+test('학습: 후기가 샘플로 바뀌고 개인 식별 정보(닉네임·본문·사진·키·몸무게)는 담기지 않는다', () => {
+  const samples = toSamples(lrnProduct())
+  assert.equal(samples.length, 20)
+  assert.deepEqual(Object.keys(samples[0]).sort(), ['brand', 'cat', 'd', 'e', 'id', 'label', 'w'])
+  assert.equal(samples[0].cat, 'top')
+  assert.equal(samples[0].brand, 'musinsa.com')
+  assert.equal(samples.filter((x) => x.label === 'small').length, 10)
+  assert.ok(samples.every((x) => x.w === 1 && Object.values(x.e).every((v) => Number.isInteger(v * 2))), '가중치 1, 여유분은 0.5cm 단위')
+  const json = JSON.stringify(samples)
+  for (const bad of ['닉네임', 'SECRETTEXT', 'SECRETBODY', 'img.example', '학습용 가짜 상품', 'musinsa.com/products', 'height', 'weight', 'gender', 'size']) assert.ok(!json.includes(bad), `${bad} 없음`)
+  assert.equal(new Set(samples.map((x) => x.id)).size, 20, '중복 방지 id는 후기마다 다르다')
+  assert.deepEqual(toSamples({ ...lrnProduct(), category: 'shoes' }), [], '신발은 만들지 않는다')
+  assert.deepEqual(toSamples({ ...lrnProduct(), sizeChart: null }), [], '사이즈표가 없으면 만들지 않는다')
+})
+
+test('학습: 이상치로 제외된 후기는 샘플이 되지 않고, 가중치 낮춘 후기는 labelWeight를 쓴다', () => {
+  const base = lrnProduct()
+  const bad = { gender: 'male', height: 300, weight: 70, size: 'M', fit: 'small', text: '불가능한 키' }
+  const contra = { gender: 'male', height: 175, weight: 70, size: 'M', fit: 'small', text: '어깨는 작아요 기장은 커요' }
+  assert.equal(toSamples({ ...base, reviews: [...base.reviews, bad, contra] }).length, 20, '제외된 후기 2건은 쓰지 않는다')
+  // M 사이즈 비슷한 체형 다수가 '작아요'인데 혼자 '커요'인 후기: 제외는 아니고 가중치만 줄어든다
+  const odd = { id: 'odd', gender: 'male', height: 175, weight: 70, size: 'M', fit: 'large', text: '라벨 이상치' }
+  const withOdd = toSamples({ ...base, reviews: [...base.reviews, odd] })
+  assert.equal(withOdd.length, 21)
+  assert.deepEqual(withOdd.filter((x) => x.w !== 1).map((x) => [x.label, x.w]), [['large', 0.4]])
+})
+
+test('학습: 표본 0건이면 prior 그대로, 라벨당 3건 미만이면 유지, 표본이 늘수록 prior에서 더 멀어지고 한계를 넘지 않는다', () => {
+  assert.deepEqual(trainModel([], EASE_RULES).categories, {})
+  assert.equal(resolveLearned(trainModel([], EASE_RULES), 'top').applied, false)
+  const few2 = [...synth('top', null, 'small', 2, 12), ...synth('top', null, 'true', 2, 20)]
+  assert.deepEqual(trainModel(few2, EASE_RULES).categories.top.rules, {}, '라벨당 2건은 추정하지 않는다')
+  const snug = (n) => trainModel([...synth('top', null, 'small', n, 8), ...synth('top', null, 'true', n, 14)], EASE_RULES).categories.top.rules.chest.snug
+  const [s3, s10, s100] = [snug(3), snug(10), snug(100)]
+  assert.ok(s3 > EASE_RULES.chest.snug && s3 < s10 && s10 < s100, `${s3} < ${s10} < ${s100}`)
+  assert.ok(s100 <= EASE_RULES.chest.snug + LEARN.maxShift, '이동 한계')
+  const rule = trainModel([...synth('top', null, 'small', 10, 8), ...synth('top', null, 'true', 10, 14)], EASE_RULES).categories.top.rules.chest
+  assert.ok(rule.tight < rule.snug && rule.snug < rule.regular && rule.regular < rule.relaxed, '경계 순서 유지')
+  assert.equal(EASE_RULES.chest.snug, 6, 'EASE_RULES 원본은 바뀌지 않는다')
+})
+
+test('학습: 견고 통계 - 라벨 묶음의 극단값 한 건이 경계를 크게 흔들지 않는다', () => {
+  const clean = [...synth('top', null, 'small', 9, 12), ...synth('top', null, 'true', 9, 20)]
+  const dirty = [...clean, { ...synth('top', null, 'small', 1, 90, 20000, 'x')[0] }]
+  const a = trainModel(clean, EASE_RULES).categories.top.rules.chest.snug
+  const b = trainModel(dirty, EASE_RULES).categories.top.rules.chest.snug
+  assert.ok(Math.abs(a - b) < 0.3, `${a} vs ${b}`)
+})
+
+test('학습: 브랜드 오프셋은 표본 수로 축소되고, 표본이 모자란 브랜드는 0이다', () => {
+  const rows = (n, brand) => synth('top', brand, 'small', n, 14, 20000, brand)
+  const m = trainModel([...rows(3, 'few'), ...rows(30, 'many'), ...rows(2, 'tiny')], EASE_RULES)
+  const b = m.brands.top
+  assert.ok(b.many.offset > b.few.offset && b.few.offset > 0, `${b.many.offset} > ${b.few.offset} > 0`)
+  assert.ok(b.many.offset <= LEARN.maxBrandOffset)
+  assert.equal(b.tiny, undefined, '2건은 오프셋을 만들지 않는다')
+  assert.equal(resolveLearned(m, 'top', 'tiny').offset, 0)
+  assert.equal(resolveLearned(m, 'top', 'many').offset, b.many.offset)
+  // 같은 여유분에서 '작아요'가 몰리면(오프셋 +) 같은 여유분이 더 타이트하게 판정된다
+  assert.ok(classifyEase('chest', 9, b.many.offset).level < classifyEase('chest', 9, 0).level)
+})
+
+test('학습: 스키마 버전이 다른 학습값 묶음은 쓰이지 않고, 저장된 다른 버전은 폐기된다', async () => {
+  const m = trainModel([...synth('top', null, 'small', 10, 12), ...synth('top', null, 'true', 10, 20)], EASE_RULES)
+  assert.ok(validateModel(m))
+  assert.equal(validateModel({ ...m, schemaVersion: LEARN_SCHEMA_VERSION + 1 }), null)
+  assert.equal(resolveLearned({ ...m, schemaVersion: 0 }, 'top'), null)
+  const baseline = generateFitComment(profile, lrnProduct())
+  const stale = generateFitComment(profile, lrnProduct(), {}, { ...m, schemaVersion: 0 })
+  assert.deepEqual(stale, baseline, '버전이 다른 묶음은 무시하고 기존 결과와 같다')
+  // 저장소: 샘플 스키마가 다르면 전부 폐기
+  const map = new Map([[LEARN_KEY, JSON.stringify({ schemaVersion: 0, samples: synth('top', null, 'small', 5, 12), model: m })]])
+  const st = await loadLearning(memAdapter(map))
+  assert.deepEqual([st.samples.length, st.model], [0, null])
+  assert.ok(!map.has(LEARN_KEY), '폐기하면 저장소에서도 지운다')
+  // 모델만 다른 버전이면 샘플로 다시 만든다
+  const map2 = new Map([[LEARN_KEY, JSON.stringify({ schemaVersion: LEARN_SCHEMA_VERSION, samples: [...synth('top', null, 'small', 10, 12), ...synth('top', null, 'true', 10, 20)], model: { ...m, schemaVersion: 0 } })]])
+  const st2 = await loadLearning(memAdapter(map2))
+  assert.equal(st2.samples.length, 20)
+  assert.ok(st2.model.categories.top.rules.chest, '샘플로 다시 학습')
+})
+
+await atest('학습 저장: 중복 후기는 한 번만 쌓이고, 저장 내용에 개인 식별 정보가 없다', async () => {
+  const map = new Map()
+  const ad = memAdapter(map)
+  const r1 = await learnFromProduct(ad, lrnProduct())
+  assert.deepEqual([r1.added, r1.total], [20, 20])
+  const r2 = await learnFromProduct(ad, lrnProduct())
+  assert.deepEqual([r2.added, r2.total], [0, 20], '같은 상품을 다시 분석해도 늘지 않는다')
+  const stored = map.get(LEARN_KEY)
+  for (const bad of ['닉네임', 'SECRETTEXT', 'SECRETBODY', 'img.example', '학습용 가짜 상품']) assert.ok(!stored.includes(bad), `${bad} 저장 안 됨`)
+  assert.equal(JSON.parse(stored).schemaVersion, LEARN_SCHEMA_VERSION)
+  await resetLearning(ad)
+  assert.equal((await loadLearning(ad)).samples.length, 0, '초기화하면 샘플이 없다')
+  assert.equal(map.size, 0)
+})
+
+await atest('학습 저장: 샘플 상한을 넘으면 오래된 샘플부터 버리고, 용량이 모자라면 줄여서 저장한다', async () => {
+  const ad = memAdapter()
+  const old = synth('top', null, 'small', 300, 12, 100, 'old')
+  const mid = synth('top', null, 'true', 300, 20, 200, 'new')
+  await addSamples(ad, old)
+  const r = await addSamples(ad, mid)
+  assert.equal(r.samples.length, LEARN.maxSamples)
+  assert.equal(r.dropped, 100)
+  assert.ok(r.samples.every((x) => x.d === 200 || x.id.includes('old')))
+  assert.equal(r.samples.filter((x) => x.d === 100).length, 200, '날짜가 오래된 것부터 100건 빠졌다')
+  assert.equal(mergeSamples([{ id: 'a', d: 1 }], [{ id: 'a', d: 2 }, { id: 'b', d: 3 }], 10).samples.length, 2, '같은 id는 합쳐진다')
+  // 저장소 용량 제한(쓰기 실패)이 있으면 절반으로 줄여 다시 시도
+  const tiny = memAdapter(new Map(), 30000)
+  const big = synth('top', null, 'small', 300, 12, 300, 'q')
+  const t = await addSamples(tiny, big)
+  assert.ok(t.saved && t.samples.length < 300 && t.samples.length > 0, `저장됨 ${t.samples.length}`)
+  assert.ok(t.dropped > 0)
+  // 글자 수 상한
+  const sized = await addSamples(memAdapter(), Array.from({ length: 400 }, (_, i) => ({ id: `z${i}`, cat: 'top', brand: null, label: i % 2 ? 'small' : 'true', w: 1, e: { shoulder: 1.5, chest: 12, waist: 8, hip: 9, thigh: 7, arm: 2, topLength: 2, outerLength: 2, inseam: 2, dressLength: 2, pad: 'x'.repeat(300) }, d: i })))
+  assert.ok(JSON.stringify(sized).length <= LEARN.maxBytes + 2000 && sized.samples.length < 400, '글자 수 상한')
+})
+
+await atest('학습 저장: localStorage 어댑터와 chrome.storage.local 어댑터가 같은 함수로 같은 결과를 낸다', async () => {
+  const ls = new Map()
+  const localLike = { getItem: (k) => (ls.has(k) ? ls.get(k) : null), setItem: (k, v) => void ls.set(k, String(v)), removeItem: (k) => void ls.delete(k) }
+  const cs = new Map()
+  const area = {
+    get: (k, cb) => cb(cs.has(k) ? { [k]: JSON.parse(cs.get(k)) } : {}),
+    set: (o, cb) => { for (const [k, v] of Object.entries(o)) cs.set(k, JSON.stringify(v)); cb() },
+    remove: (k, cb) => { cs.delete(k); cb() },
+  }
+  const a = localAdapter(localLike)
+  const b = chromeAdapter(area, {})
+  const ra = await learnFromProduct(a, lrnProduct())
+  const rb = await learnFromProduct(b, lrnProduct())
+  assert.deepEqual(ra, rb)
+  assert.equal(ls.get(LEARN_KEY), cs.get(LEARN_KEY), '저장 내용이 같다')
+  await resetLearning(a)
+  await resetLearning(b)
+  assert.deepEqual([ls.size, cs.size], [0, 0])
+  // 쓰기 실패(용량 초과)는 예외 없이 false
+  assert.equal(await localAdapter({ setItem() { throw new Error('quota') } }).set('k', 1), false)
+})
+
+await atest('학습 판정: 학습값이 없으면 기존 결과와 같고, 있으면 같은 여유분의 판정이 달라진다', async () => {
+  const product = lrnProduct()
+  const baseline = generateFitComment(profile, product, {})
+  assert.deepEqual(generateFitComment(profile, product, {}, null), baseline)
+  assert.deepEqual(generateFitComment(profile, product, {}, emptyModel()), baseline, '빈 묶음도 같다')
+  assert.equal('learning' in baseline, false)
+  const ad = memAdapter()
+  const { model } = await learnFromProduct(ad, product)
+  const learned = generateFitComment(profile, product, {}, model)
+  const keyOf = (r) => r.perSize.find((p) => p.size === 'M').verdicts.find((v) => v.part === 'chest')
+  assert.equal(chestVerdictKey(baseline, 'M'), 'regular')
+  assert.equal(chestVerdictKey(learned, 'M'), 'tight', '같은 여유분(+7.5cm)이 학습값으로 더 타이트하게 판정')
+  assert.equal(keyOf(baseline).ease, keyOf(learned).ease, '여유분 계산 자체는 같다')
+  assert.equal(learned.learning.used, true)
+  assert.equal(learned.learning.text, '학습값 사용 중(샘플 20건)')
+  assert.ok(learned.note.includes('이 브라우저에 모은 후기'))
+  // 다른 종류의 학습값은 이 상품에 적용되지 않는다
+  const other = generateFitComment(profile, { ...product, category: 'bottom' }, {}, model)
+  assert.equal(other.learning.used, false)
+  assert.deepEqual(other.perSize.map((p) => p.score), generateFitComment(profile, { ...product, category: 'bottom' }, {}).perSize.map((p) => p.score))
+  // 브랜드 오프셋: 같은 종류라도 브랜드 오프셋이 있는 브랜드만 달라진다
+  const bm = trainModel([...synth('top', 'brand-a', 'small', 20, 14, 20000, 'a'), ...synth('top', 'brand-b', 'true', 20, 8, 20000, 'b')], EASE_RULES)
+  const withBrand = (brand) => generateFitComment(profile, lrnProduct({ url: '', brand }), {}, bm)
+  assert.notEqual(withBrand('brand-a').perSize.map((p) => p.score).join(), withBrand('brand-c').perSize.map((p) => p.score).join(), '브랜드 오프셋이 점수에 반영')
+  assert.equal(brandKeyOf({ brand: ' Brand A ' }), 'branda')
+})
+
+test('학습 표시: 학습값이 있을 때만 상태 한 줄이 나온다', () => {
+  assert.equal(learningStatus(null, 'top'), null)
+  assert.equal(learningStatus(emptyModel(), 'top'), null)
+  const m = trainModel([...synth('top', null, 'small', 10, 12), ...synth('top', null, 'true', 10, 20)], EASE_RULES)
+  assert.equal(learningStatus(m, 'top').text, '학습값 사용 중(샘플 20건)')
+  assert.ok(learningStatus(m, 'bottom').text.startsWith('학습값 모으는 중'))
+})
+
+await atest('학습 표시: 확장 카드(가짜 DOM, vm)에 학습값 사용 중 표시가 있고 초기화 버튼이 저장된 학습값을 지운다', async () => {
+  const html = VIEW_HTML(chartTable(OPTION_LIST_LABELS()))
+  const first = analyzePage(fakeDocument(html), 'https://shop.example/products/1', buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular' }).profile, '0.1.0')
+  assert.equal(first.status, 'ok')
+  assert.equal(first.learning, null, '학습값이 없으면 표시도 없다')
+  const cat = first.category
+  const samples = [...synth(cat, null, 'small', 10, 12), ...synth(cat, null, 'true', 10, 20)]
+  const store = new Map([[LEARN_KEY, JSON.stringify({ schemaVersion: LEARN_SCHEMA_VERSION, samples, model: trainModel(samples, EASE_RULES) })]])
+  const { texts, created } = await runContentInFakeDom(html, {}, {}, store)
+  assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
+  assert.ok(texts.includes('학습값 사용 중(샘플 20건)'), '사용 중 표시')
+  assert.ok(texts.some((t) => t.includes('이 브라우저에만 저장돼요')))
+  const btn = created.find((e) => e.className === 'btn' && e.textContent === '학습값 초기화')
+  assert.ok(btn, '초기화 버튼')
+  btn.click()
+  for (let i = 0; i < 50 && !texts.some((t) => t.includes('학습값과 모은 샘플을 모두 지웠어요')); i++) await new Promise((r) => setTimeout(r, 10))
+  assert.equal(store.has(LEARN_KEY), false, '저장된 학습값이 지워졌다')
+  assert.ok(texts.some((t) => t.includes('학습값과 모은 샘플을 모두 지웠어요')))
+  // 학습값 없이 실행하면 표시도 버튼도 없다
+  const plain = await runContentInFakeDom(html)
+  assert.ok(!plain.texts.some((t) => t.includes('학습값 사용 중')) && !plain.created.some((e) => e.textContent === '학습값 초기화'))
+})
+
+test('학습 표시: 웹 결과 화면(서버 렌더)에 학습값 사용 중 표시와 초기화 버튼이 있고, 없으면 나오지 않는다', () => {
+  const clothing = { ...PRODUCTS['https://shop-a.example.com/goods/12345'], source: 'demo' }
+  const samples = [...synth(clothing.category, null, 'small', 10, 12), ...synth(clothing.category, null, 'true', 10, 20)]
+  const props = { product: clothing, profile, calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop }
+  const withModel = textOf(render(WEB.ResultView, { ...props, learningModel: trainModel(samples, EASE_RULES), onResetLearning: noop }))
+  assert.ok(withModel.includes('학습값 사용 중(샘플 20건)') && withModel.includes('학습값 초기화') && withModel.includes('이 브라우저에만 저장돼요'))
+  const without = textOf(render(WEB.ResultView, props))
+  assert.ok(!without.includes('학습값'))
 })
 
 console.log(`\n${passed}개 통과`)
