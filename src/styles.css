@@ -382,6 +382,9 @@ body {
 .review-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .review-top strong { font-size: 14px; font-weight: 700; }
 .review-text { margin: 7px 0 9px; font-size: 14px; color: var(--ink-2); }
+.review-excluded { opacity: 0.75; }
+.excluded-tag { display: inline-block; margin-top: 4px; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: var(--radius-sm); background: #fff3e0; color: #6b3f00; border: 1px solid #c27a1e; }
+.excluded-reviews { margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--line); }
 .fit-tag { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: var(--radius-sm); margin-left: auto; }
 .fit-small { background: #fae8e8; color: var(--v-tooTight); }
 .fit-true { background: #e6f3ec; color: var(--ok); }

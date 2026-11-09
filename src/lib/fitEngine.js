@@ -4,6 +4,7 @@
 // 두 근거를 합쳐 사이즈를 추천합니다. 결과는 참고용이에요.
 import { PART_LABEL, CATEGORY_PARTS } from '../data/measurements.js'
 import { estimateBody } from './bodyEstimate.js'
+import { detectReviewOutliers } from './reviewOutliers.js'
 
 // ---------- 신발 허용 구간 (휴리스틱) ----------
 // d = 신발 사이즈(mm) - 발길이(mm). 브랜드/라스트마다 달라서 정확한 값이 아니라 일반적인 착용감을 바탕으로 한 기준이에요.
@@ -214,6 +215,17 @@ export function bodySimilarity(profile, review) {
   return Math.max(0, Math.round(100 - distance * BODY_SIM.slope - penalty))
 }
 
+// 후기 이상치 거르기: 웹·확장·진단이 모두 이 함수를 써요. 제외된 후기는 지우지 않고 excluded에 표시와 함께 담아요.
+export function screenReviews(reviews, product = {}) {
+  return detectReviewOutliers(reviews, {
+    sizeChart: product.sizeChart,
+    optionLabels: [...(product.optionLabels || []), ...(product.shoeOptionLabels || [])],
+    category: product.category,
+    similarity: bodySimilarity,
+    threshold: BODY_SIM.threshold,
+  })
+}
+
 // 비슷한 체형 후기(matched)와 나머지 후기(others)로 나눕니다.
 export function splitReviews(profile, reviews = [], threshold = BODY_SIM.threshold) {
   const matched = []
@@ -238,7 +250,8 @@ export function aggregateFit(matched) {
     if (r.size == null || !r.fit) continue
     const size = String(r.size).toUpperCase()
     if (!bySize[size]) bySize[size] = { small: 0, true: 0, large: 0, count: 0, weight: 0 }
-    const w = (r.similarity ?? 50) / 100
+    // 라벨 이상치(비슷한 체형 다수와 반대 평가)는 제외하지 않고 가중치만 줄여요.
+    const w = ((r.similarity ?? 50) / 100) * (r.labelWeight ?? 1)
     bySize[size][r.fit] += w
     bySize[size].count += 1
     bySize[size].weight += w
@@ -296,7 +309,8 @@ export function generateFitComment(profile, product, calibration = {}) {
   const optionKeys = (product.optionLabels || []).map(normKey)
   // 추천은 사이즈표의 이름, 표가 없으면 구매 옵션의 이름 안에서만 해요.
   const allowedKeys = sizeList.length ? sizeList : optionKeys
-  const reviewList = (product.reviews || []).map((r) => (r.size ? { ...r, size: canonicalSize(r.size, allowedKeys) } : r))
+  const screened = screenReviews(product.reviews || [], product)
+  const reviewList = screened.kept.map((r) => (r.size ? { ...r, size: canonicalSize(r.size, allowedKeys) } : r))
   const { matched, others } = splitReviews(profile, reviewList)
   const disp = makeDisplay(product)
   const reviewPick = pickFromReviews(matched, sizeList)
@@ -387,6 +401,7 @@ export function generateFitComment(profile, product, calibration = {}) {
   const evidence = {
     reviewTotal: (product.reviews || []).length,
     reviewMatched: matched.length,
+    reviewExcluded: screened.excludedTotal,
     reviewVotes: reviewPick?.votes ?? 0,
     sizeChart: measureResult != null,
     measuredParts: compared.filter((v) => measured.has(v.part)).length,
@@ -406,6 +421,8 @@ export function generateFitComment(profile, product, calibration = {}) {
     tendency: reviewPick?.tendency ?? null,
     matched,
     otherReviews: others,
+    excludedReviews: screened.excluded,
+    outliers: { excluded: screened.excludedTotal, counts: screened.counts, labelReduced: screened.labelReduced, statApplied: screened.statApplied },
     perSize,
     verdicts,
     measured,
@@ -474,6 +491,7 @@ export function describeEvidence(evidence, confidence) {
     else parts.push(e.reviewTotalOnPage > 0 ? `리뷰 없음(페이지에 불러온 리뷰 0건, 전체 약 ${e.reviewTotalOnPage}건)` : '리뷰 없음')
   } else if (e.reviewTotal > 0) parts.push(`리뷰 ${e.reviewTotal}건 중 비슷한 체형 ${e.reviewMatched}건`)
   else parts.push('리뷰 없음')
+  if (e.reviewExcluded > 0) parts.push(`이상치로 보여 제외한 후기 ${e.reviewExcluded}건`)
   if (e.sizeChart) {
     parts.push(e.estimatedParts > 0 ? '사이즈표 비교(일부 부위는 추정)' : e.measuredParts > 0 ? '사이즈표 실측 비교' : '사이즈표 비교')
   } else parts.push('사이즈표 없음')

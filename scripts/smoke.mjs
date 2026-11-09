@@ -4871,4 +4871,203 @@ await atest('content.js(가짜 DOM, vm): 프로필 남성 + 여성용 신발이�
   })
 }
 
+// ---- 후기 이상치 자동 제외 (직접 만든 가짜 데이터·가짜 HTML이에요. 실제 사이트·후기에서 확인한 것이 아니고 정확도를 잰 것도 아니에요) ----
+import { screenReviews, aggregateFit } from '../src/lib/fitEngine.js'
+import { OUTLIER, REASON_LABEL, hasContradiction } from '../src/lib/reviewOutliers.js'
+
+const OUT_CHART = {
+  rows: [['S'], ['M'], ['L']],
+  measures: { S: { shoulder: 44, chest: 100 }, M: { shoulder: 46, chest: 106 }, L: { shoulder: 48, chest: 112 } },
+}
+const OUT_PRODUCT = { sizeChart: OUT_CHART, optionLabels: [], category: 'top' }
+const outRv = (id, extra = {}) => ({ id, nick: `n${id}`, gender: 'male', height: 175, weight: 70, size: 'M', fit: 'true', text: '무난해요', ...extra })
+const reasonOf = (res, id) => res.excluded.find((r) => r.id === id)?.excluded.reasons
+
+test('이상치: 불가능한 값(키·몸무게·BMI 범위 밖)은 제외되고 경계값은 남는다', () => {
+  const res = screenReviews(
+    [
+      outRv(1, { height: 230 }), outRv(2, { height: 130 }), outRv(3, { weight: 20 }), outRv(4, { weight: 180 }),
+      outRv(5, { height: 150, weight: 100 }), // BMI 44.4
+      outRv(6, { height: 200, weight: 50 }), // BMI 12.5
+      outRv(7, { height: 140, weight: 35 }), outRv(8, { height: 210, weight: 150 }), // 경계값(BMI 17.9 / 34.0)
+    ],
+    OUT_PRODUCT,
+  )
+  assert.deepEqual(reasonOf(res, 1), ['height'])
+  assert.deepEqual(reasonOf(res, 2), ['height'])
+  assert.deepEqual(reasonOf(res, 3), ['weight'])
+  assert.deepEqual(reasonOf(res, 4), ['weight'])
+  assert.deepEqual(reasonOf(res, 5), ['bmi'])
+  assert.deepEqual(reasonOf(res, 6), ['bmi'])
+  assert.deepEqual(res.kept.map((r) => r.id), [7, 8])
+  assert.deepEqual([res.counts.height, res.counts.weight, res.counts.bmi], [2, 2, 2])
+  assert.equal(res.excluded[0].excluded.text, `제외됨(${REASON_LABEL.height})`)
+  assert.equal(res.excludedTotal, 6)
+})
+
+test('이상치: 한 후기에 작아요·커요가 같이 있거나 구매 사이즈가 상품에 없으면 제외, 안 작아요·표에 있는 이름은 남는다', () => {
+  assert.equal(hasContradiction({ text: '어깨는 작아요 그런데 기장은 커요' }), true)
+  assert.equal(hasContradiction({ text: '안 작아요 커요' }), false, '"안 작아요"는 반대 뜻이라 모순이 아니다')
+  assert.equal(hasContradiction({ text: '작아요' }), false)
+  assert.equal(hasContradiction({ text: '어깨가 넉넉하고 기장은 짧아요' }), false, '부위 말(넉넉·짧아요)은 세지 않는다')
+  assert.equal(hasContradiction({ view: { body: '크게 나오는데 작은 편이에요' } }), true, 'view.body도 읽는다')
+  const res = screenReviews(
+    [outRv(1, { text: '작아요 근데 커요', fit: 'small' }), outRv(2, { size: 'XXL' }), outRv(3, { size: 'm' }), outRv(4, { size: null })],
+    OUT_PRODUCT,
+  )
+  assert.deepEqual(reasonOf(res, 1), ['contradiction'])
+  assert.deepEqual(reasonOf(res, 2), ['unknownSize'])
+  assert.deepEqual(res.kept.map((r) => r.id), [3, 4])
+  // 사이즈표도 옵션도 모르면 이름 비교를 하지 않는다
+  assert.equal(screenReviews([outRv(1, { size: 'XXL' })], { sizeChart: null, optionLabels: [], category: 'top' }).excludedTotal, 0)
+  // FREE/F, 신발 옵션 범위 안의 mm는 같은 사이즈로 본다
+  assert.equal(screenReviews([outRv(1, { size: 'F' })], { optionLabels: ['FREE'] }).excludedTotal, 0)
+  assert.equal(screenReviews([outRv(1, { size: '252' }), outRv(2, { size: '260' })], { optionLabels: ['250 (250-255)'], category: 'shoes' }).excludedTotal, 1)
+})
+
+test('이상치: 같은 사이즈 5건 이상이면 여유분이 중앙값 ± 3×MAD 밖인 후기를 제외한다 (MAD가 0이어도 동작)', () => {
+  // 몸이 같은 4명(MAD=0) + 마르고 큰 1명: 가슴 여유분이 14cm쯤 달라진다
+  const same = [1, 2, 3, 4].map((i) => outRv(i))
+  const res = screenReviews([...same, outRv(5, { height: 185, weight: 48 })], OUT_PRODUCT)
+  assert.deepEqual(reasonOf(res, 5), ['statistical'])
+  assert.equal(res.statApplied, true)
+  assert.equal(res.kept.length, 4)
+  assert.equal(res.counts.statistical, 1)
+  // MAD가 0이어도 작은 차이(허용 3×최소 MAD 안)는 남는다
+  const near = screenReviews([...same, outRv(5, { height: 176, weight: 70 })], OUT_PRODUCT)
+  assert.equal(near.excludedTotal, 0)
+  // MAD가 있는 분포: 몸무게 63~77kg가 고르게 퍼진 5명은 모두 남고, 150kg에 가까운 사람만 걸린다
+  const spread = [63, 67, 70, 73, 77].map((w, i) => outRv(10 + i, { weight: w }))
+  assert.equal(screenReviews(spread, OUT_PRODUCT).excludedTotal, 0)
+  const withBig = screenReviews([...spread, outRv(99, { height: 175, weight: 120 })], OUT_PRODUCT)
+  assert.deepEqual(reasonOf(withBig, 99), ['statistical'])
+  assert.equal(withBig.kept.length, 5)
+  // 사이즈가 다르면 따로 센다: M 4건 + L 1건이면 어느 쪽도 5건이 안 된다
+  const split = screenReviews([...same, outRv(5, { size: 'L', height: 185, weight: 48 })], OUT_PRODUCT)
+  assert.equal(split.excludedTotal, 0)
+  assert.equal(split.statApplied, false)
+})
+
+test('이상치: 같은 사이즈 후기가 5건 미만이면 통계 필터를 쓰지 않는다 (불가능한 값은 그대로 적용)', () => {
+  const four = [1, 2, 3].map((i) => outRv(i)).concat([outRv(4, { height: 185, weight: 48 })])
+  const res = screenReviews(four, OUT_PRODUCT)
+  assert.equal(res.excludedTotal, 0)
+  assert.equal(res.statApplied, false)
+  assert.equal(OUTLIER.minSample, 5)
+  const withImpossible = screenReviews([...four, outRv(5, { height: 300 })], OUT_PRODUCT)
+  assert.deepEqual(withImpossible.excluded.map((r) => r.id), [5], '5건이어도 통계가 아니라 불가능한 값으로만 제외된다(M 4건 + 불가능 1건)')
+  assert.deepEqual(reasonOf(withImpossible, 5), ['height'])
+})
+
+test('이상치: 성별을 모르거나 신발이거나 사이즈표가 없으면 통계 필터를 건너뛴다', () => {
+  const group = (extra) => [1, 2, 3, 4].map((i) => outRv(i, extra)).concat([outRv(5, { height: 185, weight: 48, ...extra })])
+  assert.equal(screenReviews(group({ gender: null }), OUT_PRODUCT).excludedTotal, 0)
+  assert.equal(screenReviews(group({}), { ...OUT_PRODUCT, category: 'shoes' }).excludedTotal, 0)
+  assert.equal(screenReviews(group({}), { sizeChart: null, optionLabels: ['S', 'M', 'L'], category: 'top' }).excludedTotal, 0)
+  assert.equal(screenReviews(group({}), OUT_PRODUCT).excludedTotal, 1, '같은 데이터가 조건을 갖추면 걸린다(위 세 건의 비교 기준)')
+})
+
+test('이상치: 비슷한 체형·같은 사이즈 다수와 반대 평가인 후기는 제외하지 않고 가중치만 줄인다 (5건 미만이면 생략)', () => {
+  const crowd = [1, 2, 3, 4, 5].map((i) => outRv(i, { fit: 'small' }))
+  const odd = outRv(6, { fit: 'large' })
+  const res = screenReviews([...crowd, odd], OUT_PRODUCT)
+  assert.equal(res.excludedTotal, 0, '제외는 아니다')
+  assert.equal(res.labelReduced, 1)
+  const kept = res.kept.find((r) => r.id === 6)
+  assert.equal(kept.labelReduced, true)
+  assert.equal(kept.labelWeight, OUTLIER.labelWeight)
+  assert.ok(res.kept.filter((r) => r.id !== 6).every((r) => r.labelWeight == null))
+  // 집계에서 그 후기의 몫이 줄어든다
+  const bySize = aggregateFit(res.kept.map((r) => ({ ...r, similarity: 100 })))
+  assert.equal(bySize.M.large, OUTLIER.labelWeight)
+  assert.equal(bySize.M.small, 5)
+  // 5건 미만이면 생략
+  const few = screenReviews([...crowd.slice(0, 3), odd], OUT_PRODUCT)
+  assert.equal(few.labelReduced, 0)
+  assert.ok(few.kept.every((r) => r.labelWeight == null))
+  // 정사이즈 평가는 '반대'가 아니다
+  const tru = screenReviews([...crowd, outRv(7, { fit: 'true' })], OUT_PRODUCT)
+  assert.equal(tru.labelReduced, 0)
+  // 몸이 많이 다른 후기끼리는 이웃이 아니므로 반대여도 줄이지 않는다
+  const far = screenReviews([...crowd, outRv(8, { fit: 'large', height: 160, weight: 52 })], OUT_PRODUCT)
+  assert.equal(far.labelReduced, 0)
+})
+
+test('이상치: 추천·후기 집계(generateFitComment)에서 제외되고, 제외된 후기는 excludedReviews에 사유와 함께 남는다', () => {
+  const base = PRODUCTS['https://shop-a.example.com/goods/12345']
+  const good = [1, 2, 3, 4, 5].map((i) => ({ id: i, nick: `g${i}`, gender: 'male', height: 175, weight: 70, size: 'M', fit: 'true', text: '딱 맞아요' }))
+  const bogus = [
+    { id: 91, nick: '모순', gender: 'male', height: 175, weight: 70, size: 'L', fit: 'large', text: '어깨는 작아요 팔은 커요' },
+    { id: 92, nick: '없는사이즈', gender: 'male', height: 175, weight: 70, size: 'XXL', fit: 'large', text: '엄청 커요' },
+    { id: 93, nick: '키이상', gender: 'male', height: 99, weight: 70, size: 'L', fit: 'large', text: '커요' },
+  ]
+  const withBogus = generateFitComment(profile, { ...base, reviews: [...good, ...bogus] })
+  const clean = generateFitComment(profile, { ...base, reviews: good })
+  assert.equal(withBogus.evidence.reviewExcluded, 3)
+  assert.equal(withBogus.evidence.reviewMatched, 5, '제외된 후기는 비슷한 체형 수에 들어가지 않는다')
+  assert.deepEqual(withBogus.matched.map((r) => r.id).sort(), [1, 2, 3, 4, 5])
+  assert.ok(![...withBogus.matched, ...withBogus.otherReviews].some((r) => r.id >= 90), '유사도·다른 후기 목록에도 없다')
+  assert.deepEqual(withBogus.excludedReviews.map((r) => r.id), [91, 92, 93])
+  assert.ok(withBogus.excludedReviews.every((r) => /^제외됨\(.+\)$/.test(r.excluded.text)))
+  assert.equal(withBogus.recommendedSize, clean.recommendedSize)
+  assert.equal(withBogus.evidence.reviewVotes, clean.evidence.reviewVotes)
+  assert.equal(withBogus.confidence, clean.confidence)
+  assert.deepEqual(withBogus.outliers.counts, { height: 1, weight: 0, bmi: 0, contradiction: 1, unknownSize: 1, statistical: 0 })
+  assert.equal(clean.evidence.reviewExcluded, 0)
+  assert.equal(clean.excludedReviews.length, 0)
+  assert.ok(describeEvidence(withBogus.evidence, withBogus.confidence).summary.includes('제외한 후기 3건'))
+  assert.ok(!describeEvidence(clean.evidence, clean.confidence).summary.includes('제외한 후기'))
+})
+
+// 가짜 HTML: 리뷰 3건 중 1건이 '작아요'와 '커요'를 함께 말한다
+const OUT_BAD_BODY = '어깨는 작아요 기장은 커요 애매합니다 엄청 가볍고 따뜻해서 만족해요 겨울에 입기 좋아요.'
+const OUT_HTML = RB_HTML([rbCard(0), rbCard(1), rbCard(2)].map((c, i) => c.replace('26.10.08', `26.10.0${i + 1}`).replace('지루한플럼반바지', `닉${'abc'[i]}`).split(RB_BODY).join(i === 1 ? OUT_BAD_BODY : `${RB_BODY} ${'정말 만족'.repeat(i)}`)).join(''))
+
+test('이상치: 진단 리포트에 사유별 제외 수가 있고 후기 글·닉네임은 없다 (가짜 HTML)', () => {
+  const doc = fakeDocument(OUT_HTML)
+  const d = collectDiagnostics(doc, 'https://shop.example/products/1', '0.1.0')
+  assert.equal(d.outliers.excludedTotal, 1)
+  assert.equal(d.outliers.counts.contradiction, 1)
+  assert.equal(d.outliers.statApplied, false)
+  const rep = formatReport(d)
+  assert.match(rep, /후기 이상치: 제외 1건\(키가 범위 밖 0, 몸무게가 범위 밖 0, BMI가 범위 밖 0, 작아요·커요 동시 언급 1, 구매 사이즈가 상품에 없음 0, 같은 사이즈 후기와 체형 차이가 큼 0\), 가중치 낮춤 0건, 통계 필터 생략/)
+  assert.ok(!rep.includes('애매합니다') && !rep.includes('닉b') && !rep.includes('지루한플럼'))
+  const clean = collectDiagnostics(fakeDocument(RB_FULL), '', '')
+  assert.equal(clean.outliers.excludedTotal, 0)
+  assert.ok(formatReport(clean).includes('후기 이상치: 제외 0건'))
+})
+
+await atest('이상치: 확장 카드(가짜 DOM, vm)의 전체 리뷰 탭에 제외됨(사유)가 보이고, 제외된 후기는 비슷한 체형 목록에 없다', async () => {
+  const analyzed = analyzePage(fakeDocument(OUT_HTML), 'https://shop.example/products/1', buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular' }).profile, '0.1.0')
+  assert.equal(analyzed.status, 'ok')
+  assert.equal(analyzed.reviewViews.excludedTotal, 1)
+  assert.equal(analyzed.reviewViews.excluded[0].excluded.text, '제외됨(작아요·커요 동시 언급)')
+  assert.ok(![...analyzed.reviewViews.matched, ...analyzed.reviewViews.others].some((r) => r.excluded))
+  const { texts, created } = await runContentInFakeDom(OUT_HTML)
+  assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
+  assert.ok(texts.some((t) => t.includes('제외 1건')), '리뷰 원문 제목에 제외 수')
+  const tabs = created.filter((e) => e.className.split(' ').includes('rtab'))
+  const panel = created.find((e) => e.className === 'tp')
+  tabs[1]._l.click()
+  const flat = (n) => [n._text, ...(n.children || []).flatMap(flat)]
+  const shown = flat(panel).join('|')
+  assert.ok(shown.includes('제외됨(작아요·커요 동시 언급)'), '전체 리뷰 탭에 제외됨(사유)')
+  assert.ok(created.some((e) => e.className === 'tag excl' && e.textContent === '제외됨(작아요·커요 동시 언급)'))
+  assert.ok(created.some((e) => e.className === 'rv excl'), '제외된 리뷰 카드는 구분 클래스')
+  tabs[0]._l.click()
+  assert.ok(!flat(panel).join('|').includes('제외됨('), '비슷한 체형 탭에는 제외된 후기가 없다')
+})
+
+test('이상치: 웹 결과 화면(서버 렌더)에 제외된 후기가 사유와 함께 표시되고 유사도 비교에는 쓰이지 않는다', () => {
+  const clothing = { ...PRODUCTS['https://shop-a.example.com/goods/12345'], source: 'demo' }
+  const bad = { id: 91, nick: '모순닉', gender: 'male', height: 175, weight: 70, size: 'M', fit: 'small', text: '어깨는 작아요 팔은 커요' }
+  const html = render(WEB.ResultView, { product: { ...clothing, reviews: [...clothing.reviews, bad] }, profile, calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop })
+  const txt = textOf(html)
+  assert.ok(txt.includes('제외된 후기 1건') && txt.includes('제외됨(작아요·커요 동시 언급)') && txt.includes('모순닉'), '숨기지 않고 사유와 함께 보여준다')
+  assert.ok(html.includes('class="excluded-tag"') && html.includes('review-excluded'))
+  assert.ok(/전체 7건/.test(txt), '전체 건수에는 제외된 후기도 센다')
+  const plain = textOf(render(WEB.ResultView, { product: clothing, profile, calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop }))
+  assert.ok(!plain.includes('제외된 후기') && !plain.includes('제외됨('))
+})
+
 console.log(`\n${passed}개 통과`)

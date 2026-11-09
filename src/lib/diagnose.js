@@ -3,6 +3,8 @@
 // 프로필, 리뷰 글, 상품명, 주소의 쿼리·해시는 보고서에 들어가지 않습니다. 네트워크 호출은 없어요.
 import { findGridCandidates, readTables, tableShapes, readGeometryRows, parsePage, MEASURE_RE, REVIEW_SELECTOR } from './pageParser.js'
 import { shapeOfCell } from './productCore.js'
+import { screenReviews } from './fitEngine.js'
+import { outlierLine, REASON_KEYS } from './reviewOutliers.js'
 import { cleanCategoryInfo, categoryEvidenceLine } from './categoryClassifier.js'
 
 export const REPORT_MAX = 4000
@@ -70,6 +72,22 @@ const DROP_KEYS = ['tooShort', 'tooLong', 'innerDuplicate', 'noClue', 'duplicate
 const cleanCount = (v) => (Number.isInteger(v) && v >= 0 && v <= 100000 ? v : 0)
 function cleanDropped(d) {
   return Object.fromEntries(DROP_KEYS.map((k) => [k, cleanCount(d?.[k])]))
+}
+
+// 후기 이상치 제외 결과는 건수만 담아요 (후기 글·키·몸무게 값은 담지 않음)
+function cleanOutliers(product) {
+  if (!product) return null
+  try {
+    const o = screenReviews(product.reviews || [], product)
+    return {
+      excludedTotal: cleanCount(o.excludedTotal),
+      counts: Object.fromEntries(REASON_KEYS.map((k) => [k, cleanCount(o.counts[k])])),
+      labelReduced: cleanCount(o.labelReduced),
+      statApplied: o.statApplied === true,
+    }
+  } catch {
+    return null
+  }
 }
 
 // 본문 추출 결과는 건수만 담아요 (닉네임·상품명·본문·사진 주소는 담지 않음)
@@ -140,6 +158,7 @@ export function collectDiagnostics(root, pageUrl = '', extVersion = '', extra = 
     imageNearHeading: imgNear,
     readyState: ready,
     reviewStats: reviewStats(product?.reviews),
+    outliers: cleanOutliers(product),
     reviewCards: cleanCount(product?.reviewMeta?.cards),
     reviewDropped: cleanDropped(product?.reviewMeta?.dropped),
     bodyExtract: cleanBodyExtract(product?.reviewMeta?.bodyExtract),
@@ -272,6 +291,7 @@ function reviewStatLines(d) {
     const b = d.bodyExtract
     out.push(`본문 추출: 라벨 구조 ${b.structured}건, 전체 글 대체 ${b.fallback}건, 접힘/펼침 중복 제거 ${b.deduped}건 | 닉네임 읽음 ${b.withNick}건, 상품명 읽음 ${b.withProductName}건, 사진 있는 리뷰 ${b.withPhoto}건`)
   }
+  if (d.outliers) out.push(outlierLine(d.outliers))
   if (d.compareFailed) out.push('사이즈별 비교 표를 만들지 못해 표시하지 않았어요')
   if (d.scroll) out.push(`리뷰 불러오기: ${d.scroll.before}건 -> ${d.scroll.after}건, 멈춘 이유 ${d.scroll.stop}`)
   return out
