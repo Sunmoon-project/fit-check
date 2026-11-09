@@ -8,6 +8,7 @@ import { loadProfile, saveProfile, loadFeedback, saveFeedback, loadWardrobe, sav
 import { applyDelivery, syncNotice } from './lib/wardrobeSync.js'
 import { connectExtensionSync } from './lib/syncClient.js'
 import { computeCalibration } from './lib/fitEngine.js'
+import { localAdapter, loadLearning, learnFromProduct, resetLearning } from './lib/learnStore.js'
 
 // 흐름: 내 정보(온보딩, 저장된 정보가 없을 때만) → 상품 링크 → 사이즈·핏 추천
 const STEP_LABELS = ['내 정보', '상품 링크', '사이즈 추천']
@@ -20,6 +21,7 @@ export default function App() {
   const calibration = useMemo(() => computeCalibration(feedback), [feedback])
   const [wardrobe, setWardrobe] = useState(() => loadWardrobe())
   const [showWardrobe, setShowWardrobe] = useState(false)
+  const [learningModel, setLearningModel] = useState(null) // 학습값 묶음 (이 브라우저의 localStorage에서 읽어요)
   const [notice, setNotice] = useState(null) // { text, error } 확장에서 자동으로 가져온 결과 한 줄
 
   const step = editing || !profile ? 'onboarding' : product ? 'result' : 'product'
@@ -36,6 +38,29 @@ export default function App() {
   function handleProduct(p) {
     setProduct(p)
     window.scrollTo(0, 0)
+  }
+
+  useEffect(() => {
+    let alive = true
+    loadLearning(localAdapter()).then((s) => alive && setLearningModel(s.model))
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  // 상품을 분석할 때 후기에서 학습 샘플을 쌓고(중복 방지) 갱신된 학습값을 판정에 써요.
+  async function handleLearn(p) {
+    try {
+      const r = await learnFromProduct(localAdapter(), p, { pageUrl: p.url })
+      setLearningModel(r.model)
+    } catch {
+      /* 저장소를 못 쓰면 학습 없이 기존 방식으로 보여줘요 */
+    }
+  }
+
+  async function handleResetLearning() {
+    await resetLearning(localAdapter())
+    setLearningModel(null)
   }
 
   function handleFeedback(item) {
@@ -159,6 +184,9 @@ export default function App() {
             onRestart={() => setProduct(null)}
             wardrobe={wardrobe}
             onSaveWardrobe={handleSaveWardrobe}
+            learningModel={learningModel}
+            onLearn={handleLearn}
+            onResetLearning={handleResetLearning}
           />
         )}
       </main>

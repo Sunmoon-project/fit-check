@@ -7,6 +7,8 @@ import { compareSizes, compactCompare } from './sizeCompare.js'
 import { summarizeSizeChart } from './sizeSummary.js'
 import { targetGenderNotice } from './targetGender.js'
 import { shoeViewFor, shoeComment, feelSizeText } from './shoeFit.js'
+import { resolveLearned, brandKeyOf } from './learnedModel.js'
+import { toSamples } from './learnSamples.js'
 // 사용자가 직접 적은 사이즈표: 열 이름(예: 어깨 가슴 총장)과 줄(예: M 50 57 68) → buildSizeChart 입력 모양.
 // 저장하지 않고 이번 분석에만 씁니다. 잘못된 줄은 버려요.
 export function manualChartRows(columnsText, linesText) {
@@ -89,11 +91,11 @@ function exportData(product, pageUrl, result) {
 }
 
 // 사이즈 탭별 비교 표용 값: 내 치수(직접 입력/추정) vs 옷 실측 vs 여유 → 판정. 실측만 있는 부위는 그대로 표시해요.
-function compareView(product, profile, result) {
+function compareView(product, profile, result, learned = null) {
   if (!product.sizeChart) return { view: null, failed: false }
   try {
     const { values } = bodyValuesForProfile(profile)
-    const cmp = compareSizes({ chart: product.sizeChart, bodyValues: values, measured: result.measured, category: product.category })
+    const cmp = compareSizes({ chart: product.sizeChart, bodyValues: values, measured: result.measured, category: product.category, learned })
     return { view: cmp.sizes.length ? { ...compactCompare(cmp), recommended: result.recommendedSize ?? null } : null, failed: false }
   } catch {
     return { view: null, failed: true }
@@ -124,9 +126,13 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     }
   }
 
-  const result = generateFitComment(profile, product)
+  // 학습값 묶음(opts.learned)은 선택이에요. 없으면 기존 동작 그대로입니다. 브랜드 키는 상품 주소의 알려진 쇼핑몰 도메인에서 가져와요.
+  const learnBrand = brandKeyOf({ ...product, url: product.url || pageUrl })
+  if (learnBrand) product.learnBrand = learnBrand
+  const result = generateFitComment(profile, product, {}, opts.learned || null)
+  const learned = opts.learned ? resolveLearned(opts.learned, product.category, learnBrand) : null
   const shoe = canCompareShoe ? shoeViewFor(product, profile) : null
-  const cmpView = shoe ? { view: null, failed: false } : compareView(product, profile, result)
+  const cmpView = shoe ? { view: null, failed: false } : compareView(product, profile, result, learned)
   // 사이즈표의 표시 이름('1 (M)')이 있으면 그 이름으로 보여줍니다.
   const disp = (x) => product.sizeChart?.display?.[String(x).replace(/\s/g, '').toUpperCase()] || x
   const view = (r) => reviewView(r, disp)
@@ -159,6 +165,9 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
       excludedTotal: (result.excludedReviews || []).length,
     },
     exportData: exportData(product, pageUrl, result),
+    // 학습값 사용 상태({ used, total, categorySamples, text })와, 요청했을 때만 이 상품 후기에서 만든 학습 샘플(개인 식별 정보 없음)
+    learning: result.learning || null,
+    learnSamples: opts.collectSamples ? toSamples(product, { pageUrl }) : [],
     compareView: cmpView.view,
     shoeView: shoe,
     // 상품 대상 성별이 프로필 성별과 다를 때만 { gender, text, mismatch } (옷에도 같은 함수)

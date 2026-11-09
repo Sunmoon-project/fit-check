@@ -8,6 +8,8 @@ import { collectDiagnostics, formatReport } from '../src/lib/diagnose.js'
 import { shouldStop, isSafeMoreButton, isReviewTab, isInnerScroller, loadTarget, loadResultText, toReportStop, AUTO_TARGET, MORE_STEP, MAX_MS } from '../src/lib/reviewLoader.js'
 import { compareBody, countUpValue, similarityTier, TIER_LABEL, diffText, buySizeText } from '../src/lib/similarityBreakdown.js'
 import { EXT_PROFILE_KEY, isUsableProfile } from '../src/lib/extProfile.js'
+import { chromeAdapter, loadLearning, addSamples, resetLearning } from '../src/lib/learnStore.js'
+import { LEARNING_NOTE, LEARNING_STORAGE_NOTE } from '../src/lib/learnedModel.js'
 
 // 표 구조로 사이즈표가 안 읽힐 때 화면 위치로 줄·칸을 맞추는 마지막 후보에 쓸 위치 제공자 (읽기만 해요)
 setRectProvider((el) => el.getBoundingClientRect())
@@ -307,7 +309,7 @@ function manualForm(r) {
         }
         chosenExtraRows = extraRows
         chosenFor = location.href
-        renderResult({ ...analyzePage(document, location.href, profile, EXT_VERSION, { extraRows, categoryOverride: chosenCategory }), manual: true })
+        renderResult({ ...(await analyzeLearning(profile, { extraRows, categoryOverride: chosenCategory })), manual: true })
       } catch {
         msg.textContent = '직접 입력한 표로 분석하지 못했어요. 입력 형식을 확인하고 다시 눌러주세요.'
       }
@@ -1038,9 +1040,55 @@ async function loadMoreReviews(mode, onProgress) {
   return { reason, clicked, grewOnPage: count > startCount }
 }
 
+// 분석 한 번 + 학습: 저장된 학습값으로 판정하고, 이 상품 후기에서 만든 샘플(개인 식별 정보 없음)을 chrome.storage.local에 쌓아요.
+// 새 샘플이 쌓였으면 갱신된 학습값으로 한 번 더 분석해요. 저장소를 못 쓰면(예: 확장이 갱신된 직후) 학습 없이 기존 방식으로 분석해요.
+async function analyzeLearning(profile, opts) {
+  const adapter = chromeAdapter(chrome.storage.local, chrome.runtime)
+  let model = null
+  try {
+    model = (await loadLearning(adapter)).model
+  } catch {
+    model = null
+  }
+  let out = analyzePage(document, location.href, profile, EXT_VERSION, { ...opts, learned: model, collectSamples: true })
+  if (out.status === 'ok' && out.learnSamples?.length) {
+    try {
+      const r = await addSamples(adapter, out.learnSamples)
+      if (r.added > 0) out = analyzePage(document, location.href, profile, EXT_VERSION, { ...opts, learned: r.model, collectSamples: false })
+    } catch {
+      /* 저장 실패해도 분석 결과는 그대로 보여줘요 */
+    }
+  }
+  return out
+}
+
+// 학습값 사용 표시와 초기화 버튼 (학습값이 있을 때만)
+function learningBlock(r) {
+  const l = r.learning
+  if (!l) return null
+  const box = el('div', 'tiny lrn')
+  const line = el('p', 'tiny', l.text)
+  line.setAttribute('role', 'status')
+  box.append(line, el('p', 'tiny', `${LEARNING_NOTE} ${LEARNING_STORAGE_NOTE}`))
+  const btn = el('button', 'btn', '학습값 초기화')
+  btn.type = 'button'
+  btn.addEventListener('click', async () => {
+    btn.disabled = true
+    try {
+      await resetLearning(chromeAdapter(chrome.storage.local, chrome.runtime))
+      line.textContent = '학습값과 모은 샘플을 모두 지웠어요. 다음 분석부터 기본 기준으로 판정해요.'
+    } catch {
+      line.textContent = '초기화하지 못했어요. 다시 눌러 주세요.'
+      btn.disabled = false
+    }
+  })
+  box.append(btn)
+  return box
+}
+
 // 불러온 뒤 다시 분석하고 결과 한 줄과 진단 값을 붙여요. before는 불러오기 전 카드에 보이던 리뷰 수예요.
-function reanalyzeAfterLoad(profile, before, res) {
-  const next = analyzePage(document, location.href, profile, EXT_VERSION, { categoryOverride: chosenCategory, ...(chosenExtraRows ? { extraRows: chosenExtraRows } : {}) })
+async function reanalyzeAfterLoad(profile, before, res) {
+  const next = await analyzeLearning(profile, { categoryOverride: chosenCategory, ...(chosenExtraRows ? { extraRows: chosenExtraRows } : {}) })
   if (chosenExtraRows) next.manual = true
   if (next.status === 'ok') {
     const scroll = { before, after: next.reviewsLoaded ?? 0, stop: toReportStop(res.reason) }
@@ -1148,7 +1196,7 @@ function loadMoreBlock(r) {
       })
       const profile = await readProfile()
       if (!isUsableProfile(profile)) throw new Error('no-profile')
-      const next = reanalyzeAfterLoad(profile, r.reviewsLoaded ?? 0, res)
+      const next = await reanalyzeAfterLoad(profile, r.reviewsLoaded ?? 0, res)
       busy = false
       renderResult(next)
     } catch {
@@ -1224,7 +1272,7 @@ async function reanalyzeWithCategory(key) {
   try {
     const profile = await readProfile()
     if (!isUsableProfile(profile)) throw new Error('no-profile')
-    const out = analyzePage(document, location.href, profile, EXT_VERSION, { categoryOverride: key, ...(chosenExtraRows ? { extraRows: chosenExtraRows } : {}) })
+    const out = await analyzeLearning(profile, { categoryOverride: key, ...(chosenExtraRows ? { extraRows: chosenExtraRows } : {}) })
     renderResult(chosenExtraRows ? { ...out, manual: true } : out)
   } catch {
     renderResult({ status: 'error', message: '종류를 바꿔 다시 분석하다 문제가 생겼어요. 다시 눌러주세요.', diagnostics: null })
@@ -1264,6 +1312,8 @@ function renderResult(r) {
     if (r.recommendedSize) card.append(el('div', 'size', r.recommendedLabel || r.recommendedSize))
     card.append(el('p', 'sum', r.manual ? `${r.summary} · 직접 입력한 사이즈표` : r.summary))
     card.append(el('p', 'tiny', '참고용이에요. 확신도는 정확도를 측정한 값이 아니에요.'))
+    const learnBox = learningBlock(r)
+    if (learnBox) card.append(learnBox)
     const fold = el('div', 'fold')
     fold.append(loadMoreBlock(r))
     if (r.loadInfo) fold.append(el('p', 'tiny', r.loadInfo))
@@ -1353,11 +1403,11 @@ async function run() {
     await waitForRender()
     stage = 'analyze'
     // 사이즈표를 못 찾으면 짧게 기다렸다가 다시 읽어요. 이 단계에서는 클릭·스크롤 없이 화면 글만 읽습니다.
-    let result = analyzePage(document, location.href, profile, EXT_VERSION, { categoryOverride: chosenCategory })
+    let result = await analyzeLearning(profile, { categoryOverride: chosenCategory })
     for (const delay of RETRY_DELAYS) {
       if (result.status !== 'no-data' && result.status !== 'no-product') break
       await new Promise((r) => setTimeout(r, delay))
-      result = analyzePage(document, location.href, profile, EXT_VERSION, { categoryOverride: chosenCategory })
+      result = await analyzeLearning(profile, { categoryOverride: chosenCategory })
     }
     // 리뷰가 AUTO_TARGET건보다 적으면 자동으로 더 불러온 뒤 다시 분석해요 (상품 페이지로 읽힌 경우만).
     if ((result.status === 'ok' || result.status === 'no-data') && (result.reviewsLoaded ?? 0) < AUTO_TARGET) {
@@ -1365,7 +1415,7 @@ async function run() {
       fab.textContent = '리뷰 불러오는 중…'
       const res = await loadMoreReviews('auto', showAutoLoading())
       stage = 'analyze'
-      const next = reanalyzeAfterLoad(profile, result.reviewsLoaded ?? 0, res)
+      const next = await reanalyzeAfterLoad(profile, result.reviewsLoaded ?? 0, res)
       if (next.status === 'ok' || result.status !== 'ok') result = next
     }
     stage = 'render'

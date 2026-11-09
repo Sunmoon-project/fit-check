@@ -1,6 +1,8 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { generateFitComment, bodyValuesForProfile } from '../lib/fitEngine.js'
 import { compareSizes } from '../lib/sizeCompare.js'
+import { resolveLearned, brandKeyOf } from '../lib/learnedModel.js'
+import LearningNote from './LearningNote.jsx'
 import { CATEGORY_LABEL } from '../data/measurements.js'
 import { recategorizeProduct } from '../lib/recategorize.js'
 import CategoryPicker from './CategoryPicker.jsx'
@@ -19,14 +21,21 @@ import FeedbackForm from './FeedbackForm.jsx'
 import TryOnPanel from './TryOnPanel.jsx'
 import { SimilarInWardrobe } from './Wardrobe.jsx'
 
-export default function ResultView({ product: parsedProduct, profile, calibration, feedbackCount, existingFeedback, onFeedback, onRestart, wardrobe = [], onSaveWardrobe }) {
+export default function ResultView({ product: parsedProduct, profile, calibration, feedbackCount, existingFeedback, onFeedback, onRestart, wardrobe = [], onSaveWardrobe, learningModel = null, onLearn, onResetLearning }) {
   // 분류 신뢰도가 낮을 때 사용자가 고른 카테고리로 다시 분석해요 (자동 분류보다 우선).
   const [chosen, setChosen] = useState(null)
   const product = useMemo(() => (chosen ? recategorizeProduct(parsedProduct, chosen) : parsedProduct), [parsedProduct, chosen])
-  const result = useMemo(() => generateFitComment(profile, product, calibration), [profile, product, calibration])
+  const result = useMemo(() => generateFitComment(profile, product, calibration, learningModel), [profile, product, calibration, learningModel])
+  const learned = useMemo(() => (learningModel ? resolveLearned(learningModel, product.category, brandKeyOf(product)) : null), [learningModel, product])
+  // 상품을 분석할 때 후기에서 학습 샘플을 쌓아요(중복은 건너뜀). 결과는 App이 학습값으로 다시 내려줘요.
+  const learnRef = useRef(onLearn)
+  learnRef.current = onLearn
+  useEffect(() => {
+    learnRef.current?.(product)
+  }, [product])
   const compare = useMemo(
-    () => compareSizes({ chart: product.sizeChart, bodyValues: bodyValuesForProfile(profile).values, measured: result.measured, category: product.category, calibration: calibration || {} }),
-    [profile, product, calibration, result],
+    () => compareSizes({ chart: product.sizeChart, bodyValues: bodyValuesForProfile(profile).values, measured: result.measured, category: product.category, calibration: calibration || {}, learned }),
+    [profile, product, calibration, result, learned],
   )
   const [picked, setPicked] = useState(null)
   const [saving, setSaving] = useState(false)
@@ -91,6 +100,8 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
       {!isShoes && targetGender && <p className="info-box small target-gender" role="note">{targetGender.text}</p>}
 
       <FitComment result={shownResult} />
+
+      <LearningNote learning={result.learning} onReset={onResetLearning} />
 
       {isShoes ? (
         <ShoeCompare view={shoe} selectedSize={picked} onSelect={setPicked} />

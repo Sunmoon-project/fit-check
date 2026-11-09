@@ -22,7 +22,7 @@ export const partUnit = (part) => (MM_PARTS.includes(part) ? 'mm' : 'cm')
  * @returns {{ sizes: Array<{ size, label, rows: Array }>, measureOnlyParts: string[], hasComparable: boolean }}
  * row: { part, label, unit, garment, body, bodyKind('measured'|'estimated'|'standard'|null), ease, verdict, level, key, isLength, basis('rule'|'heuristic'|'none'), note }
  */
-export function compareSizes({ chart, bodyValues = {}, measured = [], category, calibration = {} }) {
+export function compareSizes({ chart, bodyValues = {}, measured = [], category, calibration = {}, learned = null }) {
   if (!chart?.measures) return { sizes: [], measureOnlyParts: [], hasComparable: false }
   const cat = category || chart.category
   const mine = measured instanceof Set ? measured : new Set(measured)
@@ -34,7 +34,7 @@ export function compareSizes({ chart, bodyValues = {}, measured = [], category, 
     const key = Object.keys(chart.measures).find((k) => k.toUpperCase() === size)
     const m = key == null ? null : chart.measures[key]
     if (!m) continue
-    const judged = new Map(partVerdicts(bodyValues, m, cat, calibration).map((v) => [v.part, v]))
+    const judged = new Map(partVerdicts(bodyValues, m, cat, calibration, learned).map((v) => [v.part, v]))
     const order = [...new Set([...(CATEGORY_PARTS[cat] || []).filter((p) => p in m), ...Object.keys(m)])]
     const rows = []
     for (const part of order) {
