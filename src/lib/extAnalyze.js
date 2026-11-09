@@ -11,6 +11,8 @@ import { resolveLearned, brandKeyOf } from './learnedModel.js'
 import { classifyBrandRegion, regionInputOf, regionLine } from './brandRegion.js'
 import { toSamples } from './learnSamples.js'
 import { chartRecordFromProduct } from './sizeChartDb.js'
+import { usedSiteOf, readListing, listingText } from './usedListing.js'
+import { analyzeUsedListing } from './usedAnalyze.js'
 // 사용자가 직접 적은 사이즈표: 열 이름(예: 어깨 가슴 총장)과 줄(예: M 50 57 68) → buildSizeChart 입력 모양.
 // 저장하지 않고 이번 분석에만 씁니다. 잘못된 줄은 버려요.
 export function manualChartRows(columnsText, linesText) {
@@ -104,7 +106,27 @@ function compareView(product, profile, result, learned = null) {
   }
 }
 
+// 번개장터·후르츠패밀리 같은 중고 판매글: 후기가 없다는 전제로 판매글 글(실측·사이즈 표기)과 사이즈표 DB(opts.usedChartMatches)로 판정해요.
+// 진단 리포트에는 건수만 담아요. 이 사이트들의 실제 페이지는 확인하지 못했어요(일반 규칙으로 읽어요).
+function analyzeUsedPage(root, pageUrl, profile, extVersion, opts, site) {
+  const listing = readListing(root)
+  const empty = !listing.title && !listing.bodyText && !listing.description
+  if (empty) {
+    return {
+      status: 'no-data',
+      usedSite: true,
+      message: '이 중고 판매글에서 제목이나 설명을 읽지 못했어요. 페이지가 다 열린 뒤 다시 눌러보거나, 핏체크 웹 앱의 중고 상품 분석에 판매글을 붙여넣어 주세요.',
+      diagnostics: collectDiagnostics(root, pageUrl, extVersion, { used: { basis: 'none', siteKnown: true } }),
+    }
+  }
+  const out = analyzeUsedListing({ ...listing, text: listingText(listing) }, profile, { chartMatches: opts.usedChartMatches || [], pageUrl, site })
+  out.diagnostics = collectDiagnostics(root, pageUrl, extVersion, { used: { ...out.counts, basis: out.basis, siteKnown: true } })
+  return out
+}
+
 export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) {
+  const usedSite = usedSiteOf(pageUrl)
+  if (usedSite) return analyzeUsedPage(root, pageUrl, profile, extVersion, opts, usedSite)
   const product = parsePage(root, pageUrl, opts)
   if (!product) return { status: 'no-product', message: NOT_PRODUCT_MESSAGE }
 
