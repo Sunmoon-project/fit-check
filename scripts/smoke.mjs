@@ -72,6 +72,12 @@ import { USED_SITES, USED_SITES_NOTE, usedSiteOf, parseListingText, readListing,
 import { analyzeUsedListing, findChartMatches, usedSearchQuery, usedVerdictFrom, USED_DB_MIN_SCORE, USED_NO_REVIEW_NOTE } from '../src/lib/usedAnalyze.js'
 import { createImageSearcher, IMAGE_SEARCH_DISABLED_TEXT } from '../src/lib/imageSearch.js'
 import { createLabelReader, LABEL_OCR_DISABLED_TEXT } from '../src/lib/labelOcr.js'
+import {
+  DEMO_NOTE, NO_DATA_MESSAGE, wilson, assignFolds, predictFromEase, withinSizes, sizeOrderOf, eligibleReview, parseEvalInput,
+  summarizeLabels, summarizeSizes, judge, evaluateReviews, evaluateSamples, makeDemoDataset, formatReport as formatEvalReport,
+} from './lib/fitEval.mjs'
+import { runEvalCli } from './lib/evalCli.mjs'
+import { buildLearnExport, EXPORT_KIND } from '../src/lib/learnExport.js'
 
 let passed = 0
 function test(name, fn) {
@@ -5952,6 +5958,239 @@ test('중고 판매글: 읽기·분석 모듈은 네트워크를 쓰지 않는�
     const src = readFileSync(new URL(`../src/lib/${f}`, import.meta.url), 'utf8')
     assert.ok(!/\b(fetch|XMLHttpRequest|sendBeacon|WebSocket)\b\s*\(/.test(src), f)
   }
+})
+
+// ---- 성공 기준 지표 측정 (eval:fit). 전부 직접 만든 가짜·합성 데이터이고, 실제 정확도를 잰 것이 아니에요 ----
+const recs = (spec) => spec.flatMap(([n, actual, predicted, high]) => Array.from({ length: n }, () => ({ actual, predicted, high, priorPredicted: 'true', priorHigh: false, learnedApplied: true })))
+
+test('평가 지표: Wilson 구간은 알려진 값과 맞고 경계(0건, 전부 적중)를 처리한다', () => {
+  const w = wilson(9, 10)
+  assert.ok(Math.abs(w.lo - 0.5958) < 0.002 && Math.abs(w.hi - 0.9821) < 0.002, `${w.lo} ${w.hi}`)
+  assert.equal(wilson(0, 0), null)
+  assert.equal(wilson(20, 20).hi, 1)
+  assert.ok(wilson(0, 20).lo === 0 && wilson(0, 20).hi > 0)
+  assert.ok(wilson(90, 100).hi - wilson(90, 100).lo < wilson(9, 10).hi - wilson(9, 10).lo, '표본이 많을수록 구간이 좁다')
+})
+
+test('평가 지표: 확신 높음 적중률과 적용 범위, 기준선(항상 정사이즈), 혼동행렬', () => {
+  // 확신 높음 5건(4건 적중), 그 밖 5건. 실제 라벨: true 5건
+  const L = summarizeLabels(recs([
+    [3, 'true', 'true', true], [1, 'small', 'true', true], [1, 'large', 'large', true], // 높음 5건 중 4건 적중
+    [1, 'true', 'true', false], [2, 'small', 'small', false], [1, 'true', 'large', false], [1, 'large', 'small', false],
+  ]))
+  assert.equal(L.n, 10)
+  assert.equal(L.high.k, 4)
+  assert.equal(L.high.n, 5)
+  assert.equal(L.high.rate, 0.8)
+  assert.equal(L.coverage.rate, 0.5)
+  assert.equal(L.accuracy.rate, 0.7)
+  assert.equal(L.baselineAll.rate, 0.5) // 실제 true가 5건
+  assert.equal(L.baselineHigh.rate, 0.6) // 높음 5건 중 true 3건
+  assert.equal(L.matrix.small.true, 1)
+  assert.equal(L.matrix.large.small, 1)
+  assert.equal(L.precisionRecall.small.support, 3)
+  assert.ok(L.high.ci.lo < 0.8 && L.high.ci.hi > 0.8)
+})
+
+test('평가 지표: 확신 높음 판정 기준(경계에서 떨어진 정도, 부위 수)과 라벨 예측', () => {
+  assert.equal(predictFromEase({ chest: 2, shoulder: -1 }).label, 'small')
+  assert.equal(predictFromEase({ chest: 12, shoulder: 3 }).label, 'true')
+  assert.equal(predictFromEase({ chest: 30, shoulder: 9 }).label, 'large')
+  assert.equal(predictFromEase({ chest: 12, shoulder: 3 }).high, true)
+  assert.equal(predictFromEase({ chest: 7, shoulder: 3 }).high, false, '경계(snug 6)에서 1cm라 확신 낮음')
+  assert.equal(predictFromEase({ chest: 12 }).high, false, '비교 부위가 1개면 확신 높음이 아님')
+  assert.equal(predictFromEase({ chest: 30, shoulder: 3 }).label, 'true', '한 부위만 크면 large가 아님')
+  assert.equal(predictFromEase({}).label, null)
+  // 학습값(rules·offset)이 판정 경계를 옮긴다
+  assert.equal(predictFromEase({ chest: 9, shoulder: 3 }).label, 'true')
+  assert.equal(predictFromEase({ chest: 9, shoulder: 3 }, { rules: {}, offset: 5 }).label, 'small')
+})
+
+test('평가 지표: ±1 사이즈 판정 (이름 표기 차이, 순서에 없는 사이즈, 경계)', () => {
+  const order = ['S', 'M', 'L', 'XL']
+  assert.equal(withinSizes(order, 'M', 'L'), true)
+  assert.equal(withinSizes(order, 'M', 'M'), true)
+  assert.equal(withinSizes(order, 'S', 'L'), false)
+  assert.equal(withinSizes(order, 'S', 'M', 0), false)
+  assert.equal(withinSizes(['1(S)', '2(M)', '3(L)'], '2(M)', 'L'), true)
+  assert.equal(withinSizes(order, 'XXL', 'M'), null)
+  assert.equal(withinSizes(order, null, 'M'), null)
+  assert.deepEqual(sizeOrderOf({ rows: [['s'], ['m']], measures: { M: {}, L: {} } }), ['S', 'M', 'L'])
+  const S = summarizeSizes([{ hit: true, exact: true, priorHit: true, baselineHit: false }, { hit: true, exact: false, priorHit: false, baselineHit: true }, { hit: false, exact: false, priorHit: false, baselineHit: false }])
+  assert.equal(S.within1.k, 2)
+  assert.equal(S.exact.k, 1)
+  assert.equal(S.baselineWithin1.k, 1)
+})
+
+test('평가 분할: 시드 고정, 모든 단위가 정확히 한 묶음에만 들어가고 크기가 고르다', () => {
+  const a = assignFolds(103, 5, 7)
+  assert.deepEqual(a, assignFolds(103, 5, 7))
+  assert.notDeepEqual(a, assignFolds(103, 5, 8))
+  assert.equal(a.length, 103)
+  const sizes = [0, 1, 2, 3, 4].map((f) => a.filter((x) => x === f).length)
+  assert.equal(sizes.reduce((x, y) => x + y, 0), 103)
+  assert.ok(Math.max(...sizes) - Math.min(...sizes) <= 1, sizes.join())
+  const data = makeDemoDataset(5, { products: 6, reviewsPer: 20 })
+  const r = evaluateReviews(data.products, { folds: 4, seed: 5 })
+  const all = r.folds.flatMap((f) => f.test)
+  assert.equal(new Set(all).size, all.length, '떼어 둔 후기가 겹치지 않는다')
+  assert.equal(all.length, r.eligible, '모든 후기가 한 번씩 평가된다')
+  assert.equal(r.label.n, r.eligible)
+  assert.ok(r.folds.every((f) => f.trainSamples < 120), '떼어 둔 후기는 학습에서 빠진다')
+  // 상품 단위 분할: 한 상품의 후기는 한 묶음에만 있다
+  const byProduct = evaluateReviews(data.products, { folds: 3, seed: 5, groupBy: 'product' })
+  const foldOfProduct = new Map()
+  for (const f of byProduct.folds) {
+    for (const key of f.test) {
+      const pi = key.split(':')[0]
+      assert.ok(!foldOfProduct.has(pi) || foldOfProduct.get(pi) === f.fold, '상품이 두 묶음에 걸침')
+      foldOfProduct.set(pi, f.fold)
+    }
+  }
+})
+
+test('평가 입력: 평가할 수 없는 후기(라벨·체형·성별·사이즈 없음)는 걸러낸다', () => {
+  const p = { category: 'top', sizeChart: { measures: { M: { chest: 100 } } } }
+  const ok = { size: 'M', fit: 'true', height: 175, weight: 70, gender: 'male' }
+  assert.equal(eligibleReview(p, ok), true)
+  assert.equal(eligibleReview(p, { ...ok, fit: undefined }), false)
+  assert.equal(eligibleReview(p, { ...ok, gender: undefined }), false)
+  assert.equal(eligibleReview(p, { ...ok, height: null }), false)
+  assert.equal(eligibleReview(p, { ...ok, size: 'XL' }), false, '사이즈표에 없는 사이즈')
+  assert.equal(eligibleReview({ ...p, category: 'shoes' }, ok), false)
+  assert.equal(eligibleReview({ category: 'top' }, ok), false)
+  assert.ok(parseEvalInput({ foo: 1 }).error)
+  assert.equal(parseEvalInput({ products: [] }).mode, 'reviews')
+  assert.equal(parseEvalInput({ samples: [{ cat: 'top', label: 'true', e: { chest: 1 } }, { bad: 1 }] }).samples.length, 1)
+})
+
+test('평가 판정: 달성·미달·보류 (표본 부족이면 판정 보류)', () => {
+  const mk = (highHit, highN, sizeHit, sizeN) => {
+    const rows = [
+      [highHit, 'small', 'small', true], [highN - highHit, 'small', 'true', true], // 확신 높음
+      [30, 'true', 'true', false], [20, 'large', 'large', false], [20, 'small', 'small', false],
+    ]
+    const size = sizeN ? summarizeSizes(Array.from({ length: sizeN }, (_, i) => ({ hit: i < sizeHit, exact: false, priorHit: false, baselineHit: false }))) : { n: 0, reason: '없음' }
+    return { label: summarizeLabels(recs(rows)), size }
+  }
+  assert.equal(judge(mk(57, 60, 57, 60)).status, 'met') // 95%, 95%
+  assert.equal(judge(mk(50, 60, 57, 60)).status, 'unmet') // 확신 높음 83%
+  assert.equal(judge(mk(57, 60, 50, 60)).status, 'unmet') // ±1 83%
+  const fewHigh = judge(mk(9, 10, 57, 60))
+  assert.equal(fewHigh.status, 'hold', '확신 높음 판정이 10건이면 보류')
+  assert.ok(fewHigh.checks.find((c) => c.id === 'high').text.includes('판정 보류'))
+  const noSize = judge(mk(57, 60, 0, 0))
+  assert.equal(noSize.status, 'hold', '사이즈 평가가 없으면 보류')
+  assert.ok(noSize.checks.find((c) => c.id === 'size').text.includes('판정 보류'))
+  // 90% 이상이어도 ‘항상 정사이즈’ 기준선을 못 넘으면 달성이 아님
+  const baselineHeavy = { label: summarizeLabels(recs([[95, 'true', 'true', true], [5, 'true', 'small', true], [30, 'true', 'true', false]])), size: summarizeSizes(Array.from({ length: 40 }, () => ({ hit: true, exact: false, priorHit: false, baselineHit: false }))) }
+  assert.equal(judge(baselineHeavy).checks.find((c) => c.id === 'baseline').state, 'fail')
+  assert.equal(judge(baselineHeavy).status, 'unmet')
+  // 후기 50건 미만이면 경고
+  assert.ok(judge({ label: summarizeLabels(recs([[10, 'true', 'true', true]])), size: { n: 0, reason: 'x' } }).warnings.some((w) => w.includes('적어요')))
+})
+
+test('평가 샘플 모드(여유분 기반): 경계가 뚜렷한 샘플은 확신 높음이 모두 적중하고 ±1은 평가하지 않는다', () => {
+  const mk = (label, e, n) => Array.from({ length: n }, () => ({ cat: 'top', brand: null, label, w: 1, e }))
+  const samples = [...mk('small', { chest: 2, shoulder: -1 }, 20), ...mk('true', { chest: 12, shoulder: 3 }, 20), ...mk('large', { chest: 30, shoulder: 9 }, 20)]
+  const r = evaluateSamples(samples, { folds: 5 })
+  assert.equal(r.label.n, 60)
+  assert.equal(r.label.high.rate, 1)
+  assert.equal(r.label.high.n, r.label.coverage.k)
+  assert.ok(r.label.coverage.rate > 0.9)
+  assert.equal(r.size.within1, undefined)
+  const j = judge(r)
+  assert.equal(j.status, 'hold')
+  assert.ok(j.checks.find((c) => c.id === 'size').text.includes('판정 보류'))
+  const text = formatEvalReport(r).join('\n')
+  assert.ok(text.includes('평가할 수 없어요') && text.includes('여유분 기반 평가'))
+})
+
+test('eval:fit --demo: 맨 위와 맨 아래에 합성 표시, 판정 문구에도 실제 달성이 아님을 적고, 같은 시드면 결과가 같다', () => {
+  const a = runEvalCli(['--demo'])
+  assert.equal(a.code, 0)
+  assert.ok(a.lines[0].includes(DEMO_NOTE), '맨 위')
+  assert.ok(a.lines[a.lines.length - 1].includes(DEMO_NOTE), '맨 아래')
+  const verdict = a.lines.find((l) => l.startsWith('[3] 목표 판정'))
+  assert.ok(verdict.includes('실제 달성이 아님'), verdict)
+  assert.deepEqual(a.lines, runEvalCli(['--demo']).lines)
+  assert.notDeepEqual(a.lines, runEvalCli(['--demo', '--seed', '3']).lines)
+  const text = a.lines.join('\n')
+  for (const key of ['확신 높음', '적용 범위', '전체 정확도', '혼동행렬', 'precision', '±1', '항상 정사이즈', '학습값 없는 현재 규칙', '95% 구간']) assert.ok(text.includes(key), key)
+  // 합성이 아닌 입력의 보고서에는 합성 문구가 붙지 않는다
+  const real = runEvalCli(['--file', 'x.json'], { readFile: () => JSON.stringify({ products: makeDemoDataset(2, { products: 4, reviewsPer: 20 }).products }) })
+  assert.ok(!real.lines.join('\n').includes('합성'))
+  assert.ok(!real.lines.join('\n').includes('실제 달성'))
+  // 파일에 synthetic 표시가 있으면 합성 문구를 붙인다
+  const marked = runEvalCli(['--file', 'x.json'], { readFile: () => JSON.stringify(makeDemoDataset(2, { products: 4, reviewsPer: 20 })) })
+  assert.ok(marked.lines[0].includes(DEMO_NOTE) && marked.lines[marked.lines.length - 1].includes(DEMO_NOTE))
+})
+
+test('eval:fit: 데이터가 없으면 측정하지 않았다고 말하고 사용법을 보여준다, 잘못된 입력은 오류', () => {
+  const none = runEvalCli([])
+  assert.equal(none.code, 0)
+  assert.equal(none.lines[0], NO_DATA_MESSAGE)
+  assert.ok(none.lines[0].includes('측정하지 않았어요'))
+  assert.ok(none.lines.join('\n').includes('--file') && none.lines.join('\n').includes('--demo'))
+  assert.ok(!none.lines.join('\n').includes('%'), '수치를 지어내지 않는다')
+  assert.equal(runEvalCli(['--file', 'nope.json'], { readFile: () => { throw new Error('ENOENT') } }).code, 1)
+  assert.equal(runEvalCli(['--file', 'x'], { readFile: () => '{"a":1}' }).code, 1)
+  assert.equal(runEvalCli(['--file', 'x'], { readFile: () => 'not json' }).code, 1)
+  assert.equal(runEvalCli(['--folds', '1']).code, 1)
+  assert.equal(runEvalCli(['--bogus']).code, 1)
+  const empty = runEvalCli(['--file', 'x'], { readFile: () => '{"products":[]}' })
+  assert.ok(empty.lines[0].includes('측정하지 않았어요'))
+})
+
+test('eval:fit: 표본이 적은 실제(가짜) 파일은 판정 보류와 경고를 출력한다', () => {
+  const tiny = makeDemoDataset(1, { products: 2, reviewsPer: 8 })
+  const r = runEvalCli(['--file', 'x'], { readFile: () => JSON.stringify({ products: tiny.products }) })
+  const text = r.lines.join('\n')
+  assert.ok(text.includes('판정 보류'), text)
+  assert.ok(text.includes('적어요'))
+  assert.ok(text.includes('[95% 구간'))
+  assert.ok(!text.includes('목표 달성'))
+})
+
+test('학습 샘플 내보내기: 허용 목록 필드만 담고 키·몸무게·성별·사이즈·본문·주소·id는 없다', () => {
+  const dirty = [{
+    id: 'abc', cat: 'top', brand: 'musinsa.com', region: 'kr', label: 'true', w: 1, e: { chest: 12.5, shoulder: 'x' }, d: 20000,
+    height: 175, weight: 70, gender: 'male', size: 'M', text: '키 175 몸무게 70 후기 본문', url: 'https://shop.example/p/1', name: '상품명', nickname: '닉',
+  }, { cat: 'top', label: 'bogus', e: { chest: 1 } }, { cat: 'top', label: 'small', e: {} }]
+  const out = buildLearnExport(dirty)
+  assert.equal(out.kind, EXPORT_KIND)
+  assert.equal(out.count, 1)
+  assert.deepEqual(out.samples[0], { cat: 'top', brand: 'musinsa.com', region: 'kr', label: 'true', w: 1, e: { chest: 12.5 }, d: 20000 })
+  const json = JSON.stringify(out)
+  for (const bad of ['height', 'weight', 'gender', '"size"', '"text"', 'url', 'nickname', '"id"', '175', '후기 본문', 'shop.example', '상품명']) assert.ok(!json.includes(bad), bad)
+  // 실제 학습 샘플 변환 결과를 내보내도 같다
+  const clothing = PRODUCTS['https://shop-a.example.com/goods/12345']
+  const exported = buildLearnExport(toSamples(clothing, { now: 0 }))
+  const allowed = new Set(['cat', 'brand', 'region', 'label', 'w', 'e', 'd'])
+  assert.ok(exported.samples.every((s) => Object.keys(s).every((k) => allowed.has(k))))
+  assert.equal(buildLearnExport(null).count, 0)
+  // 내보낸 파일은 그대로 평가 입력이 된다
+  assert.equal(parseEvalInput(JSON.parse(json)).mode, 'samples')
+})
+
+test('학습 샘플 내보내기: 웹 결과 화면에는 내보내기 연결이 있을 때만 버튼이 나온다', () => {
+  const clothing = { ...PRODUCTS['https://shop-a.example.com/goods/12345'], source: 'demo' }
+  const samples = [...synth(clothing.category, null, 'small', 10, 12), ...synth(clothing.category, null, 'true', 10, 20)]
+  const props = { product: clothing, profile, calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop, learningModel: trainModel(samples, EASE_RULES), onResetLearning: noop }
+  assert.ok(textOf(render(WEB.ResultView, { ...props, onExportLearning: noop })).includes('학습 샘플 내보내기(JSON)'))
+  assert.ok(!textOf(render(WEB.ResultView, props)).includes('학습 샘플 내보내기'))
+})
+
+test('평가 모듈: 네트워크를 쓰지 않고, README·문서는 실제 측정 수치가 없다고 밝힌다', () => {
+  for (const f of ['../scripts/lib/fitEval.mjs', '../scripts/lib/evalCli.mjs', '../scripts/evalFit.mjs', '../src/lib/learnExport.js']) {
+    const src = readFileSync(new URL(f, import.meta.url), 'utf8')
+    assert.ok(!/\b(fetch|XMLHttpRequest|sendBeacon|WebSocket)\b\s*\(/.test(src) && !/node:https?|node:net/.test(src), f)
+  }
+  assert.equal(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).scripts['eval:fit'], 'node scripts/evalFit.mjs')
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
+  assert.ok(readme.includes('eval:fit') && readme.includes('실제 데이터로 측정한 수치는 아직 없'))
+  const doc = readFileSync(new URL('../docs/평가_핏정확도.md', import.meta.url), 'utf8')
+  for (const key of ['라벨 잡음', '표본 수', '편향', 'Wilson', '합성 데이터, 실제 정확도 아님', '확장 내보내기는 추후', '실제 데이터로 측정한 수치는 아직 없']) assert.ok(doc.includes(key), key)
 })
 
 console.log(`\n${passed}개 통과`)

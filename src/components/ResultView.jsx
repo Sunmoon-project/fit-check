@@ -21,7 +21,7 @@ import FeedbackForm from './FeedbackForm.jsx'
 import TryOnPanel from './TryOnPanel.jsx'
 import { SimilarInWardrobe } from './Wardrobe.jsx'
 
-export default function ResultView({ product: parsedProduct, profile, calibration, feedbackCount, existingFeedback, onFeedback, onRestart, wardrobe = [], onSaveWardrobe, learningModel = null, onLearn, onResetLearning }) {
+export default function ResultView({ product: parsedProduct, profile, calibration, feedbackCount, existingFeedback, onFeedback, onRestart, wardrobe = [], onSaveWardrobe, learningModel = null, onLearn, onResetLearning, onExportLearning }) {
   // 분류 신뢰도가 낮을 때 사용자가 고른 카테고리로 다시 분석해요 (자동 분류보다 우선).
   const [chosen, setChosen] = useState(null)
   const product = useMemo(() => (chosen ? recategorizeProduct(parsedProduct, chosen) : parsedProduct), [parsedProduct, chosen])
@@ -101,7 +101,7 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
 
       <FitComment result={shownResult} />
 
-      <LearningNote learning={result.learning} onReset={onResetLearning} />
+      <LearningNote learning={result.learning} onReset={onResetLearning} onExport={onExportLearning} />
 
       {isShoes ? (
         <ShoeCompare view={shoe} selectedSize={picked} onSelect={setPicked} />

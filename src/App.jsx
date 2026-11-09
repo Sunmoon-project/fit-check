@@ -9,6 +9,7 @@ import { applyDelivery, syncNotice } from './lib/wardrobeSync.js'
 import { connectExtensionSync } from './lib/syncClient.js'
 import { computeCalibration } from './lib/fitEngine.js'
 import { localAdapter, loadLearning, learnFromProduct, resetLearning } from './lib/learnStore.js'
+import { buildLearnExport, EXPORT_FILENAME } from './lib/learnExport.js'
 import SizeChartLibrary from './components/SizeChartLibrary.jsx'
 import { createSizeChartDb, chartRecordFromProduct } from './lib/sizeChartDb.js'
 import UsedListing from './components/UsedListing.jsx'
@@ -88,6 +89,20 @@ export default function App() {
   async function handleResetLearning() {
     await resetLearning(localAdapter())
     setLearningModel(null)
+  }
+
+  // 학습 샘플을 파일로 내려받아요(개인정보 없는 샘플만, 어디로도 보내지 않아요). 내보낸 건수를 돌려줘요.
+  async function handleExportLearning() {
+    const s = await loadLearning(localAdapter())
+    const data = buildLearnExport(s.samples)
+    if (data.count === 0) return 0
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = EXPORT_FILENAME
+    a.click()
+    URL.revokeObjectURL(url)
+    return data.count
   }
 
   function handleFeedback(item) {
@@ -224,6 +239,7 @@ export default function App() {
             learningModel={learningModel}
             onLearn={handleLearn}
             onResetLearning={handleResetLearning}
+            onExportLearning={handleExportLearning}
           />
         )}
       </main>
