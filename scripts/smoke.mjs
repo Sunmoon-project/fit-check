@@ -6408,4 +6408,19 @@ test('치수 재는 법: 입력 칸 부위마다 안내가 있고, 그림과 설
   assert.ok(html.includes('어깨 끝 뼈'), '처음엔 어깨 설명')
 })
 
+import { bodyValuesForProfile as bvLeg } from '../src/lib/fitEngine.js'
+test('다리길이: 직접 재면 바지 총장 기준이 키 대신 다리길이로 바뀌고 (다리길이로 계산)으로 표시, 확장 프로필에도 저장된다', () => {
+  const base = { gender: 'male', height: 175, weight: 70, measurements: {} }
+  assert.equal(bvLeg(base).values.inseam, 101.5, '안 재면 키 × 0.58')
+  const long = bvLeg({ ...base, measurements: { leg: 85 } })
+  assert.equal(long.values.inseam, Math.round(85 * (0.58 / 0.45) * 10) / 10)
+  const chart = { category: 'bottom', rows: [['30']], measures: { 30: { waist: 80, inseam: 104 } } }
+  const row = (r) => compareSizes({ chart, bodyValues: r.values, measured: r.measured, category: 'bottom' }).sizes[0].rows.find((x) => x.part === 'inseam')
+  assert.equal(row(bvLeg(base)).bodyKind, 'standard')
+  assert.equal(row(long).bodyKind, 'leg')
+  assert.ok(row(long).ease < row(bvLeg(base)).ease, '다리가 길면 같은 바지가 더 짧게 판정')
+  assert.equal(buildProfile({ gender: 'male', height: '175', weight: '70', measurements: { leg: '82', arm: '60' } }).profile.measurements.leg, 82)
+  assert.ok(readFileSync('extension/popup.html', 'utf8').includes('name="m-leg"'), '팝업에 다리길이 칸')
+})
+
 console.log(`\n${passed}개 통과`)

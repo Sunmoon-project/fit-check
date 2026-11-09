@@ -17,6 +17,7 @@ function base(gender, h, w) {
       hip: 0.6 * w + 0.35 * h,
       thigh: 0.5 * w + 0.1 * h + 10,
       arm: 0.33 * h,
+      leg: 0.45 * h, // 안쪽 다리길이(가랑이~바닥)
       footLength: 1.5 * h,
     }
   }
@@ -27,6 +28,7 @@ function base(gender, h, w) {
     hip: 0.6 * w + 0.3 * h,
     thigh: 0.45 * w + 0.1 * h + 5,
     arm: 0.335 * h,
+    leg: 0.45 * h,
     footLength: 1.5 * h,
   }
 }
