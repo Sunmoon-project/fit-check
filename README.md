@@ -70,10 +70,22 @@ npm run dev      # http://localhost:5173
 | `npm run build` | 화면 파일만 빌드 (`dist/`) |
 | `npm run build:file` | 서버 없이 여는 HTML 파일 하나 빌드 (`dist/fit-check.html`) |
 | `npm run preview` | 빌드 결과를 API와 함께 실행 |
+| `npm start` | 프로덕션 서버(`server/start.js`): `dist/` + API를 한 포트(기본 3000)로 서빙. 먼저 `npm run build` |
 | `npm run smoke` | 추천 로직·파서·보안 검사 스모크 테스트 |
 
 > ⚠️ API(`/api/status`, `/api/product`, `/api/tryon`)는 Vite 개발·미리보기 서버에 붙는 플러그인이에요.
-> `dist/` 폴더만 정적 호스팅에 올리면 **상품 링크 분석과 AI 합성이 동작하지 않아요.** `npm run preview`로 실행하거나 별도 서버가 필요해요.
+> `dist/` 폴더만 정적 호스팅에 올리면 **상품 링크 분석과 AI 합성이 동작하지 않아요.** `npm run build && npm start`(또는 아래 Docker)로 실행하세요.
+
+### Docker로 실행 (배포용)
+
+```bash
+docker build -t fit-check .
+docker run -p 3000:3000 --env-file .env fit-check   # http://localhost:3000, 헬스체크: /healthz
+```
+
+**무료 배포(Render)**: Render 대시보드 → New → Blueprint → 이 저장소를 고르면 `render.yaml`대로 서비스가 만들어지고, 이후 `main`에 push되어 CI가 통과할 때마다 자동으로 다시 배포돼요. 배포 주소가 생기면 크롬 확장 연동을 위해 `WEB_APP_ORIGINS`와 `manifest.json`에도 그 주소를 추가하세요(위 크롬 확장 절 참고).
+
+GitHub Actions(`.github/workflows/ci.yml`)가 push·PR마다 smoke·빌드·확장 빌드를 돌리고, Docker 이미지를 빌드해 컨테이너가 실제로 응답하는지 확인해요.
 
 ### 서버 없이 파일 하나로 보기
 
@@ -266,7 +278,7 @@ HF_SPACE=yisol/IDM-VTON        # 선택: 기본 Space가 잠들었거나 붐빌 
 
 - **실시간 페이지 분석**: 화면을 자바스크립트로 그리는 쇼핑몰(예: [댄블](https://danble.co.kr), 무신사)은 HTML에 리뷰나 사이즈표가 없을 때가 많아요. 리뷰는 지금 페이지에 들어 있는 구조화 데이터(JSON-LD)에서만 읽어요. 이럴 땐 결과 화면에 안내 문구가 뜨고, 데모 상품으로 기능을 체험할 수 있어요. (로드맵의 크롬 확장이 이 한계를 줄여요.)
 - **배경 지우기**: 사진 모서리 색에서부터 비슷한 색을 지우는 방식이라 단색 배경에서 잘 돼요. 쇼핑몰 이미지는 CORS 설정 때문에 배경을 못 지울 수 있어서, 이때는 옷 사진을 직접 올려주세요.
-- **개발용 서버**: DNS 검사와 실제 접속이 따로 이름을 풀기 때문에 DNS 리바인딩은 완전히 막지 못해요. 내 컴퓨터에서 쓰는 용도로 만들었고, 공개 배포하려면 서버를 따로 보강해야 해요.
+- **DNS 리바인딩**: 상품 페이지를 가져올 때 접속 순간의 이름 풀이(`safeLookup`)에서 IP를 검사하고 그 IP로만 접속해서, 검사 뒤 내부 IP로 바꿔치기할 수 없어요. 사용자별 호출 한도는 아직 없어서, 공개 배포 시에는 앞단(클라우드 방화벽·프록시)에서 요청 수를 제한하세요.
 - **정확도 미검증**: 비슷한 체형 후기 투표가 핏을 얼마나 맞히는지 재는 스크립트(`npm run validate:fit`)는 만들었지만, 실제 공개 데이터로는 아직 측정하지 않았어요. 방법은 [docs/검증_핏데이터셋.md](docs/검증_핏데이터셋.md)를 보세요.
 - **체형 추정 오차 미검증**: `estimateBody`의 "±3~5cm" 주장을 실측 데이터로 재는 스크립트(`npm run validate:body`)는 만들었지만, 실제 데이터로는 아직 측정하지 않았어요. 방법은 [docs/검증_체형추정.md](docs/검증_체형추정.md)를 보세요.
 - **성공 기준 미측정**: ‘확신 높음 적중률 90~95% 이상 · 적용 범위 공개 · 추천 사이즈 ±1 90% 이상’을 재는 스크립트(`npm run eval:fit`)는 만들었지만, **실제 데이터로 측정한 수치는 아직 없어요.** `--demo` 숫자는 합성 데이터에서 나온 것이라 정확도가 아니에요. 목표를 달성했다는 뜻으로 읽으면 안 돼요. 방법과 한계는 [docs/평가_핏정확도.md](docs/평가_핏정확도.md)를 보세요.

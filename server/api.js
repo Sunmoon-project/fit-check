@@ -156,6 +156,7 @@ export function fitCheckApi(env, opts = {}) {
   }
   return {
     name: 'fit-check-api',
+    middleware, // server/start.js(프로덕션·Docker)에서 Vite 없이 씀
     configureServer(server) {
       server.middlewares.use(middleware)
     },

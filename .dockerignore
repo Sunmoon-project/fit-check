@@ -1,0 +1,14 @@
+node_modules
+dist
+dist-extension
+.git
+.env
+.env.*
+!.env.example
+.agents
+.kiro
+.playwright-mcp
+data
+.cache
+validation-output
+SM대학교_클라우드전환
