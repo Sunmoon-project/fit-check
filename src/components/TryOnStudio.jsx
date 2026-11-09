@@ -4,10 +4,21 @@ import { useMemo, useRef, useState } from 'react'
 import { CATEGORY_LABEL } from '../data/measurements.js'
 import TryOnPanel from './TryOnPanel.jsx'
 import { EaseGauge, withLevels } from './FitVisuals.jsx'
+import BodyScan from './BodyScan.jsx'
+import { loadPhoto, savePhoto } from '../lib/storage.js'
 
 const UPLOAD_CATS = ['top', 'outer', 'bottom', 'dress']
 
-export default function TryOnStudio({ wardrobe = [], profile, current = null, onSaveImage, onBack }) {
+export default function TryOnStudio({ wardrobe = [], profile, current = null, onSaveImage, onBack, onProfile }) {
+  // 내 사진은 체형 추정과 합성이 함께 써요 (이 브라우저에만 저장).
+  const [photo, setPhotoState] = useState(() => loadPhoto())
+  const [anchors, setAnchors] = useState(null) // 사진에서 찾은 어깨·골반 위치 (이 사진에서만 유효)
+  const [photoNote, setPhotoNote] = useState('')
+  function setPhoto(url) {
+    setPhotoState(url)
+    setAnchors(null)
+    setPhotoNote(url && !savePhoto(url) ? '저장 공간이 부족해 이 사진은 이번 세션에서만 사용해요.' : '')
+  }
   // 고를 수 있는 옷: 지금 보던 옷(있으면) → 옷장(신발 제외) → 직접 올리기
   const options = useMemo(() => {
     const list = []
@@ -76,6 +87,9 @@ export default function TryOnStudio({ wardrobe = [], profile, current = null, on
         </div>
       )}
 
+      <BodyScan profile={profile} photo={photo} onPhoto={setPhoto} onProfile={onProfile} onAnchors={setAnchors} />
+      {photoNote && <p className="muted small">{photoNote}</p>}
+
       {chosen?.verdicts?.length > 0 && (
         <div className="card studio-fit">
           <div className="section-head"><h3>{chosen.size} 사이즈 핏</h3></div>
@@ -91,6 +105,9 @@ export default function TryOnStudio({ wardrobe = [], profile, current = null, on
         verdicts={chosen?.verdicts || []}
         captureRef={captureRef}
         onResult={() => setHasResult(true)}
+        photo={photo}
+        onPhotoChange={setPhoto}
+        anchors={anchors}
       />
 
       {chosen?.itemId && (

@@ -4,6 +4,7 @@ import { fileToDataUrl, removeBackground, composePreview } from '../lib/imageToo
 import { CATEGORY_LABEL } from '../data/measurements.js'
 import { NO_SERVER, NO_SERVER_TEXT } from '../lib/runtime.js'
 import { shoeWardrobeFields, SHOE_UNSUPPORTED_NOTE } from '../lib/shoeFit.js'
+import { anchorLayout } from '../lib/photoBody.js'
 
 // 카테고리별 기본 위치 (사진 대비 %). 정면 전신 사진 기준의 대략값이에요.
 const BASE_LAYOUT = {
@@ -43,15 +44,21 @@ function easeScale(verdicts) {
   return 1 + (mean - 2) * 0.05
 }
 
-function previewLayout(category, verdicts, scalePct, offsetPct) {
+// anchors(사진에서 찾은 어깨·골반 위치)가 있으면 그 위치에 맞춰 얹고, 없으면 카테고리별 대략 위치를 써요.
+function previewLayout(category, verdicts, scalePct, offsetPct, anchors = null) {
+  const fit = anchors && category !== 'dress' ? anchorLayout(anchors, category, easeScale(verdicts) * (scalePct / 100)) : null
+  if (fit) return { ...fit, topPct: fit.topPct + offsetPct, anchored: true }
   const base = BASE_LAYOUT[category] || BASE_LAYOUT.top
   const widthPct = base.width * easeScale(verdicts) * (scalePct / 100)
   return { widthPct, leftPct: 50 - widthPct / 2, topPct: base.top + offsetPct }
 }
 
-export default function TryOnPanel({ product, profile, verdicts, selectedSize, captureRef, onResult }) {
+// photo·onPhotoChange를 주면 사진을 바깥(가상 피팅 탭)과 함께 써요 (웹캠으로 찍은 사진, 체형 추정과 공유). 안 주면 예전처럼 혼자 관리해요.
+export default function TryOnPanel({ product, profile, verdicts, selectedSize, captureRef, onResult, photo: photoProp, onPhotoChange, anchors = null }) {
   const canProductImage = Boolean(product.image)
-  const [photo, setPhoto] = useState(() => loadPhoto())
+  const [ownPhoto, setOwnPhoto] = useState(() => (onPhotoChange ? null : loadPhoto()))
+  const photo = onPhotoChange ? photoProp || null : ownPhoto
+  const setPhoto = (v) => (onPhotoChange ? onPhotoChange(v) : setOwnPhoto(v))
   const [photoNote, setPhotoNote] = useState('')
   const [source, setSource] = useState(canProductImage ? 'product' : 'upload')
   const [uploaded, setUploaded] = useState(null)
@@ -72,8 +79,8 @@ export default function TryOnPanel({ product, profile, verdicts, selectedSize, c
 
   const garmentSrc = source === 'product' ? product.image : uploaded
   const layout = useMemo(
-    () => previewLayout(product.category, verdicts, scalePct, offsetPct),
-    [product.category, verdicts, scalePct, offsetPct],
+    () => previewLayout(product.category, verdicts, scalePct, offsetPct, anchors),
+    [product.category, verdicts, scalePct, offsetPct, anchors],
   )
 
   // 서버의 AI 합성 사용 여부와 Space 확인
@@ -210,7 +217,7 @@ export default function TryOnPanel({ product, profile, verdicts, selectedSize, c
     <div className="card tryon tone-tryon">
       <div className="section-head">
         <h3>사진 합성 <span className="muted small">{CATEGORY_LABEL[product.category]} · {selectedSize || '-'}</span></h3>
-        <span className="tag-rough">대략적인 미리보기</span>
+        <span className="tag-rough">{layout.anchored ? '내 어깨·골반에 맞춘 미리보기' : '대략적인 미리보기'}</span>
       </div>
 
       <div className="tryon-controls">

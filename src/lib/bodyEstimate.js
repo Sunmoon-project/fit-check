@@ -32,8 +32,9 @@ function base(gender, h, w) {
 }
 
 const round = (v, step = 0.5) => Math.round(v / step) * step
+export const PHOTO_PARTS = ['shoulder', 'chest', 'waist', 'hip']
 
-// 반환: { values: {부위: 값}, measured: Set(직접 입력한 부위) }
+// 반환: { values: {부위: 값}, measured: Set(직접 입력한 부위), photo: Set(사진으로 추정한 부위) }
 export function estimateBody(profile) {
   const { gender, height, weight, shape = {}, usual = {}, measurements = {} } = profile
   const v = base(gender, height, weight)
@@ -50,12 +51,23 @@ export function estimateBody(profile) {
   const values = {}
   for (const k of Object.keys(v)) values[k] = k === 'footLength' ? round(v[k], 5) : round(v[k])
 
+  // 사진으로 추정한 둘레·어깨(profile.photoBody)는 공식값 대신 쓰고, 직접 잰 값이 있으면 그 값이 이겨요.
+  const photo = new Set()
+  for (const k of PHOTO_PARTS) {
+    const val = Number(profile.photoBody?.[k])
+    if (Number.isFinite(val) && val > 0) {
+      values[k] = val
+      photo.add(k)
+    }
+  }
+
   const measured = new Set()
   for (const [k, val] of Object.entries(measurements || {})) {
     if (val != null && val !== '' && !Number.isNaN(Number(val))) {
       values[k] = Number(val)
       measured.add(k)
+      photo.delete(k)
     }
   }
-  return { values, measured }
+  return { values, measured, photo }
 }

@@ -6313,4 +6313,99 @@ test('웹 렌더: 결과 화면은 onTryOn이 있으면 사진 합성 대신 가
   assert.ok(panel.includes('IDM-VTON') && panel.includes('Leffa (실험적)') && panel.includes('상의·하의·원피스'))
 })
 
+import { measureFromPose, anchorLayout, ellipseCircumference, rowWidth } from '../src/lib/photoBody.js'
+
+// 가짜 정면 전신: 400×1000 사진, 키 175cm. 눈 y=100, 발뒤꿈치 y=900 → 사진 속 키 800/0.935 ≈ 855.6px → 0.2045cm/px
+function fakePose({ shoulderPx = 170, chestPx = 230, waistPx = 200, hipPx = 250, vis = 1, armGap = 600 } = {}) {
+  const W = 400
+  const H = 1000
+  const lm = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: vis }))
+  const set = (i, x, y) => { lm[i] = { x: x / W, y: y / H, visibility: vis } }
+  set(2, 190, 100); set(5, 210, 100)
+  set(11, 200 - shoulderPx / 2, 250); set(12, 200 + shoulderPx / 2, 250)
+  set(23, 160, 550); set(24, 240, 550)
+  set(27, 170, 880); set(28, 230, 880); set(29, 170, 900); set(30, 230, 900)
+  // 팔: 기본은 몸통에서 멀리(잘라내지 않음). armGap을 주면 팔 중심선 사이 거리를 그만큼으로
+  const ax = armGap / 2
+  set(13, 200 - ax, 400); set(14, 200 + ax, 400); set(15, 200 - ax, 560); set(16, 200 + ax, 560)
+  const mask = new Float32Array(W * H)
+  // 몸통 높이별 너비: 가슴(어깨~골반 33%), 허리(62%), 엉덩이(108%) 근처를 그 너비로 칠해요
+  const widthAt = (y) => { const t = (y - 250) / 300; return t < 0.47 ? chestPx : t < 0.85 ? waistPx : hipPx }
+  for (let y = 250; y < 600; y++) { const w = widthAt(y); for (let x = Math.round(200 - w / 2); x < Math.round(200 + w / 2); x++) mask[y * W + x] = 1 }
+  return { landmarks: lm, width: W, height: H, mask, maskW: W, maskH: H }
+}
+
+test('사진 체형 추정(가짜 관절·윤곽): 키로 축척을 잡아 어깨·둘레를 재고 공식값과 섞어 ±12% 안으로 묶는다', () => {
+  assert.ok(Math.abs(ellipseCircumference(30, 1) - Math.PI * 30) < 0.01, '원이면 πd')
+  const m = new Float32Array([0, 1, 1, 1, 0, 0, 1, 0])
+  assert.equal(rowWidth(m, 8, 1, 0, 2), 3)
+  assert.equal(rowWidth(m, 8, 1, 0, 4), null, '사람 밖')
+  const formula = { shoulder: 45.5, chest: 97.5, waist: 80, hip: 94 }
+  const r = measureFromPose({ ...fakePose(), heightCm: 175, formula })
+  assert.equal(r.ok, true)
+  const cmPerPx = 175 / (800 / 0.935)
+  assert.ok(Math.abs(r.raw.shoulder - 170 * cmPerPx * 1.27) <= 0.5, `어깨 ${r.raw.shoulder}`)
+  assert.ok(Math.abs(r.raw.chest - ellipseCircumference(230 * cmPerPx, 0.72) * 1.08) <= 0.5, `가슴 ${r.raw.chest}`)
+  assert.ok(r.raw.waist < r.raw.chest && r.raw.hip > r.raw.waist, '허리는 가장 좁고 엉덩이는 넓게')
+  for (const k of ['shoulder', 'chest', 'waist', 'hip']) {
+    assert.ok(r.values[k] >= formula[k] * 0.88 - 0.5 && r.values[k] <= formula[k] * 1.12 + 0.5, `${k} ±12%`)
+  }
+  assert.deepEqual(r.warnings, [])
+  // 넓은 사람은 공식보다 크게, 좁은 사람은 작게
+  const big = measureFromPose({ ...fakePose({ shoulderPx: 190, chestPx: 190 }), heightCm: 175, formula })
+  const small = measureFromPose({ ...fakePose({ shoulderPx: 150, chestPx: 150 }), heightCm: 175, formula })
+  assert.ok(big.values.shoulder > r.values.shoulder && small.values.shoulder < r.values.shoulder)
+  assert.ok(big.values.chest > small.values.chest)
+  // 팔이 붙어 몸통이 너무 넓으면 가슴·허리는 빼고 안내
+  const arms = measureFromPose({ ...fakePose({ chestPx: 300, waistPx: 290 }), heightCm: 175, formula })
+  assert.equal(arms.values.chest, undefined)
+  assert.ok(arms.warnings.some((w) => w.includes('팔을 몸에서')))
+  // 팔이 허리 옆에 붙어 윤곽에 섞이면(허리 윤곽 280px) 두 팔 중심선 안쪽까지만 몸통으로 봐요
+  const merged = measureFromPose({ ...fakePose({ waistPx: 250, armGap: 260 }), heightCm: 175, formula })
+  const armHalfCm = (0.055 * (800 / 0.935) / 2) * cmPerPx
+  assert.ok(Math.abs(merged.raw.waist - ellipseCircumference(260 * cmPerPx - 2 * armHalfCm, 0.75)) <= 0.5, `허리 ${merged.raw.waist}`)
+  // 팔에 20% 넘게 가리면 그 부위는 빼고, 허리가 가슴·엉덩이보다 넓으면(헐렁한 옷) 허리를 빼요
+  const hidden = measureFromPose({ ...fakePose({ waistPx: 280, armGap: 200 }), heightCm: 175, formula })
+  assert.equal(hidden.raw.waist, undefined)
+  assert.ok(hidden.warnings.some((w) => w.includes('팔')))
+  const loose = measureFromPose({ ...fakePose({ chestPx: 200, waistPx: 240, hipPx: 220 }), heightCm: 175, formula })
+  assert.equal(loose.raw.waist, undefined)
+  assert.ok(loose.warnings.some((w) => w.includes('헐렁한 옷')))
+  // 발이 안 보이면 실패, 키가 없으면 실패
+  assert.equal(measureFromPose({ ...fakePose({ vis: 0.2 }), heightCm: 175, formula }).ok, false)
+  assert.equal(measureFromPose({ ...fakePose(), heightCm: 0, formula }).ok, false)
+  // 미리보기 배치: 상의는 어깨 사이 가운데, 하의는 골반 기준
+  const top = anchorLayout(r.anchors, 'top')
+  assert.ok(Math.abs(top.leftPct + top.widthPct / 2 - 50) < 0.01 && top.widthPct > (170 / 400) * 100)
+  const bottom = anchorLayout(r.anchors, 'bottom')
+  assert.ok(bottom.topPct > top.topPct)
+})
+
+test('사진 추정값 반영: 직접 잰 값 > 사진 추정 > 키·몸무게 공식 순서로 쓰고 비교 표에 (사진 추정)으로 표시한다 (가짜 데이터)', () => {
+  const base = { gender: 'male', height: 175, weight: 70, preferredFit: 'regular', usual: { top: '', bottom: '' }, measurements: {} }
+  const plain = estimateBody(base)
+  const withPhoto = estimateBody({ ...base, photoBody: { shoulder: 48, chest: 102, at: 1 } })
+  assert.equal(withPhoto.values.shoulder, 48)
+  assert.equal(withPhoto.values.chest, 102)
+  assert.equal(withPhoto.values.waist, plain.values.waist, '사진에 없는 부위는 공식값')
+  assert.deepEqual([...withPhoto.photo].sort(), ['chest', 'shoulder'])
+  const both = estimateBody({ ...base, photoBody: { chest: 102 }, measurements: { chest: 96 } })
+  assert.equal(both.values.chest, 96, '직접 잰 값이 이겨요')
+  assert.ok(!both.photo.has('chest') && both.measured.has('chest'))
+  const product = { name: '셔츠', mall: 'shop', category: 'top', sizeChart: { measures: { M: { shoulder: 47, chest: 104 }, L: { shoulder: 49, chest: 112 } } }, reviews: [], notes: [] }
+  const r = generateFitComment({ ...base, photoBody: { shoulder: 48, chest: 102 } }, product)
+  assert.deepEqual([...r.photoParts].sort(), ['chest', 'shoulder'])
+  assert.equal(r.detailed, false, '사진 추정은 직접 잰 치수로 치지 않아요')
+  const cmp = compareSizes({ chart: product.sizeChart, bodyValues: r.bodyValues, measured: r.measured, category: 'top', reviewParts: r.reviewParts, photoParts: r.photoParts })
+  assert.equal(cmp.sizes[0].rows.find((x) => x.part === 'chest').bodyKind, 'photo')
+  assert.equal(cmp.sizes[0].rows.find((x) => x.part === 'chest').body, 102)
+})
+
+test('치수 재는 법: 입력 칸 부위마다 안내가 있고, 그림과 설명을 보여준다', () => {
+  const html = textOf(render(WEB.MeasureGuide, {}))
+  for (const f of BODY_FIELDS) if (f.key !== 'footLength') assert.ok(html.includes(f.label), `${f.label} 안내 없음`)
+  assert.ok(html.includes('다리길이'), '다리길이')
+  assert.ok(html.includes('어깨 끝 뼈'), '처음엔 어깨 설명')
+})
+
 console.log(`\n${passed}개 통과`)
