@@ -25,7 +25,12 @@ const TYPES = {
 const api = fitCheckApi(process.env).middleware
 
 async function serveStatic(req, res) {
-  let path = decodeURIComponent((req.url || '/').split('?')[0])
+  let path
+  try {
+    path = decodeURIComponent((req.url || '/').split('?')[0])
+  } catch {
+    return send404(res) // /%E0 같은 깨진 인코딩: 던지면 프로세스가 죽어요
+  }
   if (path.endsWith('/')) path += 'index.html'
   const file = normalize(join(DIST, path))
   if (!file.startsWith(DIST)) return send404(res) // ../ 로 dist 밖을 읽지 못하게
@@ -51,7 +56,11 @@ const server = http.createServer((req, res) => {
   if ((req.url || '') === '/healthz') return res.end('ok') // 배포·Docker 헬스체크용
   api(req, res, () => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return send404(res)
-    serveStatic(req, res)
+    serveStatic(req, res).catch((e) => {
+      console.error('[static]', e)
+      if (!res.headersSent) send404(res)
+      else res.destroy()
+    })
   })
 })
 

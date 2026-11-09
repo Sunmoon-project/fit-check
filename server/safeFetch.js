@@ -1,9 +1,13 @@
 // 사용자가 붙여넣은 URL을 서버에서 가져올 때 쓰는 안전한 fetch.
 // 내부망(localhost, 사설 IP)으로의 요청을 막고(SSRF 방지), 크기·시간을 제한합니다.
-// 알려진 한계: DNS 검사(dns.lookup)와 실제 접속(fetch)이 따로 이름을 풀어서, DNS 리바인딩은
-// 완전히 막지 못해요. 내 컴퓨터에서 도는 개발용 서버라 감수하고, 공개 배포 시에는 접속 주소 고정이 필요해요.
+// DNS 리바인딩 방지: 접속할 때 쓰는 lookup(safeLookup)에서 IP를 검사해요. 검사한 IP로 바로 접속하므로
+// "검사할 땐 공인 IP, 접속할 땐 내부 IP"로 바꿔치기할 틈이 없어요(공개 배포용).
 import dns from 'node:dns/promises'
+import { lookup as dnsLookupCb } from 'node:dns'
 import net from 'node:net'
+import http from 'node:http'
+import https from 'node:https'
+import zlib from 'node:zlib'
 
 const MAX_BYTES = 3 * 1024 * 1024
 const TIMEOUT_MS = 12000
@@ -91,49 +95,79 @@ export async function safeFetchHtml(rawUrl) {
   let current = rawUrl
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     const url = await assertPublicUrl(current)
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
     let res
     try {
-      res = await fetch(url, {
-        redirect: 'manual',
-        signal: ctrl.signal,
-        headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml', 'Accept-Language': 'ko-KR,ko;q=0.9' },
-      })
+      res = await request(url)
     } catch (e) {
-      clearTimeout(timer)
-      throw new FetchError('NETWORK', e.name === 'AbortError' ? '사이트 응답이 너무 느려요.' : '사이트에 접속하지 못했어요.')
+      if (e instanceof FetchError) throw e
+      throw new FetchError('NETWORK', e.code === 'TIMEOUT' ? '사이트 응답이 너무 느려요.' : '사이트에 접속하지 못했어요.')
     }
 
-    if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
-      clearTimeout(timer)
-      current = new URL(res.headers.get('location'), url).toString()
+    if (res.status >= 300 && res.status < 400 && res.headers.location) {
+      res.destroy()
+      current = new URL(res.headers.location, url).toString()
       continue
     }
-    if (!res.ok) {
-      clearTimeout(timer)
+    if (res.status < 200 || res.status >= 300) {
+      res.destroy()
       throw new FetchError('HTTP_' + res.status, `사이트가 페이지를 주지 않았어요 (HTTP ${res.status}).`)
     }
 
-    // 크기 제한을 지키며 본문 읽기
-    const reader = res.body.getReader()
+    // 크기 제한을 지키며 본문 읽기 (압축은 풀고 나서 셈)
     const chunks = []
     let size = 0
     try {
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        size += value.length
-        if (size > MAX_BYTES) {
-          ctrl.abort()
-          break
-        }
-        chunks.push(value)
+      for await (const chunk of res.body) {
+        size += chunk.length
+        if (size > MAX_BYTES) break
+        chunks.push(chunk)
       }
+    } catch {
+      if (!chunks.length) throw new FetchError('NETWORK', '사이트 응답을 읽지 못했어요.')
     } finally {
-      clearTimeout(timer)
+      res.destroy()
     }
-    return { html: decodeHtml(Buffer.concat(chunks), res.headers.get('content-type')), finalUrl: url.toString() }
+    return { html: decodeHtml(Buffer.concat(chunks), res.headers['content-type']), finalUrl: url.toString() }
   }
   throw new FetchError('REDIRECT', '리다이렉트가 너무 많아요.')
+}
+
+// 접속 순간의 DNS 조회. 사설·내부 IP가 하나라도 나오면 접속 자체를 거부해요.
+export function safeLookup(hostname, options, cb) {
+  dnsLookupCb(hostname, { ...options, all: true }, (err, addrs) => {
+    if (err) return cb(err)
+    if (!addrs.length || addrs.some((a) => isPrivateIp(a.address))) {
+      return cb(new FetchError('BLOCKED', '내부망 주소는 가져올 수 없어요.'))
+    }
+    if (options.all) return cb(null, addrs)
+    cb(null, addrs[0].address, addrs[0].family)
+  })
+}
+
+// fetch 대신 http(s).request: lookup을 직접 넘길 수 있어서 검사한 IP로만 접속해요.
+function request(url) {
+  return new Promise((resolve, reject) => {
+    const mod = url.protocol === 'https:' ? https : http
+    const req = mod.request(
+      url,
+      {
+        lookup: safeLookup,
+        timeout: TIMEOUT_MS,
+        headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml', 'Accept-Language': 'ko-KR,ko;q=0.9', 'Accept-Encoding': 'gzip, deflate, br' },
+      },
+      (res) => {
+        const enc = String(res.headers['content-encoding'] || '').toLowerCase()
+        const unzip = enc === 'gzip' ? zlib.createGunzip() : enc === 'deflate' ? zlib.createInflate() : enc === 'br' ? zlib.createBrotliDecompress() : null
+        const body = unzip ? res.pipe(unzip) : res
+        if (unzip) res.on('error', (e) => unzip.destroy(e))
+        resolve({ status: res.statusCode, headers: res.headers, body, destroy: () => { res.destroy(); unzip?.destroy() } })
+      },
+    )
+    // 전체 시간 제한 (socket timeout은 '조용한 시간'만 재므로 따로 둬요)
+    const timer = setTimeout(() => req.destroy(Object.assign(new Error('timeout'), { code: 'TIMEOUT' })), TIMEOUT_MS)
+    req.on('timeout', () => req.destroy(Object.assign(new Error('timeout'), { code: 'TIMEOUT' })))
+    req.on('error', (e) => { clearTimeout(timer); reject(e) })
+    req.on('close', () => clearTimeout(timer))
+    req.end()
+  })
 }

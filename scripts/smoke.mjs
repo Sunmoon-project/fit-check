@@ -46,7 +46,7 @@ import { join, resolve as resolvePath } from 'node:path'
 import vm from 'node:vm'
 import { build as viteBuild } from 'vite'
 import { findSimilar, describeDiff, categoryGroup, makeWardrobeItem } from '../src/lib/wardrobe.js'
-import { isPrivateIp, decodeHtml } from '../server/safeFetch.js'
+import { isPrivateIp, decodeHtml, safeLookup } from '../server/safeFetch.js'
 import { checkPostRequest } from '../server/api.js'
 import {
   parseHeightCm, parseWeightKg, normalizeFit, normalizeRow, normalizeLines,
@@ -277,6 +277,15 @@ test('isPrivateIp: 내부망·IPv4-mapped IPv6 차단, 공인 주소 허용', ()
   for (const ip of ['8.8.8.8', '1.1.1.1', '172.32.0.1', '211.231.99.80', '2606:4700::1111']) {
     assert.equal(isPrivateIp(ip), false, ip)
   }
+})
+
+await atest('safeLookup(DNS 리바인딩 방지): 접속 순간 내부 IP면 거부하고, 실제 요청이 이 lookup을 쓴다', async () => {
+  const run = (opts) => new Promise((r) => safeLookup('localhost', opts, (e, a) => r(e ? e.code : a)))
+  assert.equal(await run({}), 'BLOCKED')
+  assert.equal(await run({ all: true }), 'BLOCKED')
+  const code = readFileSync(new URL('../server/safeFetch.js', import.meta.url), 'utf8')
+  assert.ok(/lookup:\s*safeLookup/.test(code), 'request()가 safeLookup으로 접속해야 해요')
+  assert.ok(!/\bfetch\(/.test(code), '전역 fetch는 lookup을 고정하지 못해서 쓰지 않아요')
 })
 
 test('decodeHtml: Content-Type·meta charset으로 EUC-KR 해석', () => {
