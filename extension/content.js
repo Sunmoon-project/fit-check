@@ -1024,7 +1024,7 @@ function exportBlock(r) {
       msg.textContent = '자동으로 보내지 못했어요. 아래 ‘붙여넣기용으로 복사’를 눌러 웹 옷장에 붙여넣어주세요.'
     } else {
       msg.textContent = '보냈어요. 핏체크 웹이 열려 있으면 바로, 아니면 열 때 내 옷장에 자동으로 담겨요.'
-      const link = el('a', 'weblink', '개발 서버 웹 열기 (localhost:5173)')
+      const link = el('a', 'weblink', '핏체크 웹 열기')
       link.href = WEB_APP_OPEN_URL
       link.target = '_blank'
       link.rel = 'noopener noreferrer'
@@ -1531,7 +1531,7 @@ function usedCard(card, r) {
   card.append(el('p', 'tiny', r.noReviewNote))
   card.append(el('p', 'tiny', r.disclaimer))
   // 사진 역검색은 서버가 필요해서 확장에서는 호출하지 않아요(확장은 네트워크 호출 없음). 웹 앱의 '중고 상품 분석'으로 가는 링크만 둬요.
-  const photoLink = el('a', 'weblink', '사진으로 같은 상품 찾기는 웹 앱 ‘중고 상품 분석’에서 (개발 서버 localhost:5173)')
+  const photoLink = el('a', 'weblink', '사진으로 같은 상품 찾기는 핏체크 웹 ‘중고 상품 분석’에서')
   photoLink.href = WEB_APP_OPEN_URL
   photoLink.target = '_blank'
   photoLink.rel = 'noopener noreferrer'
