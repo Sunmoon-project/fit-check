@@ -30,6 +30,8 @@
 - **나와 키·몸무게가 비슷한 사람의 후기**를 먼저 보여줍니다.
 - **내 사진에 옷을 입혀 본 이미지**로 대략적인 모습을 확인합니다.
 
+🌐 **웹 앱:** https://fit-check-joy1.onrender.com (무료 서버라 한동안 접속이 없으면 첫 화면이 뜨는 데 1분 정도 걸려요)
+
 웹 앱과 크롬 확장 두 가지로 쓸 수 있고, 둘은 같은 핏 엔진(`src/lib/fitEngine.js`)을 씁니다.
 
 ## ✨ 주요 기능
@@ -68,7 +70,7 @@
 | AI | Hugging Face Spaces: IDM-VTON(CC BY-NC-SA 4.0, 비상업용), Leffa — Gradio API로 호출 / MediaPipe Pose (브라우저 내 자세 인식) |
 | 크롬 확장 | Manifest V3 (권한: storage, activeTab, scripting) |
 | 테스트 | Node 기본 `assert` 기반 스모크 테스트 (`scripts/smoke.mjs`) |
-| CI/CD | GitHub Actions(테스트·빌드·Docker 검사), Docker, Render |
+| CI/CD | GitHub Actions(테스트·빌드·Docker 검사, Claude 자동 PR 리뷰), Docker, Render |
 
 ## 🚀 실행 방법
 
@@ -152,7 +154,7 @@ fit-check/
 ├─ extension/              # 크롬 확장 (manifest, content, popup, bridge)
 ├─ scripts/                # 스모크 테스트, 확장 빌드, 정확도 측정 스크립트
 ├─ docs/                   # 설계·검증 방법 문서
-├─ .github/workflows/      # GitHub Actions CI
+├─ .github/workflows/      # GitHub Actions: CI(ci.yml), 자동 PR 리뷰(claude-review.yml)
 ├─ Dockerfile              # Docker 이미지 빌드
 └─ render.yaml             # Render 배포 설정
 ```

@@ -1,0 +1,69 @@
+# 자동 코드 리뷰: PR을 올리거나 커밋을 더 push하면 Claude가 변경 내용을 읽고 PR에 리뷰 댓글을 달아요.
+# 필요한 것: 저장소 Settings → Secrets and variables → Actions 에 아래 둘 중 하나를 등록
+#   - CLAUDE_CODE_OAUTH_TOKEN : Claude Pro/Max 구독으로 사용 (터미널에서 `claude setup-token` 으로 발급)
+#   - ANTHROPIC_API_KEY       : Anthropic API 키로 사용 (쓴 만큼 과금, console.anthropic.com)
+# 둘 다 없으면 이 작업은 건너뛰어요(실패로 표시되지 않음). 리뷰는 참고용이라 머지 필수 조건(브랜치 보호)에는 넣지 않았어요.
+name: Claude 자동 리뷰
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+# 같은 PR에 새 커밋이 오면 이전 리뷰는 취소하고 최신 커밋만 리뷰해요(비용 절약).
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # 초안(draft) PR과 다른 사람 저장소(fork)에서 온 PR은 건너뛰어요. fork PR에는 비밀값이 전달되지 않아요.
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    env:
+      HAS_CLAUDE_AUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' || secrets.ANTHROPIC_API_KEY != '' }}
+    steps:
+      - name: 인증 정보 확인
+        if: env.HAS_CLAUDE_AUTH != 'true'
+        run: echo "::notice::CLAUDE_CODE_OAUTH_TOKEN 또는 ANTHROPIC_API_KEY 비밀값이 없어 자동 리뷰를 건너뛰어요."
+
+      - uses: actions/checkout@v6
+        if: env.HAS_CLAUDE_AUTH == 'true'
+        with:
+          fetch-depth: 1
+
+      - name: Claude 리뷰
+        if: env.HAS_CLAUDE_AUTH == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          track_progress: true
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            이 저장소는 "핏체크"예요. 체형과 상품 사이즈표로 옷 사이즈를 추천하는 웹 앱(React + Vite),
+            Node API 서버(server/), 크롬 확장(extension/)으로 되어 있어요. 테스트는 scripts/smoke.mjs 예요.
+
+            이 PR의 변경 내용(`gh pr diff`)을 리뷰해 주세요. 아래 순서로 중요한 것부터 봐 주세요.
+            1. 버그: 잘못된 계산, 빠진 예외 처리, 깨질 수 있는 경계값
+            2. 보안·개인정보: 외부 주소를 가져오는 코드의 내부망 차단(server/safeFetch.js), 비밀값(HF_TOKEN 등)이
+               브라우저·로그·외부로 새는지, 사용자 사진·체형 정보가 동의 없이 전송되는지, 확장 권한이 늘었는지
+            3. 테스트: 새 로직에 scripts/smoke.mjs 검사가 있는지
+            4. 더 간단하게 쓸 수 있는 코드
+
+            규칙:
+            - 모든 리뷰는 한국어로 써 주세요.
+            - 확실한 문제만 지적하고, 근거가 되는 파일과 줄을 적어 주세요. 취향 차이는 적지 마세요.
+            - 특정 줄의 문제는 인라인 댓글로, 전체 요약(문제 없음 포함)은 `gh pr comment` 로 한 번만 남겨 주세요.
+            - 코드를 직접 고치거나 커밋하지 마세요.
+          # 쓸 수 있는 도구를 리뷰에 필요한 것으로만 제한해요(읽기 + 댓글).
+          claude_args: |
+            --model claude-opus-5-5
+            --max-turns 30
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Grep,Glob"

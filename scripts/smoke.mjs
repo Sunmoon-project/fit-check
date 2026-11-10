@@ -2402,7 +2402,7 @@ await atest('content.js(가짜 DOM, vm): 보내기를 누르면 변환된 항목
   const dump = JSON.stringify(queue)
   assert.ok(!dump.includes('"height":175') || !dump.includes('preferredFit'), '체형 정보 없음')
   assert.ok(!dump.includes('preferredFit') && !dump.includes('footLength'))
-  assert.ok(created.some((e) => e.tagName === 'A' && e.href === 'http://localhost:5173/' && e.rel === 'noopener noreferrer'), '웹 열기 링크')
+  assert.ok(created.some((e) => e.tagName === 'A' && e.href === 'https://fit-check-joy1.onrender.com/' && e.rel === 'noopener noreferrer'), '웹 열기 링크')
 })
 
 test('content.js 소스: 보내기는 클릭 핸들러 안에서만 만들고 네트워크 호출을 쓰지 않는다', () => {

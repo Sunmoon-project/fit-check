@@ -14,6 +14,7 @@ export const SYNC_QUEUE_KEY = 'fitcheckWardrobeQueue'
 // 웹 앱이 열리는 주소(출처) 목록. 여기 한 곳에서 관리하고, extension/manifest.json의 브리지 matches와 일치해야 해요(smoke가 확인).
 // 배포 주소가 생기면 여기에 'https://내-주소' 를 더하고 manifest의 bridge matches에도 'https://내-주소/*' 를 더하세요.
 export const WEB_APP_ORIGINS = [
+  'https://fit-check-joy1.onrender.com', // 배포 주소 (Render). 첫 번째가 카드의 '웹 열기' 링크가 돼요
   'http://localhost:5173', // npm run dev
   'http://127.0.0.1:5173',
   'http://localhost:4173', // npm run preview
