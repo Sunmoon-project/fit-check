@@ -216,3 +216,23 @@ details[open] > summary::after { transform: translateY(1px) rotate(-135deg); }
 .mg-tips li + li { margin-top: 2px; }
 @media (max-width: 520px) { .measure-guide { grid-template-columns: 110px 1fr; gap: 12px; } }
 @media (prefers-reduced-motion: reduce) { .mg-mark path, .mg-mark circle, .mg-text { animation: none; } }
+
+/* 가격 비교 */
+.price-compare .card { margin-top: 12px; }
+.pc-input { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); font: inherit; font-size: 13px; resize: vertical; margin-bottom: 10px; }
+.pc-verdict { margin: 14px 0 8px; font-size: 15px; animation: fc-rise .35s cubic-bezier(.22,1,.36,1) both; }
+.pc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.pc-list li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); animation: fc-rise .35s cubic-bezier(.22,1,.36,1) both; }
+.pc-list li:nth-child(2) { animation-delay: .05s; } .pc-list li:nth-child(3) { animation-delay: .1s; } .pc-list li:nth-child(n+4) { animation-delay: .15s; }
+.pc-list li.cheap { border-color: var(--v-regular); background: #f0faf4; }
+.pc-mall { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.pc-mall a { font-weight: 700; color: var(--ink); }
+.pc-name { flex-basis: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-price { text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
+.pc-price strong { font-size: 17px; }
+.pc-detail { grid-column: 1 / -1; }
+.pc-badge { padding: 1px 7px; border-radius: 999px; background: var(--v-regular); color: #fff; font-size: 11px; font-weight: 700; }
+.pc-links { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; }
+.pc-links a { text-decoration: none; }
+.pc-sub { margin: 22px 0 4px; font-size: 15px; }
+@media (prefers-reduced-motion: reduce) { .pc-verdict, .pc-list li { animation: none; } }

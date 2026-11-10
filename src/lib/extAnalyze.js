@@ -1,5 +1,6 @@
 // 확장에서 쓰는 분석 한 번: 페이지 DOM + 프로필 → 화면에 보여줄 값.
 // 추천은 웹 앱과 같은 generateFitComment를 그대로 씁니다.
+import { extractPrices, priceEntryOf } from './priceInfo.js'
 import { parsePage, splitSentences, isProductPage, SENTENCE_LIMIT } from './pageParser.js'
 import { collectDiagnostics, diagnosticLines } from './diagnose.js'
 import { generateFitComment, describeEvidence, bodyValuesForProfile, CONFIDENCE_LABEL, FIT_LABEL } from './fitEngine.js'
@@ -164,8 +165,12 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
   const view = (r) => reviewView(r, disp)
   const shoeText = shoe ? shoeComment(shoe) : null
   const evidence = result.evidence ? describeEvidence(result.evidence, result.confidence) : null
+  // 가격: 화면 글(상품명 바로 아래)과 JSON-LD에서 읽어요. 가격 비교 탭과 가격 기록에 써요.
+  const prices = extractPrices({ lines: String(root.body?.innerText || '').split('\n'), name: product.name, ldPrice: product.ldPrice })
   return {
     status: 'ok',
+    prices: prices.best ? prices : null,
+    priceEntry: priceEntryOf(product, prices, { pageUrl }),
     name: product.name,
     image: product.image || null,
     categoryLabel: [CATEGORY_LABEL[product.category] || '', result.outerKind?.label].filter(Boolean).join(' · '),

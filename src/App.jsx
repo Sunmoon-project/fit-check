@@ -4,6 +4,7 @@ import UrlInput from './components/UrlInput.jsx'
 import ResultView from './components/ResultView.jsx'
 import Wardrobe from './components/Wardrobe.jsx'
 import TryOnStudio from './components/TryOnStudio.jsx'
+import PriceCompare from './components/PriceCompare.jsx'
 import { addImportedItem } from './lib/wardrobeImport.js'
 import { loadProfile, saveProfile, loadFeedback, saveFeedback, loadWardrobe, saveWardrobe, loadSyncSeen, saveSyncSeen, trimNote } from './lib/storage.js'
 import { applyDelivery, syncNotice } from './lib/wardrobeSync.js'
@@ -29,6 +30,7 @@ export default function App() {
   const [showWardrobe, setShowWardrobe] = useState(false)
   const [learningModel, setLearningModel] = useState(null) // 학습값 묶음 (이 브라우저의 localStorage에서 읽어요)
   const [showTryOn, setShowTryOn] = useState(false) // 가상 피팅 탭
+  const [showPrice, setShowPrice] = useState(false) // 가격 비교 탭
   const [tryOnCurrent, setTryOnCurrent] = useState(null) // 결과 화면에서 넘긴 옷 { product, size, verdicts }
   const [showCharts, setShowCharts] = useState(false)
   const [showUsed, setShowUsed] = useState(false) // 중고 상품 분석 화면
@@ -49,7 +51,8 @@ export default function App() {
   const chartsView = showCharts && step !== 'onboarding' && !wardrobeView
   const usedView = showUsed && step !== 'onboarding' && !wardrobeView && !chartsView
   const tryOnView = showTryOn && step !== 'onboarding' && !wardrobeView && !chartsView && !usedView
-  const mainView = !wardrobeView && !chartsView && !usedView && !tryOnView
+  const priceView = showPrice && step !== 'onboarding' && !wardrobeView && !chartsView && !usedView && !tryOnView
+  const mainView = !wardrobeView && !chartsView && !usedView && !tryOnView && !priceView
 
   function handleProfile(p) {
     saveProfile(p)
@@ -210,6 +213,9 @@ export default function App() {
             <button type="button" className={`btn pill ${tryOnView ? 'on' : ''}`} onClick={() => (tryOnView ? setShowTryOn(false) : openTryOn(product && tryOnCurrent?.product?.url === product.url ? tryOnCurrent : null))}>
               가상 피팅
             </button>
+            <button type="button" className={`btn pill ${priceView ? 'on' : ''}`} onClick={() => { setShowWardrobe(false); setShowCharts(false); setShowUsed(false); setShowTryOn(false); setShowPrice((v) => !v) }}>
+              가격 비교
+            </button>
             <button type="button" className="btn pill" onClick={() => { setShowWardrobe(false); setShowCharts(false); setShowUsed(false); setShowTryOn(false); setEditing(true) }}>
               내 정보 {profile.height}·{profile.weight}
             </button>
@@ -242,6 +248,7 @@ export default function App() {
         {wardrobeView && <Wardrobe items={wardrobe} onDelete={handleDeleteWardrobe} onBack={toggleWardrobe} onImport={handleImportWardrobe} onClearReviews={handleClearReviews} />}
         {chartsView && <SizeChartLibrary db={chartDb} initialEntries={chartEntries} onBack={() => setShowCharts(false)} onChanged={() => setChartEntries([])} />}
         {tryOnView && <TryOnStudio wardrobe={wardrobe} profile={profile} current={tryOnCurrent} onSaveImage={handleWardrobeImage} onBack={() => setShowTryOn(false)} onProfile={(p) => { saveProfile(p); setProfile(p) }} />}
+        {priceView && <PriceCompare wardrobe={wardrobe} onBack={() => setShowPrice(false)} />}
         {usedView && <UsedListing profile={profile} db={chartDb} imageSearcher={imageSearcher} onBack={() => setShowUsed(false)} />}
         {mainView && step === 'onboarding' && (
           <Onboarding

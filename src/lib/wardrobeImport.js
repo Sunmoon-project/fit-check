@@ -172,7 +172,16 @@ export function sanitizeItem(raw, { now = Date.now() } = {}) {
     source: 'extension',
     reviews,
     ...(status ? { verdictStatus: status, verdictNote: note } : {}),
+    ...(cleanPrices(raw.prices) ? { prices: cleanPrices(raw.prices), priceSeenAt: now } : {}),
   }
+}
+
+// 가격은 숫자만(1천~5천만원) 받아요. 최대 할인가(best)가 없으면 버려요.
+function cleanPrices(p) {
+  if (!p || typeof p !== 'object') return null
+  const n = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 1000 && v <= 50000000 ? Math.round(v) : null)
+  const out = { list: n(p.list), sale: n(p.sale), coupon: n(p.coupon), first: n(p.first), best: n(p.best) }
+  return out.best ? out : null
 }
 
 // analyzePage 결과(status 'ok')에서 내보낼 봉투를 만듭니다. 항상 sanitizeItem을 거쳐서 가져오기에서 통과하는 모양만 나가요.
@@ -186,6 +195,7 @@ export function buildExportEnvelope(result, { now = Date.now() } = {}) {
       size: ex.size,
       measures: ex.measures,
       verdicts: ex.verdicts,
+      prices: result.prices || null,
       reviews: views.map((v) => ({
         nick: v.nick, text: v.text, photos: v.photos, height: v.height, weight: v.weight,
         size: v.size, fitLabel: v.fitLabel, similarity: v.similarity,

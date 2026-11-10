@@ -883,7 +883,7 @@ export function parseGender(text, strict = false) {
  * @param pageUrl 현재 주소 (표시용)
  * @returns 서버 파서와 같은 모양의 상품 객체 (엔진 입력). 이름도 못 읽으면 null.
  */
-const SITE_ONLY_NAME_RE = /^(?:\[?\s*w\s?concept\s*\]?|w컨셉(?:\s*\(w concept\))?|무신사|musinsa|29cm|번개장터|후[르루]츠\s?패밀리)$/i
+export const SITE_ONLY_NAME_RE = /^(?:\[?\s*w\s?concept\s*\]?|w컨셉(?:\s*\(w concept\))?|무신사|musinsa|29cm|번개장터|후[르루]츠\s?패밀리)$/i
 
 export function parsePage(root, pageUrl = '', opts = {}) {
   const ld = collectJsonLd(root)
@@ -1025,6 +1025,8 @@ export function parsePage(root, pageUrl = '', opts = {}) {
     source: 'extension',
     name: name.slice(0, 120),
     image,
+    // JSON-LD 판매가(숫자). 화면 글에서 가격을 못 읽을 때 씀
+    ldPrice: Number([].concat(ldProduct?.offers || [])[0]?.price ?? [].concat(ldProduct?.offers || [])[0]?.lowPrice) || null,
     category,
     categoryConfidence: cls.category === category ? cls.confidence : 'low',
     categoryEvidence: categoryInfo({ ...cls, category }).evidence,

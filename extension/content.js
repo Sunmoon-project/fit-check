@@ -1,6 +1,6 @@
 // 상품 페이지에 "내 사이즈 찾기" 버튼과 결과 카드를 띄웁니다.
 // 페이지 데이터는 이 브라우저 안에서만 읽고, 어디로도 보내지 않아요. 네트워크 호출이 없습니다.
-import { isProductPage, REVIEW_SELECTOR, readReviewTotal, readReviewCardEls, setRectProvider } from '../src/lib/pageParser.js'
+import { isProductPage, REVIEW_SELECTOR, readReviewTotal, readReviewCardEls, setRectProvider, parsePage } from '../src/lib/pageParser.js'
 import { analyzePage, manualChartRows } from '../src/lib/extAnalyze.js'
 import { buildExportEnvelope } from '../src/lib/wardrobeImport.js'
 import { SYNC_QUEUE_KEY, WEB_APP_OPEN_URL, enqueue } from '../src/lib/wardrobeSync.js'
@@ -9,8 +9,9 @@ import { shouldStop, isSafeMoreButton, isReviewTab, isInnerScroller, loadTarget,
 import { compareBody, countUpValue, similarityTier, TIER_LABEL, diffText, buySizeText } from '../src/lib/similarityBreakdown.js'
 import { EXT_PROFILE_KEY, isUsableProfile } from '../src/lib/extProfile.js'
 import { chromeAdapter, loadLearning, addSamples, resetLearning } from '../src/lib/learnStore.js'
-import { createSizeChartDb, SIZE_CHART_DB_STORAGE_NOTE, cleanUrl } from '../src/lib/sizeChartDb.js'
+import { createSizeChartDb, SIZE_CHART_DB_STORAGE_NOTE, cleanUrl, chartRecordFromProduct } from '../src/lib/sizeChartDb.js'
 import { productUrlOfReviewPage, reviewPageOfProduct } from '../src/lib/reviewPages.js'
+import { createPriceStore, comparePrices, searchLinks, won } from '../src/lib/priceInfo.js'
 import { LEARNING_NOTE, LEARNING_STORAGE_NOTE } from '../src/lib/learnedModel.js'
 import { isUsedListingPage, usedSiteOf, readListing, listingText } from '../src/lib/usedListing.js'
 import { usedSearchQuery, findChartMatches } from '../src/lib/usedAnalyze.js'
@@ -60,6 +61,23 @@ const CSS = `
 .size{font-size:34px;font-weight:800;letter-spacing:-.03em;line-height:1.15;margin:4px 0 0;transform-origin:left center;animation:pop .5s var(--e) .08s both}
 .sum{margin:8px 0 0;color:#555;font-size:12px}
 .prd{display:flex;gap:10px;align-items:center;margin:0 0 10px}
+.ptabs{display:flex;gap:4px;margin:0 0 10px;padding:3px;background:#f4f4f5;border-radius:10px}
+.ptab{flex:1;padding:6px 0;border:0;border-radius:8px;background:transparent;font:inherit;font-size:12px;font-weight:600;color:#71717a;cursor:pointer;transition:background .2s,color .2s}
+.ptab.on{background:#fff;color:#18181b;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.pp{animation:rise .3s var(--e)}
+.pnow{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.pnow .pbest{font-size:22px;font-weight:800;letter-spacing:-.02em}
+.pnow .pct{color:#d23b3b;font-weight:800}
+.pnow del{color:#a1a1aa;font-size:12px}
+.plist{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:6px}
+.plist li{display:grid;grid-template-columns:1fr auto;gap:2px 8px;padding:8px 10px;border:1px solid #ececef;border-radius:10px;font-size:12px}
+.plist li.cheap{border-color:#1a7f46;background:#f0faf4}
+.plist li b{font-size:13px}
+.plist .pm{color:#52525b}
+.plist .pd{grid-column:1/-1;color:#71717a;font-size:11px}
+.pbadge{display:inline-block;margin-left:4px;padding:1px 6px;border-radius:999px;background:#1a7f46;color:#fff;font-size:10.5px;font-weight:700}
+.plinks{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.plinks a{padding:4px 9px;border:1px solid #e4e4e7;border-radius:999px;color:#18181b;font-size:11.5px;text-decoration:none}
 .prd img{width:52px;height:52px;flex:none;object-fit:cover;border-radius:8px;background:#f4f4f5}
 .prd b{font-size:12.5px;font-weight:700;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .why{margin:6px 0 0;padding-left:16px;color:#52525b;font-size:12px}
@@ -1255,6 +1273,47 @@ async function usedChartMatchesFor(adapter) {
   }
 }
 
+let pagePrices = null // 이 페이지에서 처음 읽은 가격 { url, prices, entry }
+
+// 리뷰 전체보기 페이지에서 저장된 사이즈표가 없을 때: 같은 사이트의 상품 페이지를 보이지 않는 iframe으로 열어 사이즈표를 읽어요.
+// 같은 출처만 열고(무신사는 같은 출처 iframe 허용), 최대 약 25초 뒤 닫아요. 읽은 사이즈표는 사이즈표 모음에 저장해 다음부터는 바로 써요.
+async function readProductInFrame(url) {
+  let target
+  try {
+    target = new URL(url)
+  } catch {
+    return null
+  }
+  if (target.origin !== location.origin || !document.body) return null
+  const f = document.createElement('iframe')
+  f.setAttribute('aria-hidden', 'true')
+  f.tabIndex = -1
+  f.style.cssText = 'position:fixed;left:-20000px;top:0;width:1280px;height:900px;opacity:0;pointer-events:none;border:0'
+  f.src = target.href
+  document.body.append(f)
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+  try {
+    await new Promise((r) => {
+      f.addEventListener('load', r, { once: true })
+      setTimeout(r, 15000)
+    })
+    for (let t = 0; t < 12; t++) {
+      let doc = null
+      try {
+        doc = f.contentDocument
+      } catch {
+        return null
+      }
+      const p = doc?.body ? parsePage(doc, target.href) : null
+      if (p?.sizeChart?.rows?.length) return chartRecordFromProduct(p, { pageUrl: target.href })
+      await wait(800)
+    }
+    return null
+  } finally {
+    f.remove()
+  }
+}
+
 // 분석 한 번 + 학습: 저장된 학습값으로 판정하고, 이 상품 후기에서 만든 샘플(개인 식별 정보 없음)을 chrome.storage.local에 쌓아요.
 // 새 샘플이 쌓였으면 갱신된 학습값으로 한 번 더 분석해요. 저장소를 못 쓰면(예: 확장이 갱신된 직후) 학습 없이 기존 방식으로 분석해요.
 async function analyzeLearning(profile, opts) {
@@ -1276,10 +1335,23 @@ async function analyzeLearning(profile, opts) {
     } catch {
       fromProduct = null
     }
+    // 저장된 사이즈표가 없으면 상품 페이지를 자동으로 읽어 와요.
+    if (!fromProduct) {
+      if (fab) fab.textContent = '상품 페이지에서 사이즈표 읽는 중…'
+      try {
+        const rec = await readProductInFrame(productUrl)
+        if (rec) {
+          await createSizeChartDb(adapter).put(rec)
+          fromProduct = { sizeChart: rec.sizeChart, model: rec.model, category: rec.category, auto: true }
+        }
+      } catch {
+        fromProduct = null
+      }
+    }
     if (fromProduct) opts = { ...opts, extraRows: [[fromProduct.sizeChart.headers, ...fromProduct.sizeChart.rows]], nameOverride: fromProduct.model }
   }
   let out = analyzePage(document, location.href, profile, EXT_VERSION, { ...opts, learned: model, collectSamples: true, usedChartMatches })
-  if (productUrl) out = { ...out, reviewPage: { productUrl, chartFound: !!fromProduct }, chartRecord: null }
+  if (productUrl) out = { ...out, reviewPage: { productUrl, chartFound: !!fromProduct, auto: !!fromProduct?.auto }, chartRecord: null }
   // 사이즈표를 읽은 상품만 사이즈표 모음에 저장해요(같은 상품은 갱신). 실패해도 분석 결과는 그대로 보여줘요.
   if (out.status === 'ok' && out.chartRecord) {
     try {
@@ -1288,10 +1360,26 @@ async function analyzeLearning(profile, opts) {
       /* 무시 */
     }
   }
+  // 리뷰를 불러오느라 스크롤한 뒤에는 위쪽 가격 영역을 화면 글에서 빼는 사이트(무신사)가 있어요: 이 페이지에서 먼저 읽은 가격이 더 자세하면 그걸 써요.
+  if (out.status === 'ok' && out.prices) {
+    const score = (p) => ['list', 'sale', 'coupon', 'first'].filter((k) => p?.[k] != null).length
+    if (pagePrices?.url === location.href && score(pagePrices.prices) > score(out.prices)) out = { ...out, prices: pagePrices.prices, priceEntry: pagePrices.entry }
+    else pagePrices = { url: location.href, prices: out.prices, entry: out.priceEntry }
+  }
+  // 가격 기록: 이 상품 가격을 이 브라우저에 남기고, 다른 쇼핑몰에서 본 같은 상품과 비교해요(네트워크 없음).
+  if (out.status === 'ok' && out.priceEntry && !productUrl) {
+    try {
+      const store = createPriceStore(adapter)
+      await store.put(out.priceEntry)
+      out.priceRows = comparePrices(out.priceEntry, await store.list())
+    } catch {
+      out.priceRows = [out.priceEntry].map((e) => ({ ...e, current: true, cheapest: false, diff: 0 }))
+    }
+  }
   if (out.status === 'ok' && out.learnSamples?.length) {
     try {
       const r = await addSamples(adapter, out.learnSamples)
-      if (r.added > 0) out = { ...analyzePage(document, location.href, profile, EXT_VERSION, { ...opts, learned: r.model, collectSamples: false }), chartRecord: out.chartRecord, reviewPage: out.reviewPage }
+      if (r.added > 0) out = { ...analyzePage(document, location.href, profile, EXT_VERSION, { ...opts, learned: r.model, collectSamples: false }), chartRecord: out.chartRecord, reviewPage: out.reviewPage, priceRows: out.priceRows }
     } catch {
       /* 저장 실패해도 분석 결과는 그대로 보여줘요 */
     }
@@ -1518,7 +1606,7 @@ function loadMoreBlock(r) {
     a.href = allReviews
     box.append(a)
   }
-  if (r.reviewPage) box.append(el('p', 'tiny', r.reviewPage.chartFound ? '상품 페이지에서 저장한 사이즈표로 분석했어요.' : '사이즈표가 없어요. 상품 페이지에서 먼저 한 번 분석하면 사이즈표도 함께 써요.'))
+  if (r.reviewPage) box.append(el('p', 'tiny', r.reviewPage.chartFound ? '상품 페이지의 사이즈표로 분석했어요.' : '상품 페이지에서 사이즈표를 읽지 못했어요. 상품 페이지를 열어 한 번 분석해 주세요.'))
   return box
 }
 
@@ -1609,6 +1697,94 @@ function productHead(name, image) {
   return box
 }
 
+const MALL_LABEL = { 'musinsa.com': '무신사', '29cm.co.kr': '29CM', 'wconcept.co.kr': 'W컨셉', 'arcteryx.co.kr': '아크테릭스', 'arcteryx.com': '아크테릭스' }
+const mallName = (m) => MALL_LABEL[m] || m
+const daysAgo = (t) => {
+  const d = Math.floor((Date.now() - t) / 86400000)
+  return d <= 0 ? '오늘' : `${d}일 전`
+}
+
+// 가격 비교 탭: 이 상품의 정가·판매가·쿠폰/혜택가, 이 브라우저에서 본 다른 쇼핑몰의 같은 상품, 다른 쇼핑몰 검색 링크
+function pricePane(r) {
+  const box = el('div', 'pp')
+  const p = r.prices
+  const now = el('div', 'pnow')
+  now.append(el('span', 'pbest', won(p.best)))
+  if (p.discountPct > 0) now.append(el('span', 'pct', `${p.discountPct}%`))
+  if (p.list) now.append(el('del', null, won(p.list)))
+  box.append(el('p', 'tiny', '이 쇼핑몰 최대 할인가 (조건 없는 할인·쿠폰 기준)'), now)
+  const parts = [p.sale ? `판매가 ${won(p.sale)}` : '', p.coupon ? `쿠폰·혜택가 ${won(p.coupon)}` : '', p.first ? `첫 구매가 ${won(p.first)}(첫 구매 시만)` : ''].filter(Boolean)
+  if (parts.length) box.append(el('p', 'tiny', parts.join(' · ')))
+  const rows = r.priceRows || []
+  if (rows.length > 1) {
+    const cheap = rows.find((x) => x.cheapest)
+    box.append(el('p', 'sum', cheap?.current ? '이 쇼핑몰이 가장 싸요.' : `${mallName(cheap?.mall)}가 ${won(rows.find((x) => x.current)?.diff)} 더 싸요.`))
+    const ul = el('ul', 'plist')
+    for (const x of rows) {
+      const li = el('li', x.cheapest ? 'cheap' : null)
+      const head = el('span', 'pm')
+      const a = el('a', null, mallName(x.mall))
+      a.href = x.url
+      a.target = '_blank'
+      a.rel = 'noopener noreferrer'
+      head.append(a)
+      if (x.current) head.append(el('span', null, ' (지금 페이지)'))
+      if (x.cheapest) head.append(el('span', 'pbadge', '최저'))
+      li.append(head, el('b', null, won(x.prices.best)))
+      li.append(el('span', 'pd', [x.prices.list ? `정가 ${won(x.prices.list)}` : '', x.diff > 0 ? `+${won(x.diff)}` : '', daysAgo(x.seenAt)].filter(Boolean).join(' · ')))
+      ul.append(li)
+    }
+    box.append(ul)
+  } else {
+    box.append(el('p', 'tiny', '다른 쇼핑몰에서 본 같은 상품이 아직 없어요. 아래에서 열고 \'내 사이즈 찾기\'를 누르면 가격이 함께 기록돼요.'))
+  }
+  const links = searchLinks(r.name, rows.find((x) => x.current)?.mall || '')
+  if (links.length) {
+    box.append(el('p', 'tiny', '다른 쇼핑몰에서 찾아보기'))
+    const lw = el('div', 'plinks')
+    for (const l of links) {
+      const a = el('a', null, l.label)
+      a.href = l.url
+      a.target = '_blank'
+      a.rel = 'noopener noreferrer'
+      lw.append(a)
+    }
+    box.append(lw)
+  }
+  box.append(el('p', 'tiny', '본 시점의 가격이에요. 카드·간편결제 할인과 적립금은 빼고 비교해요.'))
+  return box
+}
+
+// '사이즈 추천 | 가격 비교' 탭: 머리(상품·분류줄) 뒤의 카드 내용을 사이즈 탭으로 옮기고 가격 탭을 따로 둬요.
+function addPriceTabs(card, r, after) {
+  if (!r.prices) return
+  const sizePane = el('div')
+  let n = after.nextSibling
+  while (n) {
+    const next = n.nextSibling
+    sizePane.append(n)
+    n = next
+  }
+  const price = pricePane(r)
+  price.hidden = true
+  const tabs = el('div', 'ptabs')
+  tabs.setAttribute('role', 'tablist')
+  const others = (r.priceRows || []).length - 1
+  const t1 = el('button', 'ptab on', '사이즈 추천')
+  const t2 = el('button', 'ptab', others > 0 ? `가격 비교 · ${others + 1}곳` : '가격 비교')
+  for (const [t, pane] of [[t1, sizePane], [t2, price]]) {
+    t.type = 'button'
+    t.setAttribute('role', 'tab')
+    t.addEventListener('click', () => {
+      for (const x of [t1, t2]) x.className = x === t ? 'ptab on' : 'ptab'
+      sizePane.hidden = pane !== sizePane
+      price.hidden = pane !== price
+    })
+  }
+  tabs.append(t1, t2)
+  card.append(tabs, sizePane, price)
+}
+
 function usedCard(card, r) {
   const conf = el('span', 'badge', r.confidenceLabel.text)
   conf.style.color = r.confidenceLabel.color
@@ -1674,6 +1850,7 @@ function renderResult(r) {
     conf.style.color = r.confidenceLabel.color
     const head = productHead(r.name, r.image)
     if (head) card.append(head)
+    const tabAnchor = head || card.lastChild
     const row = el('div', 'row')
     row.append(el('span', 'eyebrow', r.categoryLabel), conf)
     card.append(row)
@@ -1755,6 +1932,7 @@ function renderResult(r) {
       fold.append(rep.det)
     }
     card.append(fold)
+    if (tabAnchor) addPriceTabs(card, r, tabAnchor)
   })
 }
 
