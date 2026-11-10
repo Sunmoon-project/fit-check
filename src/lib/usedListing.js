@@ -34,6 +34,8 @@ export function usedSiteOf(urlOrHost) {
 const ALPHA = 'XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|[2-5]XL|FREE|F'
 // 부위 말: key와 값 검증 범위(cm). sec는 단면(옷을 펴서 잰 폭) 범위, circ는 둘레 범위. 겹치는 구간은 단면/둘레를 알 수 없어요.
 const PARTS = [
+  // 화장(어깨+소매): 목 뒤 중심에서 소매 끝까지. 어깨너비를 알면 소매길이(화장 − 어깨/2)로 바꿔 써요.
+  { key: 'yuki', re: '어깨\\s?\\+\\s?소매|화장', range: [55, 100] },
   { key: 'shoulder', re: '어깨(?:\\s?(?:너비|넓이))?', range: [30, 65] },
   { key: 'chest', re: '가슴(?:\\s?(?:둘레|단면))?|품(?:\\s?(?:둘레|단면))?', sec: [35, 75], circ: [70, 150] },
   { key: 'length', re: '총\\s?장|총\\s?기장|전체\\s?길이|기장|길이', range: [35, 150] },
@@ -47,7 +49,7 @@ const PARTS = [
 export const PART_WORD = Object.freeze({ shoulder: '어깨', chest: '가슴', length: '총장', arm: '소매', waist: '허리', hip: '엉덩이', thigh: '허벅지', rise: '밑위', innerLeg: '인심' })
 const WORD_ALT = PARTS.map((p) => `(?:${p.re})`).join('|')
 const PART_TEST = PARTS.map((p) => ({ ...p, test: new RegExp(`^(?:${p.re})$`) }))
-const MEASURE_RE_SRC = `(?<![가-힣A-Za-z])(${WORD_ALT})\\s*(단면|둘레)?\\s*[:=]?\\s*(\\d{1,3}(?:\\.\\d)?)\\s*(cm|㎝|센치|mm|㎜|인치|inch)?\\s*(?:\\(?\\s*(단면|둘레)\\s*\\)?)?`
+const MEASURE_RE_SRC = `(?<![가-힣A-Za-z])(${WORD_ALT})(?:\\s*\\((?:상의|하의|아우터|원피스)\\))?\\s*(단면|둘레)?\\s*[:=]?\\s*(\\d{1,3}(?:\\.\\d)?)\\s*(cm|㎝|센치|mm|㎜|인치|inch)?\\s*(?:\\(?\\s*(단면|둘레)\\s*\\)?)?`
 const BARE_SECTION_RE = /(?<![가-힣A-Za-z])단면\s*[:=]?\s*(\d{1,3}(?:\.\d)?)\s*(?:cm|㎝|센치)?/g
 const HEADER_RE = new RegExp(`(?:^|[\\n/|,;·•])[ \\t]*(?:사이즈|size)?[ \\t]*[\\[(]?[ \\t]*(${ALPHA}|9\\d|1[0-2]\\d|2[4-9]|3\\d|40)[ \\t]*[\\])]?[ \\t]*[:：\\-]?[ \\t]*(?=(?:${WORD_ALT}))`, 'gi')
 
@@ -103,12 +105,17 @@ function parseMeasures(text, category, globalHint, stats) {
     if (out[key]) continue // 같은 부위가 여러 번 나오면 처음 값만 써요
     out[key] = { cm: r.cm, kind: r.kind, raw: Number(m[3]), inferred: r.inferred, bare: false }
   }
+  if (out.yuki) {
+    if (out.shoulder && !out.arm) out.arm = { cm: Math.round((out.yuki.cm - out.shoulder.cm / 2) * 10) / 10, kind: 'yuki', raw: out.yuki.raw, inferred: true, bare: false }
+    else stats.dropped += 1
+    delete out.yuki
+  }
   // 부위 이름 없이 '단면 55'만 있으면 가슴 단면으로 추정해요(상의·아우터·원피스만)
   for (const [a, b] of spans) rest = rest.slice(0, a) + ' '.repeat(b - a) + rest.slice(b)
   if ((category === 'top' || category === 'outer' || category === 'dress') && !out.chest) {
     for (const m of rest.matchAll(BARE_SECTION_RE)) {
       const v = Number(m[1])
-      if (inRange(v, PARTS[1].sec)) {
+      if (inRange(v, PARTS.find((x) => x.key === 'chest').sec)) {
         out.chest = { cm: Math.round(v * 2 * 10) / 10, kind: 'section', raw: v, inferred: true, bare: true }
         break
       }
@@ -317,6 +324,10 @@ function signalOf(text) {
  * 판매글 페이지에서 제목·설명·가격·사진 주소·본문 글을 읽어요(일반 규칙). 읽지 못한 값은 빈 문자열/null/빈 목록.
  * @returns {{ title:string, description:string, bodyText:string, price:{amount:number|null,currency:string}, photos:string[], sources:string[] }}
  */
+const GENERIC_TITLE_RE = /^(?:번개장터|bunjang|후[르루]츠\s?패밀리|fruits\s?family)$/i
+const SITE_SUFFIX_RE = /\s*[|｜]\s*(?:번개장터|후[르루]츠\s?패밀리|fruits\s?family)\s*$/i
+const PRICE_LINE_RE = /^\d{1,3}(?:,\d{3})+\s*원$/
+
 export function readListing(root) {
   const sources = []
   const meta = (sel) => clean(root.querySelector?.(sel)?.getAttribute?.('content'))
@@ -327,11 +338,27 @@ export function readListing(root) {
     title = clean(ld.name)
     sources.push('json-ld')
   }
+  // 대표 제목이 사이트 이름뿐이면(번개장터 og:title) 제목으로 쓰지 않아요.
+  title = title.replace(SITE_SUFFIX_RE, '')
+  if (GENERIC_TITLE_RE.test(title)) {
+    title = ''
+    sources.pop()
+  }
   if (!title) {
     const h1 = clean(root.querySelector?.('h1')?.textContent)
     if (h1) {
       title = h1
       sources.push('h1')
+    }
+  }
+  // 그래도 없으면 화면 글에서 가격 줄(180,000원) 바로 위 줄을 상품명으로 봐요.
+  if (!title) {
+    const lines = String(root.body?.innerText || '').split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 400)
+    const at = lines.findIndex((l) => PRICE_LINE_RE.test(l))
+    const cand = at > 0 ? lines[at - 1] : ''
+    if (cand.length >= 4 && cand.length <= 120 && /[가-힣A-Za-z]{2}/.test(cand)) {
+      title = cand
+      sources.push('price-line')
     }
   }
   let description = meta('meta[property="og:description"]') || meta('meta[name="description"]')

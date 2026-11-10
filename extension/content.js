@@ -483,6 +483,7 @@ function chartTable(v) {
   if (converted) legend.push('→ 단면 값을 둘레(×2)로 바꿔 계산한 값')
   if (v.used.some((u) => !u)) legend.push('흐린 열은 계산에 쓰지 않았어요')
   if (v.ignored?.length) legend.push('추천 키·몸무게 표는 계산에 쓰지 않았어요')
+  if (v.bodyChart) legend.push(`신체 치수표라 보통 여유분(가슴 +${v.bodyChart.chest}·허리 +${v.bodyChart.waist}·엉덩이 +${v.bodyChart.hip}cm)을 더해 옷 치수로 비교했고, 소매는 재는 법이 달라 빼었어요`)
   if (legend.length) box.append(el('p', 'note', legend.join(' · ')))
   return box
 }

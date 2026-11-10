@@ -121,6 +121,10 @@ const shapeLine = (cells, max = 8) => cells.slice(0, max).map(shapeOfCell).join(
 const isLabelCell = (c) => SIZE_LABEL_RE.test(String(c).replace(/\s/g, ''))
 const isMeasureRow = (r) => r.length >= 2 && MEASURE_HEADER_RE.test(r[0].replace(/\s/g, ''))
 const MEASURE_WORD_RE = /어깨|가슴|허리|총장|기장|허벅지|엉덩이|힙|소매|화장|발길이|발볼|굽높이|무릎|밑위|밑단|암홀|단면|길이|전장|^품(?:\(|$)|\b(?:length|chest|shoulder|waist|hip|thigh|sleeve)\b/i
+// 신체 치수표 → 옷 치수에 더할 여유분 (휴리스틱). 표의 몸보다 내 몸이 크면 '타이트'로 넘어가도록
+// fitEngine EASE_RULES의 snug 경계보다 조금 큰 값이에요 (가슴 snug 6 → 8). 실측으로 검증하지 않았어요.
+const INCH_HEAD_RE = /inch|인치|\(in\)/i
+export const BODY_CHART_EASE = { chest: 8, waist: 5, hip: 6 }
 const BODY_GUIDE_RE = /^(?:추천)?(?:키|신장|몸무게|체중|height|weight)(?:\(|$|\/)/i
 const hasMeasureWord = (c) => MEASURE_WORD_RE.test(String(c).replace(/\s/g, ''))
 
@@ -437,7 +441,12 @@ export function analyzeSizeCharts(rowsListIn, category, optionLabels = []) {
   }
 
   const cat = category || guessCategory('', best.headers)
-  const mapping = best.headers.map((h, i) => (i === 0 ? null : mapHeader(h, cat)))
+  let mapping = best.headers.map((h, i) => (i === 0 ? null : mapHeader(h, cat)))
+  // 신체 치수표(원피스가 아닌데 가슴·허리·엉덩이 둘레가 다 있는 표, 예: 아크테릭스 '소매|가슴|허리|엉덩이')는 옷 실측이 아니에요.
+  // 보통 핏 여유분(BODY_CHART_EASE)을 더해 옷 치수로 바꾸고, 재는 법이 다른 소매(등 중심~손목)는 쓰지 않아요.
+  const mappedKeys = new Set(mapping.filter(Boolean).map((m) => m.key))
+  const bodyChart = cat !== 'dress' && cat !== 'shoes' && ['chest', 'waist', 'hip'].every((k) => mappedKeys.has(k))
+  if (bodyChart) mapping = mapping.map((m) => (m?.key === 'arm' ? null : m))
   const measures = {}
   const widthLevels = {}
   const display = {}
@@ -466,8 +475,17 @@ export function analyzeSizeCharts(rowsListIn, category, optionLabels = []) {
           return
         }
       }
-      const v = toNumber(cell)
+      let v = toNumber(cell)
       if (!map || v == null) return
+      // 머리글이 인치(가슴둘레 (inch))면 cm 둘레로 바꿔요. '33~34'처럼 범위면 가운데값을 써요.
+      if (INCH_HEAD_RE.test(String(best.headers[i]))) {
+        const range = String(cell).match(/(\d+(?:\.\d+)?)\s*[~∼-]\s*(\d+(?:\.\d+)?)/)
+        const inch = range ? (Number(range[1]) + Number(range[2])) / 2 : v
+        m[map.key] = Math.round(inch * 2.54 * 10) / 10
+        cells[i - 1].value = m[map.key]
+        cells[i - 1].converted = true
+        return
+      }
       if (map.minValue && v < map.minValue) return
       // 단면 → 둘레(×2). 발볼처럼 cm로 적힌 값(30 미만)은 mm로 바꿔요.
       const raw = map.divideFrom && v >= map.divideFrom ? v / 10 : v // 굽높이가 mm(50)로 적힌 표는 cm(5)로
@@ -480,6 +498,9 @@ export function analyzeSizeCharts(rowsListIn, category, optionLabels = []) {
     viewRows.push({ label, shown, cells: cells.slice(0, 10) })
     return [label, ...r.slice(1)]
   })
+  if (bodyChart) {
+    for (const m of Object.values(measures)) for (const [k, e] of Object.entries(BODY_CHART_EASE)) if (m[k] != null) m[k] = Math.round((m[k] + e) * 10) / 10
+  }
   Object.assign(meta, {
     selectedIndex: best.index,
     rowCount: best.body.length,
@@ -508,6 +529,7 @@ export function analyzeSizeCharts(rowsListIn, category, optionLabels = []) {
       // 읽은 열의 부위 키(계산에 쓴 열만). 비교 표가 어떤 열을 어떤 부위로 읽었는지 알려줘요.
       keys: mapping.slice(1, 11).map((m) => m?.key || null),
       ignored: ignored.slice(0, 3),
+      ...(bodyChart ? { bodyChart: BODY_CHART_EASE } : {}),
     },
   }
   for (const k of Object.keys(rangeShown)) if (rows.some((r) => r[0] === k)) display[k] = rangeShown[k]
