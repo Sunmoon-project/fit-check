@@ -9,6 +9,7 @@ import { resolveLearned, learningStatus, brandKeyOf } from './learnedModel.js'
 import { classifyBrandRegion, regionInputOf, regionLine } from './brandRegion.js'
 import { sizeSystemHint } from './sizeSystems.js'
 import { reviewBodyEstimate, REVIEW_EST_PARTS } from './reviewBodyEstimate.js'
+import { outerKindOf } from './outerKind.js'
 
 // ---------- 신발 허용 구간 (휴리스틱) ----------
 // d = 신발 사이즈(mm) - 발길이(mm). 브랜드/라스트마다 달라서 정확한 값이 아니라 일반적인 착용감을 바탕으로 한 기준이에요.
@@ -67,16 +68,19 @@ export const VERDICTS = [
 
 const PART_NAME = { ...PART_LABEL, topLength: '총장', outerLength: '총장', inseam: '총장', dressLength: '총장' }
 
-export const FIT_PREF_LABEL = { slim: '슬림', regular: '레귤러', relaxed: '여유' }
+export const FIT_PREF_LABEL = { slim: '슬림', regular: '레귤러', relaxed: '오버핏' }
 
 const round1 = (v) => Math.round(v * 10) / 10
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v)
 
 // 신체 치수(추정 + 직접 입력) + 기장 표준값
-export function bodyValuesForProfile(profile) {
+// product를 주면 아우터 세부 종류(코트·패딩 등)에 맞춘 표준 총장을 써요.
+export function bodyValuesForProfile(profile, product = null) {
   const { values, measured, photo } = estimateBody(profile)
   const out = { ...values }
   for (const [k, r] of Object.entries(LENGTH_RATIO)) out[k] = round1(profile.height * r)
+  const outer = product ? outerKindOf(product.name, product.category) : null
+  if (outer) out.outerLength = round1(profile.height * outer.ratio)
   // 다리길이를 직접 쟀으면 바지 총장 기준을 키 대신 다리길이 비율로 잡아요 (평균 다리길이 = 키 × LEG_RATIO).
   if (measured.has('leg')) out.inseam = round1(values.leg * (LENGTH_RATIO.inseam / LEG_RATIO))
   return { values: out, measured, photo }
@@ -272,7 +276,15 @@ export function aggregateFit(matched) {
 }
 
 // 후기 투표로 사이즈 고르기
-function pickFromReviews(matched, sizeList) {
+// 후기 평가(작아요/정사이즈/커요) + 선호 핏 → 비슷한 체형이 고른 사이즈에서 몇 치수 옮길지
+// 슬림·레귤러: 작다 +1, 정사이즈 0, 크다 −1 / 오버핏: 작다 +2, 정사이즈 +1, 크다 0
+const PREF_SHIFT = {
+  slim: { small: 1, true: 0, large: -1 },
+  regular: { small: 1, true: 0, large: -1 },
+  relaxed: { small: 2, true: 1, large: 0 },
+}
+
+function pickFromReviews(matched, sizeList, preferredFit = 'regular') {
   const bySize = aggregateFit(matched)
   const entries = Object.entries(bySize).sort((a, b) => b[1].weight - a[1].weight)
   if (entries.length === 0) return null
@@ -284,15 +296,16 @@ function pickFromReviews(matched, sizeList) {
   else if (stat.large > stat.true && stat.large >= stat.small) tendency = 'large'
 
   const idx = sizeList.indexOf(baseSize)
-  let size = baseSize
+  const want = (PREF_SHIFT[preferredFit] || PREF_SHIFT.regular)[tendency]
+  // 사이즈표에 있는 범위 안에서만 옮겨요 (표가 없으면 그대로)
+  const to = idx < 0 ? idx : Math.max(0, Math.min(sizeList.length - 1, idx + want))
+  const size = idx < 0 ? baseSize : sizeList[to]
+  const step = idx < 0 ? 0 : to - idx
   let adjust = ''
-  if (tendency === 'small' && idx >= 0 && idx < sizeList.length - 1) {
-    size = sizeList[idx + 1]
-    adjust = `${baseSize}가 작다는 후기가 많아 한 치수 큰 ${size}를 추천해요.`
-  } else if (tendency === 'large' && idx > 0) {
-    size = sizeList[idx - 1]
-    adjust = `${baseSize}가 크다는 후기가 있어, 딱 맞게 입으려면 ${size}도 좋아요.`
-  }
+  const over = preferredFit === 'relaxed'
+  if (step > 0) adjust = over ? `${baseSize}가 ${tendency === 'small' ? '작다는' : '정사이즈라는'} 후기가 많아, 오버핏으로 입으려면 ${size}를 추천해요.` : `${baseSize}가 작다는 후기가 많아 한 치수 큰 ${size}를 추천해요.`
+  else if (step < 0) adjust = `${baseSize}가 크다는 후기가 있어, 딱 맞게 입으려면 ${size}도 좋아요.`
+  else if (over && tendency === 'large') adjust = `${baseSize}가 크다는 후기가 많아 오버핏으로 입기 좋아요.`
   const pct = Math.round((Math.max(stat.small, stat.true, stat.large) / total) * 100)
   const votes = entries.reduce((n, [, s]) => n + s.count, 0)
   return { size, baseSize, tendency, pct, adjust, votes }
@@ -319,7 +332,7 @@ export function generateFitComment(profile, product, calibration = {}, model = n
   const regionInfo = classifyBrandRegion(regionInputOf(product))
   const regionKey = regionInfo.region === 'unknown' ? null : regionInfo.region
   const learned = model ? resolveLearned(model, product.category, brandKeyOf(product), regionKey) : null
-  const formula = bodyValuesForProfile(profile)
+  const formula = bodyValuesForProfile(profile, product)
   const measured = formula.measured
   const preferredFit = profile.preferredFit || 'regular'
   const sizeList = chartSizes(product.sizeChart)
@@ -339,7 +352,15 @@ export function generateFitComment(profile, product, calibration = {}, model = n
   const reviewParts = est.reviewParts
   const measureResult = recommendSize(values, product.sizeChart, product.category, preferredFit, calibration, learned)
   const disp = makeDisplay(product)
-  const reviewPick = pickFromReviews(matched, sizeList)
+  const reviewPick = pickFromReviews(matched, sizeList, preferredFit)
+  // 오버핏으로 한 치수 올렸는데 사이즈표상 그 사이즈가 이미 '매우 넉넉'(어깨·가슴 등)이면 올리지 않아요 (원래 크게 나온 옷).
+  if (reviewPick && preferredFit === 'relaxed' && reviewPick.size !== reviewPick.baseSize) {
+    const up = measureResult?.perSize.find((p) => p.size === reviewPick.size)
+    if (up?.verdicts.some((v) => !v.isLength && v.level === 4)) {
+      reviewPick.size = reviewPick.baseSize
+      reviewPick.adjust = `${reviewPick.baseSize}도 사이즈표상 이미 넉넉해서 오버핏으로 입기 좋아요.`
+    }
+  }
   const topSim = matched[0]?.similarity ?? 0
   const measureSize = measureResult?.bestSize ?? null
   const calibrated = Object.keys(calibration).length > 0
@@ -354,34 +375,36 @@ export function generateFitComment(profile, product, calibration = {}, model = n
     ? `나와 비슷한 체형의 후기 ${reviewPick.votes}건 중 ${reviewPick.pct}%가 ${TENDENCY_TEXT[reviewPick.tendency]} 느꼈어요. ` +
       (reviewPick.adjust || `비슷한 체형은 ${disp(reviewPick.size)}를 가장 많이 골랐어요.`)
     : ''
-  const fitName = FIT_PREF_LABEL[preferredFit]
+  const fitName = preferredFit === 'relaxed' ? '오버핏' : `${FIT_PREF_LABEL[preferredFit] || '레귤러'} 핏`
 
   // 후기가 고른 사이즈가 실측상 "작을 수 있음"인 부위가 있으면 후기만 믿지 않습니다.
   const reviewSizeTooSmall = measureResult?.perSize
     .find((p) => p.size === reviewPick?.size)
     ?.verdicts.some((v) => v.level === 0 && !v.isLength)
 
+  // 슬림 선호인데 사이즈표가 후기 사이즈보다 작은 사이즈를 고르면 사이즈표를 따라요(후기 '정사이즈'는 보통 핏 기준이라).
+  const slimWantsSmaller = preferredFit === 'slim' && measureSize && reviewPick && sizeList.indexOf(measureSize) >= 0 && sizeList.indexOf(measureSize) < sizeList.indexOf(reviewPick.size)
   if (measureSize && reviewPick) {
     if (reviewPick.size === measureSize || reviewPick.baseSize === measureSize) {
       recommendedSize = measureSize
       confidence = reviewPick.votes >= 2 && reviewPick.size === measureSize ? 'high' : 'medium'
-      body.push(reviewSentence, `사이즈표 실측으로 보면 ${fitName} 핏 기준 ${disp(measureSize)}가 가장 잘 맞아요.`)
-    } else if ((reviewPick.votes >= 3 && topSim >= 75 && !reviewSizeTooSmall) || (!detailed && reviewPick.votes >= 2 && !reviewSizeTooSmall)) {
+      body.push(reviewSentence, `사이즈표 실측으로 보면 ${fitName} 기준 ${disp(measureSize)}가 가장 잘 맞아요.`)
+    } else if (((reviewPick.votes >= 3 && topSim >= 75) || (!detailed && reviewPick.votes >= 2)) && !reviewSizeTooSmall && !slimWantsSmaller) {
       // 키·몸무게만 입력했으면 추정 치수보다 비슷한 체형의 실제 선택을 우선해요 (후기 2건 이상, 실측상 작을 수 있는 사이즈가 아닐 때).
       recommendedSize = reviewPick.size
       confidence = 'medium'
-      body.push(reviewSentence, `다만 사이즈표 실측만 보면 ${disp(measureSize)}가 ${fitName} 핏에 더 가까워요.`)
+      body.push(reviewSentence, `다만 사이즈표 실측만 보면 ${disp(measureSize)}가 ${fitName}에 더 가까워요.`)
     } else {
       recommendedSize = measureSize
       confidence = measureResult.best.score >= 70 ? 'medium' : 'low'
-      body.push(`사이즈표 실측으로 보면 ${fitName} 핏 기준 ${disp(measureSize)}가 가장 잘 맞아요.`, reviewSentence)
+      body.push(`사이즈표 실측으로 보면 ${fitName} 기준 ${disp(measureSize)}가 가장 잘 맞아요.`, reviewSentence)
     }
   } else if (measureSize) {
     recommendedSize = measureSize
     const compared = measureResult.best.verdicts.filter((v) => !v.isLength)
     const allMeasured = compared.length > 0 && compared.every((v) => measured.has(v.part))
     confidence = measureResult.best.score >= 70 ? (allMeasured ? 'high' : 'medium') : 'low'
-    body.push(`사이즈표 실측으로 보면 ${fitName} 핏 기준 ${disp(measureSize)}가 가장 잘 맞아요.`)
+    body.push(`사이즈표 실측으로 보면 ${fitName} 기준 ${disp(measureSize)}가 가장 잘 맞아요.`)
     if (matched.length === 0) notes.push('비슷한 체형의 후기가 없어 실측 비교로만 판단했어요.')
   } else if (reviewPick) {
     recommendedSize = reviewPick.size
@@ -478,6 +501,8 @@ export function generateFitComment(profile, product, calibration = {}, model = n
     photoParts: [...(formula.photo || [])],
     detailed,
     regionInfo,
+    // 아우터 세부 종류(코트·패딩 등). 표준 총장을 이 종류 기준으로 잡았어요.
+    outerKind: outerKindOf(product.name, product.category),
     // 사이즈표를 못 읽었을 때만: 사이즈 표기의 뜻(근사/출처 확인 필요). 추천 계산에는 쓰지 않아요.
     sizeSystem: product.sizeChart ? null : sizeSystemHint({ category: product.category, gender: product.targetGender?.gender === 'male' ? 'male' : null, optionLabels: product.optionLabels || [] }),
     ...(learning ? { learning } : {}),
@@ -587,7 +612,6 @@ export function evidenceDetails(evidence) {
   if (Array.isArray(e.partEase) && e.partEase.length) {
     lines.push(`부위별 여유분 판정: ${e.partEase.map((p) => `${p.label} ${signed(p.ease)}cm ${p.verdict}${p.measured ? '' : '(추정)'}`).join(', ')}`)
   }
-  if (lines.length) lines.push('위 수치는 센 값이고 규칙 기반 판정이에요. 정확도를 측정한 값은 아니에요.')
   return lines
 }
 

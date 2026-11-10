@@ -170,7 +170,7 @@ const HEADLINE = {
  */
 export function analyzeUsedListing(listing, profile, opts = {}) {
   const parsed = parseListingText(listing.text ?? listingText(listing), { title: listing.title, category: opts.category })
-  const { values, measured } = bodyValuesForProfile(profile)
+  const { values, measured } = bodyValuesForProfile(profile, { name: parsed.model || listing.title || '', category: parsed.category })
   const pref = profile.preferredFit || 'regular'
   const ctx = { values, measured, pref, profile }
   const region = classifyBrandRegion({

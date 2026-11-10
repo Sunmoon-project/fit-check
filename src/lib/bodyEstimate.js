@@ -1,6 +1,8 @@
-// 키·몸무게·체형 선택으로 신체 치수를 대략 추정합니다.
-// 한국 성인 평균 체형에 맞춘 단순한 선형식이라 오차가 있어요(±3~5cm).
+// 키·몸무게·체형 선택으로 신체 치수를 추정합니다.
+// 같은 성별·키·몸무게의 평균값(src/data/bodyAverages.js, 공개 인체측정 자료 회귀식)에서 시작해요. 사람마다 ±2~5cm 차이가 나요.
 // 사용자가 직접 잰 값이 있으면 항상 그 값을 우선합니다.
+
+import { averageBody, SHOULDER_K } from '../data/bodyAverages.js'
 
 const SHAPE_ADJUST = {
   shoulder: { narrow: { shoulder: -2, chest: -2 }, normal: {}, wide: { shoulder: 2, chest: 2 } },
@@ -9,27 +11,16 @@ const SHAPE_ADJUST = {
 }
 
 function base(gender, h, w) {
-  if (gender === 'female') {
-    return {
-      shoulder: 0.18 * h + 0.15 * w,
-      chest: 0.7 * w + 0.3 * h,
-      waist: 0.8 * w + 0.1 * h + 10,
-      hip: 0.6 * w + 0.35 * h,
-      thigh: 0.5 * w + 0.1 * h + 10,
-      arm: 0.33 * h,
-      leg: 0.45 * h, // 안쪽 다리길이(가랑이~바닥)
-      footLength: 1.5 * h,
-    }
-  }
+  const avg = averageBody(gender, h, w)
   return {
-    shoulder: 0.2 * h + 0.15 * w,
-    chest: 0.75 * w + 0.25 * h + 1,
-    waist: 0.95 * w + 0.05 * h + 5,
-    hip: 0.6 * w + 0.3 * h,
-    thigh: 0.45 * w + 0.1 * h + 5,
-    arm: 0.335 * h,
-    leg: 0.45 * h,
-    footLength: 1.5 * h,
+    shoulder: avg.biacromial * SHOULDER_K,
+    chest: avg.chest,
+    waist: avg.waist,
+    hip: avg.hip,
+    thigh: avg.thigh,
+    arm: avg.arm,
+    leg: 0.45 * h, // 안쪽 다리길이(가랑이~바닥): 한국인 평균 비율
+    footLength: 1.5 * h, // mm. 미군 표본 식은 한국인보다 발이 10mm 안팎 크게 나와 쓰지 않아요.
   }
 }
 

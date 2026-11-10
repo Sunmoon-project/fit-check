@@ -1751,13 +1751,12 @@ await atest('content.js(가짜 DOM, vm): 카드 문구가 줄었고 오래된 �
   const all = texts.join('\n')
   for (const stale of ['자동으로 스크롤하지 않아요', '이 페이지에 불러와진 리뷰만 읽어요', '최종 선택은', '정확도를 측정한 값이 아니에요. 참고용', '이 브라우저 밖으로 나가지 않아요'])
     assert.ok(!all.includes(stale), stale)
-  // 필수 고지는 한 줄에 합쳐서 한 번만
-  assert.equal(texts.filter((t) => t.includes('확신도는 정확도를 측정한 값이 아니에요')).length, 1)
-  assert.equal(texts.filter((t) => t.includes('참고용이에요')).length, 1)
-  // 기본으로 보이는 영역(fold 바깥)의 문장 수는 적다: card 직계 자식은 헤더, 분류줄, 사이즈, 근거 한 줄, 고지 한 줄, fold뿐
+  // 확신도 배지가 '(참고용)'을 말하므로 같은 뜻의 고지 줄은 따로 두지 않아요 (사용자 요청: 불필요한 글 줄이기)
+  assert.equal(texts.filter((t) => t.includes('확신도는 정확도를 측정한 값이 아니에요')).length, 0)
+  // 기본으로 보이는 영역(fold 바깥)의 문장 수는 적다: card 직계 자식은 헤더, 상품(사진·이름), 분류줄, 사이즈, 근거 한 줄, fold뿐
   // 리뷰 자동 불러오기 진행 카드가 먼저 그려지므로, 마지막에 그린 결과 카드를 봐요.
   const card = created.findLast((e) => e.className.split(' ').includes('card'))
-  assert.deepEqual(card.children.map((c) => c.className.split(' ')[0]), ['row', 'row', 'size', 'sum', 'tiny', 'fold'])
+  assert.deepEqual(card.children.map((c) => c.className.split(' ')[0]), ['row', 'prd', 'row', 'size', 'sum', 'fold'])
   // 최소화하면 fold가 숨겨지는 클래스가 붙고, 다시 누르면 풀린다
   const mini = created.findLast((e) => e.tagName === 'BUTTON' && e.textContent === '−')
   mini._l.click()
@@ -5637,7 +5636,7 @@ await atest('자세한 근거 줄: 후기 건수·제외, 학습값 샘플 수, 
   assert.ok(d.some((l) => l.startsWith('브랜드·지역 보정: 없음(0cm')), all)
   assert.ok(d.some((l) => l.startsWith('브랜드 지역: 미국(추정) 근거: ')), all)
   assert.ok(d.some((l) => l.startsWith('부위별 여유분 판정: ') && /가슴 \+?-?\d/.test(l)), all)
-  assert.ok(d[d.length - 1].includes('정확도를 측정한 값은 아니에요'))
+  assert.ok(!d.some((x) => x.includes('센 값이고')), '반복 고지 줄은 빼요')
   assert.ok(!/정확도 \d|\d+\s*%\s*정확/.test(all))
   // 학습값이 없으면 학습 줄은 나오지 않고 후기·부위·지역 줄은 나온다
   const plain = describeEvidence(generateFitComment(profile, base, {}, null).evidence, 'low').details.join('\n')
@@ -5653,7 +5652,7 @@ await atest('지역·근거 표시: 확장 카드(가짜 DOM, vm)에 브랜드 �
   assert.ok(texts.includes('추천에 쓰인 근거 (자세히)'))
   assert.ok(texts.some((t) => t.startsWith('후기 근거: 불러온 후기 ')))
   assert.ok(texts.some((t) => t.startsWith('부위별 여유분 판정: ')))
-  assert.ok(texts.some((t) => t.includes('검증 전 가설')))
+  assert.ok(!texts.some((t) => t.includes('검증 전 가설')), '가설 긴 안내는 카드에서 뺐어요(지역 줄의 "(추정)"으로 충분)')
   const unknown = await runContentInFakeDom(VIEW_HTML(chartTable(OPTION_LIST_LABELS())))
   assert.ok(unknown.texts.some((t) => t.startsWith('브랜드 지역: 알 수 없음')), '근거가 없으면 알 수 없음')
   // 판단 결과 자체는 analyzePage에도 담겨요
@@ -5668,7 +5667,7 @@ test('지역·근거 표시: 웹 결과 화면(서버 렌더)에 브랜드 지�
   const text = textOf(render(WEB.ResultView, props))
   assert.ok(text.includes('브랜드 지역: 미국(추정) 근거: 브랜드 사전(추정): 미국'), '지역 줄')
   assert.ok(text.includes('후기 근거: 불러온 후기') && text.includes('부위별 여유분 판정:'))
-  assert.ok(text.includes('검증 전 가설'))
+  assert.ok(!text.includes('검증 전 가설'), '가설 긴 안내는 결과 화면에서 뺐어요')
   const noChart = textOf(render(WEB.FitComment, { result: generateFitComment(profile, { name: '셔츠', category: 'top', optionLabels: ['95', '100'], reviews: [], sizeChart: null, targetGender: { gender: 'male' } }, {}, null) }))
   assert.ok(noChart.includes('사이즈 표기 참고값(근사/출처 확인 필요)') && noChart.includes('100 → 가슴둘레 호칭 약 100cm'))
 })
@@ -6481,6 +6480,63 @@ test('사이즈표: 인치 머리글은 cm로 바꾸고(범위는 가운데값),
   const garment = analyzeSizeCharts([[['사이즈', '어깨', '가슴', '총장'], ['M', '46', '112', '70'], ['L', '48', '118', '72']]], 'top').chart
   assert.equal(garment.measures.M.chest, 112, '옷 실측표는 그대로')
   assert.ok(!garment.view.bodyChart)
+})
+
+// ---- 평균 체형 데이터, 선호 핏별 추천, 아우터 세부 종류, 리뷰 전체보기 페이지 (가짜 데이터) ----
+import { averageBody } from '../src/data/bodyAverages.js'
+import { outerKindOf } from '../src/lib/outerKind.js'
+import { productUrlOfReviewPage, reviewPageOfProduct } from '../src/lib/reviewPages.js'
+
+test('평균 체형: 키·몸무게가 크면 둘레가 커지고, 추정값은 성별 평균 회귀식에서 시작한다(다리·발은 한국인 비율)', () => {
+  const a = averageBody('male', 175, 70)
+  const b = averageBody('male', 175, 85)
+  assert.ok(b.chest > a.chest + 5 && b.waist > a.waist + 5, '몸무게가 늘면 둘레가 커짐')
+  assert.ok(averageBody('female', 160, 52).chest < a.chest, '여성 평균 가슴이 더 작음')
+  const v = estimateBody({ gender: 'male', height: 175, weight: 70 }).values
+  assert.ok(Math.abs(v.chest - a.chest) <= 0.5 && Math.abs(v.hip - a.hip) <= 0.5)
+  assert.equal(v.leg, Math.round(175 * 0.45 * 2) / 2)
+  assert.equal(v.footLength, Math.round((175 * 1.5) / 5) * 5)
+})
+
+test('선호 핏: 같은 후기·사이즈표라도 슬림 S, 레귤러 M, 오버핏 L로 추천이 달라진다', () => {
+  const chart = { category: 'top', headers: ['사이즈', '어깨', '가슴', '총장'], rows: [['S', '44', '104', '68'], ['M', '46', '110', '70'], ['L', '48', '116', '72'], ['XL', '50', '122', '74']], measures: { S: { shoulder: 44, chest: 104, topLength: 68 }, M: { shoulder: 46, chest: 110, topLength: 70 }, L: { shoulder: 48, chest: 116, topLength: 72 }, XL: { shoulder: 50, chest: 122, topLength: 74 } } }
+  const rv = (i) => ({ id: i, nick: 'a', text: `키 175 몸무게 70 M 샀어요 ${i}`, height: 175, weight: 70, size: 'M', fit: 'true', gender: 'male' })
+  const pick = (pf, reviews) => generateFitComment({ gender: 'male', height: 175, weight: 70, preferredFit: pf, measurements: {}, usual: {} }, { name: '옥스포드 셔츠', category: 'top', sizeChart: chart, reviews, optionLabels: [] }, {}, null)
+  for (const reviews of [[rv(1), rv(2), rv(3)], []]) {
+    assert.deepEqual(['slim', 'regular', 'relaxed'].map((pf) => pick(pf, reviews).recommendedSize), ['S', 'M', 'L'], `후기 ${reviews.length}건`)
+  }
+  assert.ok(pick('relaxed', [rv(1), rv(2), rv(3)]).body.includes('오버핏'))
+})
+
+test('아우터 세부 종류: 코트·롱패딩은 긴 표준 총장, 자켓·숏패딩은 짧은 총장으로 비교한다', () => {
+  assert.equal(outerKindOf('울 블렌드 롱코트').label, '롱코트')
+  assert.equal(outerKindOf('90S 버버리 더블 트렌치 코트').label, '코트')
+  assert.equal(outerKindOf('숏 패딩 점퍼').label, '패딩')
+  assert.equal(outerKindOf('토륨 재킷 남성').label, '자켓')
+  assert.equal(outerKindOf('옥스포드 셔츠', 'top'), null)
+  const p = { gender: 'male', height: 175, weight: 70 }
+  const coat = bodyValuesForProfile(p, { name: '트렌치 코트', category: 'outer' }).values.outerLength
+  const jk = bodyValuesForProfile(p, { name: '블루종 자켓', category: 'outer' }).values.outerLength
+  assert.ok(coat > jk + 25, `코트 ${coat} > 자켓 ${jk}`)
+  const used = analyzeUsedListing({ title: '90S 버버리 더블 트렌치 코트', text: '실측(단면CM) 가슴62 총장119' }, buildProfile({ gender: 'male', height: '175', weight: '70' }).profile)
+  const line = used.details.find((d) => d.startsWith('총장:')) || ''
+  assert.ok(line.includes(`내 ${coat}cm`), `코트 표준 총장(${coat})과 비교: ${line}`)
+})
+
+test('리뷰 전체보기 페이지: 무신사 상품 주소와 후기 주소를 서로 바꾼다', () => {
+  assert.equal(productUrlOfReviewPage('https://www.musinsa.com/review/goods/7588105?sort=up_cnt_desc'), 'https://www.musinsa.com/products/7588105')
+  assert.equal(reviewPageOfProduct('https://www.musinsa.com/products/7588105?x=1'), 'https://www.musinsa.com/review/goods/7588105')
+  assert.equal(productUrlOfReviewPage('https://www.musinsa.com/products/7588105'), null)
+  assert.equal(reviewPageOfProduct('https://evil.example/products/1'), null)
+})
+
+test('상품 대표 사진: og:image(https)만 읽고 결과에 상품명과 함께 담는다', () => {
+  const html = '<html><head><meta property="og:image" content="https://img.example/p.jpg"><title>t</title></head><body><h1>울 코트</h1></body></html>'
+  assert.equal(parsePage(fakeDocument(html), 'https://shop.example/p/1').image, 'https://img.example/p.jpg')
+  const bad = html.replace('https://img.example/p.jpg', 'javascript:alert(1)')
+  assert.equal(parsePage(fakeDocument(bad), 'https://shop.example/p/1').image, null)
+  const site = '<html><head><meta property="og:title" content="[W CONCEPT]"><title>[에잇세컨즈] 체크 셔츠</title></head><body><p>x</p></body></html>'
+  assert.equal(parsePage(fakeDocument(site), 'https://shop.example/p/1').name, '[에잇세컨즈] 체크 셔츠', '쇼핑몰 이름뿐인 제목은 건너뜀')
 })
 
 console.log(`\n${passed}개 통과`)

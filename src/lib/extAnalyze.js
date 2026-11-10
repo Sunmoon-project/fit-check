@@ -167,7 +167,8 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
   return {
     status: 'ok',
     name: product.name,
-    categoryLabel: CATEGORY_LABEL[product.category] || '',
+    image: product.image || null,
+    categoryLabel: [CATEGORY_LABEL[product.category] || '', result.outerKind?.label].filter(Boolean).join(' · '),
     category: product.category,
     categoryConfidence: product.categoryConfidence,
     categoryEvidence: product.categoryEvidence,
