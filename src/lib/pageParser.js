@@ -883,11 +883,20 @@ export function parseGender(text, strict = false) {
  * @param pageUrl 현재 주소 (표시용)
  * @returns 서버 파서와 같은 모양의 상품 객체 (엔진 입력). 이름도 못 읽으면 null.
  */
+const SITE_ONLY_NAME_RE = /^(?:\[?\s*w\s?concept\s*\]?|w컨셉(?:\s*\(w concept\))?|무신사|musinsa|29cm|번개장터|후[르루]츠\s?패밀리)$/i
+
 export function parsePage(root, pageUrl = '', opts = {}) {
   const ld = collectJsonLd(root)
   const ldProduct = ld.find((n) => isType(n, 'Product')) || null
   const h1 = clean(all(root, 'h1')[0]?.textContent)
-  const name = clean(ldProduct?.name || metaContent(root, 'og:title') || h1 || all(root, 'title')[0]?.textContent)
+  // nameOverride: 리뷰 전체보기 페이지처럼 상품명이 없는 페이지에서, 저장해 둔 상품명을 쓸 때
+  // 쇼핑몰 이름뿐인 제목('[W CONCEPT]')은 건너뛰고 다음 후보를 써요.
+  const nameCands = [opts.nameOverride, ldProduct?.name, metaContent(root, 'og:title'), h1, all(root, 'title')[0]?.textContent].map(clean)
+  const name = nameCands.find((n) => n && !SITE_ONLY_NAME_RE.test(n)) || nameCands.find(Boolean) || ''
+  // 대표 사진: og:image → JSON-LD image. https 주소만 써요(화면에 보여주기만 하고 저장·전송하지 않아요).
+  const ldImage = [].concat(ldProduct?.image || [])[0]
+  const imageRaw = metaContent(root, 'og:image') || (typeof ldImage === 'string' ? ldImage : ldImage?.url) || ''
+  const image = /^https:\/\//i.test(imageRaw) ? imageRaw.slice(0, 500) : /^\/\//.test(imageRaw) ? `https:${imageRaw}`.slice(0, 500) : null
   if (!name) return null
 
   const notes = []
@@ -1015,6 +1024,7 @@ export function parsePage(root, pageUrl = '', opts = {}) {
     url: pageUrl,
     source: 'extension',
     name: name.slice(0, 120),
+    image,
     category,
     categoryConfidence: cls.category === category ? cls.confidence : 'low',
     categoryEvidence: categoryInfo({ ...cls, category }).evidence,

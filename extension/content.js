@@ -9,9 +9,9 @@ import { shouldStop, isSafeMoreButton, isReviewTab, isInnerScroller, loadTarget,
 import { compareBody, countUpValue, similarityTier, TIER_LABEL, diffText, buySizeText } from '../src/lib/similarityBreakdown.js'
 import { EXT_PROFILE_KEY, isUsableProfile } from '../src/lib/extProfile.js'
 import { chromeAdapter, loadLearning, addSamples, resetLearning } from '../src/lib/learnStore.js'
-import { createSizeChartDb, SIZE_CHART_DB_STORAGE_NOTE } from '../src/lib/sizeChartDb.js'
+import { createSizeChartDb, SIZE_CHART_DB_STORAGE_NOTE, cleanUrl } from '../src/lib/sizeChartDb.js'
+import { productUrlOfReviewPage, reviewPageOfProduct } from '../src/lib/reviewPages.js'
 import { LEARNING_NOTE, LEARNING_STORAGE_NOTE } from '../src/lib/learnedModel.js'
-import { REGION_HYPOTHESIS_NOTE } from '../src/lib/brandRegion.js'
 import { isUsedListingPage, usedSiteOf, readListing, listingText } from '../src/lib/usedListing.js'
 import { usedSearchQuery, findChartMatches } from '../src/lib/usedAnalyze.js'
 
@@ -59,6 +59,9 @@ const CSS = `
 .badge{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:#f4f4f5}
 .size{font-size:34px;font-weight:800;letter-spacing:-.03em;line-height:1.15;margin:4px 0 0;transform-origin:left center;animation:pop .5s var(--e) .08s both}
 .sum{margin:8px 0 0;color:#555;font-size:12px}
+.prd{display:flex;gap:10px;align-items:center;margin:0 0 10px}
+.prd img{width:52px;height:52px;flex:none;object-fit:cover;border-radius:8px;background:#f4f4f5}
+.prd b{font-size:12.5px;font-weight:700;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .why{margin:6px 0 0;padding-left:16px;color:#52525b;font-size:12px}
 .why li+li{margin-top:2px}
 h3{margin:10px 0 2px;font-size:13px}
@@ -1145,6 +1148,33 @@ function quietWait(quietMs, maxMs, state) {
 // 마지막 리뷰 쪽으로 스크롤하고(안쪽 스크롤 상자가 있으면 그 상자도 끝까지), 허용된 '더보기'·'다음'·다음 쪽 번호를 단계마다 최대 한 번 누릅니다.
 // 더보기 버튼이 안 보이면 처음 한 번만 '스냅·후기' 같은 리뷰 탭을 눌러 리뷰 영역을 열어요(findReviewTab 조건일 때만).
 // 목표 건수·한도(횟수·시간·정체)·중단 버튼으로 멈추고, 끝나면 항상 원래 스크롤 위치로 돌아옵니다.
+// 가상 스크롤 리뷰 목록(무신사 후기 전체보기: 화면 근처 몇 건만 DOM에 있고 지나간 카드는 지워짐)은
+// 스크롤하며 본 카드를 복사해 숨긴 상자에 모아 두고, 분석은 모은 카드까지 함께 읽어요. 이 페이지 안에서만 쓰고 저장·전송하지 않아요.
+const VIRTUAL_REVIEWS = !!productUrlOfReviewPage(location.href)
+// 무신사는 상품 페이지에서도 화면 밖 리뷰를 지울 때가 있어, 무신사에서는 본 카드를 항상 모아 둬요.
+const HARVEST_REVIEWS = VIRTUAL_REVIEWS || /(?:^|\.)musinsa\.com$/.test(location.hostname)
+let harvestBox = null
+const harvested = new Set()
+function harvestReviewCards() {
+  if (!HARVEST_REVIEWS || !document.body) return
+  if (!harvestBox || !harvestBox.isConnected) {
+    harvestBox = document.createElement('div')
+    harvestBox.hidden = true
+    harvestBox.setAttribute('data-fitcheck', 'reviews')
+    document.body.append(harvestBox)
+  }
+  const cards = VIRTUAL_REVIEWS ? document.querySelectorAll('[data-index]') : readReviewCardEls(document)
+  for (const c of cards) {
+    if (harvestBox.contains(c)) continue
+    const t = (c.textContent || '').trim()
+    // 리뷰 카드만(구매 옵션·체형 정보가 있는 칸), 안쪽 [data-index]는 바깥 카드에 포함돼요.
+    if (t.length < 20 || harvested.has(t) || !/구매\s?옵션|체형\s?정보/.test(t) || (VIRTUAL_REVIEWS && c.parentElement?.closest?.('[data-index]'))) continue
+    harvested.add(t)
+    // 가상 목록의 줄 감싸개(data-index, 자식 1개)는 벗기고 리뷰 카드 자체를 모아야 카드들이 형제로 반복돼 카드 단위로 읽혀요.
+    harvestBox.append((VIRTUAL_REVIEWS && c.children.length === 1 ? c.firstElementChild : c).cloneNode(true))
+  }
+}
+
 async function loadMoreReviews(mode, onProgress) {
   const { scrollX, scrollY } = window
   const state = { aborted: false, wake: null }
@@ -1154,27 +1184,32 @@ async function loadMoreReviews(mode, onProgress) {
   let steps = 0
   let stalls = 0
   let clicked = false
-  let count = reviewElements().length
+  harvestReviewCards()
+  const countNow = () => (HARVEST_REVIEWS ? harvested.size : reviewElements().length)
+  let count = countNow()
   const startCount = count
   const target = loadTarget(count, mode)
   let reason = null
   const total = readReviewTotal(document) // 못 찾으면 null
   onProgress(count)
   try {
-    if (count < target && !findMoreButton()) {
+    // 리뷰가 아직 하나도 안 그려졌으면(화면에 다가가야 그리는 페이지) 리뷰 탭을 눌러 리뷰 영역으로 먼저 가요.
+    if (count < target && (count === 0 || !findMoreButton())) {
       const tab = findReviewTab()
       if (tab) {
         tab.click()
         await quietWait(STEP_QUIET_MS, STEP_WAIT_MS, state)
-        count = reviewElements().length
+        count = countNow()
         onProgress(count)
       }
     }
     while (!(reason = shouldStop({ steps, elapsedMs: Date.now() - startedAt, stalls, aborted: state.aborted, count, total, target }))) {
       const list = reviewElements()
-      const last = list[list.length - 1]
-      if (last && typeof last.scrollIntoView === 'function') last.scrollIntoView({ block: 'center' })
-      const box = innerScroller(last)
+      const last = VIRTUAL_REVIEWS ? null : list[list.length - 1]
+      // 가상 목록이거나, 리뷰가 화면에 다가가야 그려지는 페이지(아직 리뷰 0건)는 화면을 조금씩 내려요.
+      if (!last) { if (typeof window.scrollBy === 'function') window.scrollBy({ top: Math.round((window.innerHeight || 800) * (VIRTUAL_REVIEWS ? 1.2 : 0.8)), behavior: 'instant' }) }
+      else if (typeof last.scrollIntoView === 'function') last.scrollIntoView({ block: 'center' })
+      const box = last ? innerScroller(last) : null
       if (box) {
         if (!scrollers.has(box)) scrollers.set(box, box.scrollTop)
         box.scrollTop = box.scrollHeight
@@ -1185,18 +1220,27 @@ async function loadMoreReviews(mode, onProgress) {
         clicked = true
       }
       await quietWait(STEP_QUIET_MS, STEP_WAIT_MS, state)
+      harvestReviewCards()
       steps += 1
-      const next = reviewElements().length
-      stalls = next > count ? 0 : stalls + 1
+      const next = countNow()
+      // 리뷰가 아직 하나도 안 보이면 첫 카드가 나올 때까지(최대 8단계) 멈춘 것으로 세지 않아요.
+      // 가상 목록은 새 카드가 늦게 그려질 때가 있어 멈춤을 절반씩만 세요.
+      stalls = next > count || (next === 0 && steps < 8) ? 0 : stalls + (VIRTUAL_REVIEWS ? 0.5 : 1)
       count = next
       onProgress(count)
     }
+  } catch (e) {
+    restore()
+    throw e
   } finally {
-    for (const [box, top] of scrollers) box.scrollTop = top
-    window.scrollTo({ left: scrollX, top: scrollY, behavior: 'instant' }) // smooth 스크롤 설정을 무시
     loader = null
   }
-  return { reason, clicked, grewOnPage: count > startCount }
+  // 스크롤은 분석을 마친 뒤 되돌려요: 화면 밖 리뷰를 지우는 사이트(무신사)에서 되돌린 직후 읽으면 리뷰가 0건이 돼요.
+  return { reason, clicked, grewOnPage: count > startCount, restore }
+  function restore() {
+    for (const [box, top] of scrollers) box.scrollTop = top
+    if (typeof window.scrollTo === 'function') window.scrollTo({ left: scrollX, top: scrollY, behavior: 'instant' }) // smooth 스크롤 설정을 무시
+  }
 }
 
 // 중고 판매글 페이지면 이 브라우저의 사이즈표 모음에서 비슷한 상품을 미리 찾아 둬요(네트워크 없음). 중고 사이트가 아니거나 실패하면 빈 목록이에요.
@@ -1222,7 +1266,20 @@ async function analyzeLearning(profile, opts) {
     model = null
   }
   const usedChartMatches = await usedChartMatchesFor(adapter)
+  // 리뷰 전체보기 페이지: 상품 페이지에서 저장해 둔 사이즈표·상품명·종류를 가져와 이 페이지의 많은 리뷰와 함께 분석해요.
+  const productUrl = productUrlOfReviewPage(location.href)
+  let fromProduct = null
+  if (productUrl && !opts.extraRows) {
+    try {
+      const entry = (await createSizeChartDb(adapter).list()).find((e) => e.url === cleanUrl(productUrl))
+      if (entry?.sizeChart?.rows?.length) fromProduct = entry
+    } catch {
+      fromProduct = null
+    }
+    if (fromProduct) opts = { ...opts, extraRows: [[fromProduct.sizeChart.headers, ...fromProduct.sizeChart.rows]], nameOverride: fromProduct.model }
+  }
   let out = analyzePage(document, location.href, profile, EXT_VERSION, { ...opts, learned: model, collectSamples: true, usedChartMatches })
+  if (productUrl) out = { ...out, reviewPage: { productUrl, chartFound: !!fromProduct }, chartRecord: null }
   // 사이즈표를 읽은 상품만 사이즈표 모음에 저장해요(같은 상품은 갱신). 실패해도 분석 결과는 그대로 보여줘요.
   if (out.status === 'ok' && out.chartRecord) {
     try {
@@ -1234,7 +1291,7 @@ async function analyzeLearning(profile, opts) {
   if (out.status === 'ok' && out.learnSamples?.length) {
     try {
       const r = await addSamples(adapter, out.learnSamples)
-      if (r.added > 0) out = { ...analyzePage(document, location.href, profile, EXT_VERSION, { ...opts, learned: r.model, collectSamples: false }), chartRecord: out.chartRecord }
+      if (r.added > 0) out = { ...analyzePage(document, location.href, profile, EXT_VERSION, { ...opts, learned: r.model, collectSamples: false }), chartRecord: out.chartRecord, reviewPage: out.reviewPage }
     } catch {
       /* 저장 실패해도 분석 결과는 그대로 보여줘요 */
     }
@@ -1290,12 +1347,19 @@ function chartDbBlock(r) {
 
 // 불러온 뒤 다시 분석하고 결과 한 줄과 진단 값을 붙여요. before는 불러오기 전 카드에 보이던 리뷰 수예요.
 async function reanalyzeAfterLoad(profile, before, res) {
-  const next = await analyzeLearning(profile, { categoryOverride: chosenCategory, ...(chosenExtraRows ? { extraRows: chosenExtraRows } : {}) })
+  let next
+  try {
+    next = await analyzeLearning(profile, { categoryOverride: chosenCategory, ...(chosenExtraRows ? { extraRows: chosenExtraRows } : {}) })
+  } finally {
+    res.restore?.()
+  }
   if (chosenExtraRows) next.manual = true
   if (next.status === 'ok') {
     const scroll = { before, after: next.reviewsLoaded ?? 0, stop: toReportStop(res.reason) }
     next.diagnostics = collectDiagnostics(document, location.href, EXT_VERSION, { scroll })
     next.loadInfo = loadResultText({ before, after: scroll.after, reason: res.reason, clicked: res.clicked, grewOnPage: res.grewOnPage })
+    // 무신사 상품 페이지는 후기가 몇 건만 보여요: '리뷰 탭' 대신 후기 전체보기 페이지로 안내해요(링크는 아래에 있어요).
+    if (reviewPageOfProduct(location.href)) next.loadInfo = next.loadInfo.replace(' — 리뷰 탭을 열고 다시 눌러 주세요', ' — 후기 전체보기 페이지에서 더 많이 분석할 수 있어요')
   }
   return next
 }
@@ -1447,6 +1511,14 @@ function loadMoreBlock(r) {
   const btns = el('div', 'btns')
   btns.append(btn, stop)
   box.append(btns, prog)
+  // 무신사 상품 페이지에는 후기가 몇 건만 보여요. 후기 전체보기 페이지에서 다시 누르면 저장한 사이즈표로 더 많은 후기를 분석해요.
+  const allReviews = reviewPageOfProduct(location.href)
+  if (allReviews) {
+    const a = el('a', 'weblink', '후기 전체보기 페이지에서 더 많은 후기로 분석하기')
+    a.href = allReviews
+    box.append(a)
+  }
+  if (r.reviewPage) box.append(el('p', 'tiny', r.reviewPage.chartFound ? '상품 페이지에서 저장한 사이즈표로 분석했어요.' : '사이즈표가 없어요. 상품 페이지에서 먼저 한 번 분석하면 사이즈표도 함께 써요.'))
   return box
 }
 
@@ -1518,21 +1590,39 @@ async function reanalyzeWithCategory(key) {
 }
 
 // 중고 판매글 결과 카드: 후기 없이 판매글 실측 > 사이즈표 DB > 기본값 순서로 판정해요. 판매글에서 읽은 글은 textContent로만 넣어요.
+// 상품 대표 사진 + 이름 (페이지에서 읽은 그대로 보여주기만 해요). 사이트 이름 꼬리('- 사이즈 & 후기 | 무신사')는 떼요.
+const SITE_TAIL_RE = /\s*[|｜\-–]\s*(?:사이즈\s*&\s*후기\s*[|｜]\s*)?(?:무신사|musinsa|모든 취향 곁에,?\s*29CM|29CM|W컨셉.*|wconcept.*|후[르루]츠\s?패밀리|번개장터|아크테릭스코리아)\s*$/i
+function productHead(name, image) {
+  const title = String(name || '').replace(/^아크테릭스코리아\s*:\s*/, '').replace(SITE_TAIL_RE, '').trim()
+  if (!title && !image) return null
+  const box = el('div', 'prd')
+  if (image && /^https:\/\//i.test(image)) {
+    const img = el('img')
+    img.src = image
+    img.alt = ''
+    img.loading = 'lazy'
+    img.referrerPolicy = 'no-referrer'
+    img.addEventListener('error', () => img.remove())
+    box.append(img)
+  }
+  if (title) box.append(el('b', null, title))
+  return box
+}
+
 function usedCard(card, r) {
   const conf = el('span', 'badge', r.confidenceLabel.text)
   conf.style.color = r.confidenceLabel.color
   const row = el('div', 'row')
   row.append(el('span', 'eyebrow', [r.site?.name, r.categoryLabel].filter(Boolean).join(' · ') || '중고 판매글'), conf)
+  const head = productHead(r.title, r.photos?.[0])
+  if (head) card.append(head)
   card.append(row)
-  if (r.title) card.append(el('p', 'tiny', r.title))
   card.append(el('div', 'size', r.verdictLabel || '판정 어려움'))
   card.append(el('p', 'sum', r.headline))
-  card.append(el('p', 'tiny', `근거: ${r.basisLabel}${r.approx ? ' (근사/추정)' : ''}`))
+  card.append(el('p', 'tiny', `근거: ${r.basisLabel}${r.approx ? ' (근사/추정)' : ''} · 후기 없이 판매글로 계산`))
   if (r.perSize?.length) card.append(el('p', 'tiny', `사이즈별: ${r.perSize.map((p) => `${p.size} ${p.label}`).join(' · ')}`))
-  card.append(el('p', 'tiny', r.noReviewNote))
-  card.append(el('p', 'tiny', r.disclaimer))
   // 사진 역검색은 서버가 필요해서 확장에서는 호출하지 않아요(확장은 네트워크 호출 없음). 웹 앱의 '중고 상품 분석'으로 가는 링크만 둬요.
-  const photoLink = el('a', 'weblink', '사진으로 같은 상품 찾기는 웹 앱 ‘중고 상품 분석’에서 (개발 서버 localhost:5173)')
+  const photoLink = el('a', 'weblink', '사진으로 같은 상품 찾기 (웹 앱)')
   photoLink.href = WEB_APP_OPEN_URL
   photoLink.target = '_blank'
   photoLink.rel = 'noopener noreferrer'
@@ -1582,6 +1672,8 @@ function renderResult(r) {
     // 기본으로 보이는 것: 추천 사이즈, 확신도, 근거 한 줄, 필수 고지 한 줄, 리뷰 더 불러오기. 나머지는 접어 둡니다.
     const conf = el('span', 'badge', r.confidenceLabel.text)
     conf.style.color = r.confidenceLabel.color
+    const head = productHead(r.name, r.image)
+    if (head) card.append(head)
     const row = el('div', 'row')
     row.append(el('span', 'eyebrow', r.categoryLabel), conf)
     card.append(row)
@@ -1592,7 +1684,6 @@ function renderResult(r) {
     if (noticeBox) card.append(noticeBox)
     if (r.recommendedSize) card.append(el('div', 'size', r.recommendedLabel || r.recommendedSize))
     card.append(el('p', 'sum', r.manual ? `${r.summary} · 직접 입력한 사이즈표` : r.summary))
-    card.append(el('p', 'tiny', '참고용이에요. 확신도는 정확도를 측정한 값이 아니에요.'))
     const fold = el('div', 'fold')
     fold.append(loadMoreBlock(r))
     if (r.loadInfo) fold.append(el('p', 'tiny', r.loadInfo))
@@ -1614,7 +1705,6 @@ function renderResult(r) {
       const dul = el('ul', 'why details')
       for (const t of r.details) dul.append(el('li', null, t))
       dt.body.append(dul)
-      if (r.regionInfo) dt.body.append(el('p', 'tiny', REGION_HYPOTHESIS_NOTE))
       fold.append(dt.det)
     }
     if (r.sizeSystem) {
