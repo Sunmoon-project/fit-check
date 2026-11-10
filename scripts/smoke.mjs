@@ -6432,4 +6432,55 @@ test('다리길이: 직접 재면 바지 총장 기준이 키 대신 다리길�
   assert.ok(readFileSync('extension/popup.html', 'utf8').includes('name="m-leg"'), '팝업에 다리길이 칸')
 })
 
+// ---- 실제 사이트 점검(2026-11-10)에서 찾은 문제 회귀 테스트 (가짜 HTML·가짜 글) ----
+const coatCard = (i, feel) =>
+  `<li class="rv"><div class="u"><span class="n">닉${i}</span></div>` +
+  `<div class="pr"><span class="l">상품명</span><span class="v">발마칸 코트</span></div>` +
+  `<div class="o"><span class="l">구매옵션</span><span class="v">차콜 · 1 (M)</span></div>` +
+  `<div class="b"><span class="l">체형정보</span><span class="v">남성 · 173cm · 72kg</span></div>` +
+  `<div class="m"><span class="l">만족도</span><span class="v">사이즈 ${feel} · 화면 대비 색감 화면과 비슷 · 퀄리티 보통</span></div>` +
+  `<p class="t">원단이 좋고 소매빼고 딱 맞아요 가성비 최고입니다 ${i}</p></li>`
+const MUSINSA_LIKE = `<html><head><title>모두의 캐시미어 발마칸 코트</title></head><body><h1>모두의 캐시미어 발마칸 코트</h1>` +
+  `<div class="wrap"><ul class="labels"><li>cm</li><li>내 사이즈</li><li>1 (M)</li><li>2 (L)</li><li>3 (XL)</li></ul>` +
+  `<div class="scroll"><table><tr><th>1총장</th><th>2어깨너비</th><th>3가슴단면</th><th>4소매길이</th></tr>` +
+  `<tr><td>사이즈를 직접 입력해주세요</td></tr><tr><td>111</td><td>-</td><td>63</td><td>76</td></tr>` +
+  `<tr><td>113</td><td>-</td><td>65.5</td><td>78</td></tr><tr><td>115</td><td>-</td><td>68</td><td>80</td></tr></table></div></div>` +
+  `<ul class="rvs">${coatCard(1, '커요')}${coatCard(2, '정사이즈')}${coatCard(3, '커요')}</ul></body></html>`
+
+test('무신사형: 사이즈 이름이 표 밖 목록에 있어도 사이즈표를 읽고, 만족도의 "사이즈 커요"를 본문보다 먼저 핏으로 쓴다', () => {
+  const p = parsePage(fakeDocument(MUSINSA_LIKE), 'https://shop.example/p/9')
+  assert.ok(p.sizeChart, '사이즈표를 읽음')
+  const ms = Object.values(p.sizeChart.measures)
+  assert.equal(ms.length, 3)
+  assert.equal(ms[0].chest, 126, '가슴 단면 63 → 둘레 126')
+  const fits = p.reviews.map((r) => r.fit).sort()
+  assert.deepEqual(fits, ['large', 'large', 'true'], `본문 "딱 맞아요"보다 만족도 칸이 우선: ${fits}`)
+})
+
+test('중고 판매글: 사이트 이름뿐인 제목은 버리고 가격 위 줄을 상품명으로, 화장은 어깨가 있을 때만 소매로, "총장(상의)" 읽기', () => {
+  const doc = fakeDocument('<html><head><meta property="og:title" content="번개장터"></head><body><div>90S 버버리 트렌치 코트</div></body></html>')
+  const root = { querySelector: (q) => doc.querySelector(q), querySelectorAll: (q) => doc.querySelectorAll(q), body: { innerText: '남성의류\n아우터\n90S 버버리 트렌치 코트\n180,000원\n가슴 : 62 총장 : 119' } }
+  assert.equal(readListing(root).title, '90S 버버리 트렌치 코트')
+  const coat = parseListingText('실측(단면CM) 가슴62 어깨+소매79 총장119', { title: '90S 버버리 트렌치 코트' })
+  assert.equal(coat.category, 'outer')
+  assert.ok(!coat.measuresBySize.default.arm, '어깨너비 없이 화장은 소매로 쓰지 않음')
+  const jk = parseListingText('어깨 50 화장 80 가슴 60 총장 75', { title: '울 자켓' }).measuresBySize.default
+  assert.equal(jk.arm.cm, 55, '화장 80 − 어깨 50/2')
+  const fur = parseListingText('총장(상의)\n72 cm\n어깨 너비\n40 cm', { title: '레오파드 퍼코트' }).measuresBySize.default
+  assert.equal(fur.outerLength.cm, 72)
+})
+
+test('사이즈표: 인치 머리글은 cm로 바꾸고(범위는 가운데값), 상의의 가슴·허리·엉덩이 표는 신체 치수표로 보고 여유분을 더한다', () => {
+  const inch = analyzeSizeCharts([[['사이즈', 'XS', 'S'], ['가슴둘래 (inch)', '32', '33~ 34'], ['허리둘래 (inch)', '24', '25~ 26'], ['엉덩이둘래 (inch)', '34', '35~ 36']]], 'top').chart
+  assert.equal(inch.measures.XS.chest, Math.round((32 * 2.54 + 8) * 10) / 10)
+  assert.equal(inch.measures.S.waist, Math.round((25.5 * 2.54 + 5) * 10) / 10)
+  const arc = analyzeSizeCharts([[['사이즈', '소매', '가슴', '허리', '엉덩이'], ['S', '83', '94', '79', '93'], ['M', '86', '102', '84', '98']]], 'outer').chart
+  assert.equal(arc.measures.M.chest, 110)
+  assert.equal(arc.measures.M.arm, undefined, '등 중심 소매는 비교 안 함')
+  assert.ok(arc.view.bodyChart)
+  const garment = analyzeSizeCharts([[['사이즈', '어깨', '가슴', '총장'], ['M', '46', '112', '70'], ['L', '48', '118', '72']]], 'top').chart
+  assert.equal(garment.measures.M.chest, 112, '옷 실측표는 그대로')
+  assert.ok(!garment.view.bodyChart)
+})
+
 console.log(`\n${passed}개 통과`)

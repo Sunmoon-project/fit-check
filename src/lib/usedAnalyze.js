@@ -196,7 +196,7 @@ export function analyzeUsedListing(listing, profile, opts = {}) {
 
   const hasVerdict = !!chosen?.verdict
   const confidence = hasVerdict ? (USED_MAX_CONFIDENCE === 'medium' && chosen.confidence === 'medium' ? 'medium' : 'low') : 'low'
-  const sizeText = chosen?.size ? `${chosen.size} 사이즈` : '판매 사이즈를 알 수 없는 상태'
+  const sizeText = chosen?.size ? (/사이즈$/.test(chosen.size) ? chosen.size : `${chosen.size} 사이즈`) : '판매 사이즈를 알 수 없는 상태'
   const reasons = []
   if (!hasVerdict) reasons.push('판매글에서 쓸 수 있는 실측이나 사이즈 표기를 찾지 못해 판정하지 않았어요.')
   else {
