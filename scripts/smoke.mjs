@@ -6539,4 +6539,60 @@ test('상품 대표 사진: og:image(https)만 읽고 결과에 상품명과 함
   assert.equal(parsePage(fakeDocument(site), 'https://shop.example/p/1').name, '[에잇세컨즈] 체크 셔츠', '쇼핑몰 이름뿐인 제목은 건너뜀')
 })
 
+// ---- 가격 비교 (가짜 화면 글·가짜 저장소, 실제 쇼핑몰 화면 구조(2026-11-10)를 줄여 옮김) ----
+import { extractPrices, priceEntryOf, comparePrices, rankPrices, isSameItem, searchLinks, searchQueryOf, createPriceStore } from '../src/lib/priceInfo.js'
+
+test('가격 읽기: 쇼핑몰별 정가·판매가·첫 구매가를 읽고 적립금·결제 혜택은 빼고 최대 할인가를 고른다', () => {
+  const ms = extractPrices({ name: '모두의 캐시미어 발마칸 코트_2 COLOR', lines: ['모두의 캐시미어 발마칸 코트_2 COLOR', '후기 166개', '198,800원', '35%', '129,000원', '첫 구매 20% 쿠폰 받으러 가기', '2,500원', '최대 적립', '장바구니', '99,000원'] })
+  assert.deepEqual([ms.list, ms.sale, ms.best, ms.discountPct], [198800, 129000, 129000, 35])
+  const c29 = extractPrices({ name: '플라이트 자켓 카키', ldPrice: 160420, lines: ['플라이트 자켓 카키', '189,900원', '40%', '113,900원', '쿠폰받기', '40%', '109,000원', '첫 구매가'] })
+  assert.deepEqual([c29.list, c29.sale, c29.first, c29.best], [189900, 113900, 109000, 113900], '첫 구매가는 최대 할인가에 넣지 않음')
+  const wc = extractPrices({ name: '오버핏 반팔 체크 셔츠 네이비', lines: ['오버핏 반팔 체크 셔츠 네이비', '29,900원', '1%', '29,580', '원', '추가혜택가', 'Toss Pay 할인 3,000원 할인'] })
+  assert.deepEqual([wc.list, wc.sale, wc.best], [29900, 29580, 29580])
+  const cp = extractPrices({ name: '울 코트 블랙', lines: ['울 코트 블랙', '200,000원', '20%', '160,000원', '최대혜택가', '150,000원'] })
+  const sticky = extractPrices({ name: '울 코트 블랙', lines: ['울 코트 블랙', '129,000원', '구매하기', '...', '울 코트 블랙', '198,800원', '35%', '129,000원'] })
+  assert.deepEqual([sticky.list, sticky.sale], [198800, 129000], '스크롤 고정 바보다 가격 정보가 많은 곳')
+  assert.equal(cp.coupon, 150000)
+  assert.equal(cp.best, 150000)
+  assert.equal(extractPrices({ name: '없는 이름', lines: ['10,000원'], ldPrice: 730000 }).best, 730000, '상품명을 못 찾으면 JSON-LD 값')
+  const ssr = extractPrices({ name: '울 코트 블랙', lines: ['울 코트 블랙', '198,800원'], ldPrice: 129000 })
+  assert.deepEqual([ssr.list, ssr.sale], [198800, 129000], '글에 정가만 있고 JSON-LD가 더 싸면 정가·판매가로')
+})
+
+test('가격 비교: 품번이나 같은 브랜드·비슷한 이름이면 같은 상품으로 묶어 최대 할인가 순으로, 최저에 표시', () => {
+  const p = (url, name, best, code = '') => ({ ...priceEntryOf({ name, url, chartCode: code }, { list: null, sale: best, coupon: null, first: null, best }), seenAt: 1 })
+  const a = p('https://www.musinsa.com/products/1', '나이키 클럽 후디 그레이 (BV2654-063)', 79000)
+  const b = p('https://www.29cm.co.kr/products/2', '[나이키] 클럽 플리스 후디 BV2654-063', 69000)
+  const c = p('https://www.wconcept.co.kr/Product/3', '아디다스 트레포일 후디', 59000)
+  assert.ok(isSameItem(a, b), '품번이 같으면 같은 상품')
+  assert.ok(!isSameItem(a, c))
+  const rows = comparePrices(a, [a, b, c])
+  assert.deepEqual(rows.map((r) => [r.mall, r.cheapest, r.diff]), [['29cm.co.kr', true, 0], ['musinsa.com', false, 10000]])
+  assert.equal(rankPrices([a, c], a)[0].mall, 'wconcept.co.kr')
+  assert.equal(searchQueryOf('[DIMITRI X 젠플록스] © 모두의 캐시미어 발마칸 코트_2 COLOR'), '모두의 캐시미어 발마칸 코트')
+  const links = searchLinks('울 코트', 'musinsa.com')
+  assert.ok(!links.some((l) => l.label === '무신사') && links.every((l) => l.url.startsWith('https://')))
+})
+
+await atest('가격 기록: 같은 주소는 최신으로 바꾸고, 가격 없는 항목은 저장하지 않는다 (가짜 저장소)', async () => {
+  const m = new Map()
+  const store = createPriceStore({ get: async (k) => m.get(k) ?? null, set: async (k, v) => (m.set(k, v), true), remove: async (k) => m.delete(k) })
+  const e = (best, t) => ({ url: 'https://a.example/p/1', mall: 'a.example', name: 'x', prices: { best }, seenAt: t })
+  await store.put(e(1000, 1))
+  await store.put(e(900, 2))
+  assert.equal(await store.put({ url: 'https://a.example/p/2', prices: {} }), false)
+  const list = await store.list()
+  assert.deepEqual(list.map((x) => x.prices.best), [900])
+})
+
+test('가격: 서버 파서는 JSON-LD 가격을 숫자로, 옷장 항목은 숫자 가격만 담고, 웹 가격 비교 탭은 옷장에서 본 가격을 묶어 보여준다', () => {
+  const html = '<html><head><script type="application/ld+json">{"@type":"Product","name":"울 코트","offers":{"price":"129000","priceCurrency":"KRW"}}</script></head><body><h1>울 코트</h1></body></html>'
+  assert.equal(parseProductHtml(html, 'https://shop.example/p/1').prices.best, 129000)
+  const item = sanitizeItem({ product: { name: '울 코트', mall: 'a', category: 'outer', url: 'https://a.example/p/1' }, size: 'M', prices: { best: 129000, list: '<b>', sale: 129000 } }, { now: 5 })
+  assert.deepEqual(item.prices, { list: null, sale: 129000, coupon: null, first: null, best: 129000 })
+  const w = (url, name, best) => ({ id: url, savedAt: 1, product: { name, url, category: 'outer' }, prices: { best, sale: best }, priceSeenAt: 1 })
+  const html2 = textOf(render(WEB.PriceCompare, { wardrobe: [w('https://www.musinsa.com/products/1', '나이키 클럽 후디 BV2654-063', 79000), w('https://www.29cm.co.kr/products/2', '나이키 클럽 후디 BV2654-063', 69000)], onBack: () => {} }))
+  assert.ok(html2.includes('가격 비교') && html2.includes('29CM') && html2.includes('최저') && html2.includes('69,000원'), html2.slice(0, 300))
+})
+
 console.log(`\n${passed}개 통과`)
