@@ -116,6 +116,7 @@ cp .env.example .env
 | `HF_TOKEN` | Hugging Face 무료 토큰. 넣으면 하루 무료 GPU 사용량이 늘어나요. 서버에서만 읽어요. |
 | `HF_SPACE` | 가상 피팅에 쓸 Space (기본 `yisol/IDM-VTON`) |
 | `IMAGE_SEARCH_PROVIDER`, `IMAGE_SEARCH_API_KEY` | 중고 상품 사진 검색 (`google-vision`). 둘 다 있어야 켜져요. |
+| `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET` | 웹 `가격 비교` 탭의 네이버 쇼핑 최저가 검색. [네이버 개발자센터](https://developers.naver.com/apps)에서 `검색` API 애플리케이션을 등록하면 무료(하루 25,000회)로 받아요. 둘 다 있어야 켜지고, 서버에서만 읽어요. |
 
 아무것도 넣지 않아도 실행돼요. 토큰은 [Hugging Face 설정](https://huggingface.co/settings/tokens)에서 무료로 만들 수 있어요.
 

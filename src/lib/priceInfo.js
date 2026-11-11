@@ -151,6 +151,7 @@ export const SEARCH_MALLS = [
   { mall: 'musinsa.com', label: '무신사', url: (q) => `https://www.musinsa.com/search/goods?keyword=${q}` },
   { mall: '29cm.co.kr', label: '29CM', url: (q) => `https://www.29cm.co.kr/store/search?keyword=${q}` },
   { mall: 'wconcept.co.kr', label: 'W컨셉', url: (q) => `https://display.wconcept.co.kr/search?keyword=${q}` },
+  { mall: 'naver.com', label: '네이버 쇼핑', url: (q) => `https://search.shopping.naver.com/search/all?query=${q}` },
   { mall: 'bunjang.co.kr', label: '번개장터(중고)', url: (q) => `https://m.bunjang.co.kr/search/products?q=${q}` },
   { mall: 'fruitsfamily.com', label: '후르츠패밀리(중고)', url: (q) => `https://fruitsfamily.com/search/${q}` },
 ]

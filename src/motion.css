@@ -236,3 +236,5 @@ details[open] > summary::after { transform: translateY(1px) rotate(-135deg); }
 .pc-links a { text-decoration: none; }
 .pc-sub { margin: 22px 0 4px; font-size: 15px; }
 @media (prefers-reduced-motion: reduce) { .pc-verdict, .pc-list li { animation: none; } }
+.pc-row { display: flex; gap: 8px; margin: 8px 0; }
+.pc-q { flex: 1; min-width: 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); font: inherit; font-size: 13px; }
