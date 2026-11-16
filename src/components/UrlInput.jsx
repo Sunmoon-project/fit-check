@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { findProductByUrl } from '../data/mockData.js'
 import { Thumb, VerdictLine } from './Wardrobe.jsx'
 import { CATEGORY_LABEL } from '../data/measurements.js'
-import { NO_SERVER } from '../lib/runtime.js'
+import { NO_SERVER, apiUrl } from '../lib/runtime.js'
 
 // 다른 쇼핑몰 상품 링크를 붙여넣으면 서버(/api/product)가 페이지를 읽어 상품·사이즈표·리뷰를 가져옵니다.
 // 아래 '최근 담은 옷'은 옷장에 담은 옷 중 최근 것이고, 누르면 그 상품을 다시 분석해요.
@@ -37,7 +37,7 @@ export default function UrlInput({ onProduct, recent = [] }) {
 
     setLoading(true)
     try {
-      const res = await fetch('/api/product', {
+      const res = await fetch(apiUrl('/api/product'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: target }),

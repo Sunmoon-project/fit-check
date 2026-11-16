@@ -47,7 +47,7 @@ import vm from 'node:vm'
 import { build as viteBuild } from 'vite'
 import { findSimilar, describeDiff, categoryGroup, makeWardrobeItem } from '../src/lib/wardrobe.js'
 import { isPrivateIp, decodeHtml, safeLookup } from '../server/safeFetch.js'
-import { checkPostRequest } from '../server/api.js'
+import { checkPostRequest, parseAllowedOrigins } from '../server/api.js'
 import {
   parseHeightCm, parseWeightKg, normalizeFit, normalizeRow, normalizeLines,
   confusionMatrix, accuracy, precisionRecall, neighborVotePredictions, trueRateByBucket, evaluate,
@@ -305,6 +305,17 @@ test('checkPostRequest: JSON + 같은 출처만 허용', () => {
   assert.equal(checkPostRequest({ host }).status, 415)
   assert.equal(checkPostRequest({ host, 'content-type': 'application/json', origin: 'https://evil.example' }).status, 403)
   assert.equal(checkPostRequest({ host, 'content-type': 'application/json', origin: 'null' }).status, 403)
+})
+
+test('checkPostRequest: ALLOWED_ORIGINS에 적은 출처(모바일 앱)만 추가로 허용', () => {
+  const host = 'api.example.com'
+  const allowed = parseAllowedOrigins('https://localhost, capacitor://localhost/ ,')
+  assert.deepEqual(allowed, ['https://localhost', 'capacitor://localhost'])
+  assert.equal(checkPostRequest({ host, 'content-type': 'application/json', origin: 'https://localhost' }, allowed), null)
+  assert.equal(checkPostRequest({ host, 'content-type': 'application/json', origin: 'capacitor://localhost' }, allowed), null)
+  assert.equal(checkPostRequest({ host, 'content-type': 'application/json', origin: 'https://evil.example' }, allowed).status, 403)
+  assert.equal(checkPostRequest({ host, 'content-type': 'application/json', origin: 'https://localhost' }).status, 403)
+  assert.equal(checkPostRequest({ host, 'content-type': 'text/plain', origin: 'https://localhost' }, allowed).status, 415)
 })
 
 // ---- Hugging Face IDM-VTON (가짜 fetch로 Gradio 흐름 검사) ----

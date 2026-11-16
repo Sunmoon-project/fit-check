@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { loadPhoto, savePhoto } from '../lib/storage.js'
 import { fileToDataUrl } from '../lib/imageTools.js'
 import { CATEGORY_LABEL } from '../data/measurements.js'
-import { NO_SERVER } from '../lib/runtime.js'
+import { NO_SERVER, apiUrl } from '../lib/runtime.js'
 import { shoeWardrobeFields, SHOE_UNSUPPORTED_NOTE } from '../lib/shoeFit.js'
 
 // 공개 IDM-VTON 모델은 상반신만 인식해서 상의·아우터만 입혀요 (server/hfTryOn.js의 TRYON_CATEGORIES와 같아요).
@@ -47,7 +47,7 @@ export default function TryOnPanel({ product, profile, verdicts, selectedSize, c
       setAiAvailable(false)
       return () => { alive = false }
     }
-    fetch('/api/status')
+    fetch(apiUrl('/api/status'))
       .then((r) => r.json())
       .then((d) => alive && setAiAvailable(Boolean(d.tryon)))
       .catch(() => alive && setAiAvailable(false))
@@ -109,7 +109,7 @@ export default function TryOnPanel({ product, profile, verdicts, selectedSize, c
     if (!garmentImage) return setAi((a) => ({ ...a, error: '옷 사진을 올려 주세요.' }))
     setAi({ loading: true, image: null, error: '' })
     try {
-      const r = await fetch('/api/tryon', {
+      const r = await fetch(apiUrl('/api/tryon'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ personImage: photo, garmentImage, category: product.category, garmentName: product.name, model: 'idm' }),

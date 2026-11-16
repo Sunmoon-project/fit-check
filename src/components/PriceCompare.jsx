@@ -3,7 +3,7 @@
 // 카드·간편결제 할인, 적립금처럼 조건이 붙은 혜택은 빼고 비교해요.
 import { useEffect, useMemo, useState } from 'react'
 import { priceEntryOf, comparePrices, rankPrices, isSameItem, searchLinks, searchQueryOf, won } from '../lib/priceInfo.js'
-import { NO_SERVER } from '../lib/runtime.js'
+import { NO_SERVER, apiUrl } from '../lib/runtime.js'
 
 const MAX_URLS = 6
 const MALL_LABEL = { 'musinsa.com': '무신사', '29cm.co.kr': '29CM', 'wconcept.co.kr': 'W컨셉', 'arcteryx.co.kr': '아크테릭스' }
@@ -18,7 +18,7 @@ function NaverSearch({ initialQuery, myBest }) {
   useEffect(() => {
     if (NO_SERVER) return setEnabled(false)
     let alive = true
-    fetch('/api/status').then((r) => (r.ok ? r.json() : null)).then((d) => alive && setEnabled(d?.priceSearch === true)).catch(() => alive && setEnabled(false))
+    fetch(apiUrl('/api/status')).then((r) => (r.ok ? r.json() : null)).then((d) => alive && setEnabled(d?.priceSearch === true)).catch(() => alive && setEnabled(false))
     return () => { alive = false }
   }, [])
   useEffect(() => { if (initialQuery) setQuery(initialQuery) }, [initialQuery])
@@ -26,7 +26,7 @@ function NaverSearch({ initialQuery, myBest }) {
   async function search() {
     setState({ loading: true, error: '' })
     try {
-      const res = await fetch('/api/price-search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) })
+      const res = await fetch(apiUrl('/api/price-search'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) })
       const data = await res.json().catch(() => null)
       if (!res.ok) return setState({ loading: false, error: data?.message || '가격 검색에 실패했어요.' })
       setItems(data.items || [])
@@ -127,7 +127,7 @@ export default function PriceCompare({ wardrobe = [], onBack }) {
     const errs = []
     for (const url of urls) {
       try {
-        const res = await fetch('/api/product', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) })
+        const res = await fetch(apiUrl('/api/product'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) })
         const data = await res.json().catch(() => null)
         const e = data?.product?.prices ? priceEntryOf(data.product, data.product.prices, { pageUrl: url }) : null
         if (e) got.push(e)

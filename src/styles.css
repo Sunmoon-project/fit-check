@@ -64,6 +64,20 @@ h1, h2, h3 { text-wrap: balance; }
   padding: 0 20px 120px;
 }
 
+/* 모바일 앱/PWA: 노치·상태바·제스처 바 영역을 피하고, 터치 기본 동작을 정리해요 */
+@supports (padding: max(0px)) {
+  .app {
+    padding-left: max(20px, env(safe-area-inset-left));
+    padding-right: max(20px, env(safe-area-inset-right));
+    padding-bottom: max(120px, calc(env(safe-area-inset-bottom) + 96px));
+  }
+  .app-header { padding-top: env(safe-area-inset-top); }
+}
+html { -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+button, a, select, summary { touch-action: manipulation; }
+/* iOS가 16px 미만 입력창에 자동 확대하는 걸 막아요 */
+input, select, textarea { font-size: max(16px, 1em); }
+
 /* Header — 화면 폭 전체를 쓰는 흰 상단바: 로고 · 내 정보, 그 아래 밑줄 탭 */
 .app-header {
   display: flex;
