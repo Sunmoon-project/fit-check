@@ -33,7 +33,8 @@ export function mapHeader(header, category) {
   if (/허벅지|thigh/i.test(h)) return { key: 'thigh', flat, flatBelow: 42 }
   if (/엉덩이|힙|hip/i.test(h)) return { key: 'hip', flat, flatBelow: 70 }
   if (/허리|waist/i.test(h)) return { key: 'waist', flat, flatBelow: 55 }
-  if (/소매|팔|화장|sleeve/i.test(h)) return { key: 'arm', minValue: 40 }
+  if (/화장/.test(h)) return { key: 'arm', minValue: 40, fromNeck: true }
+  if (/소매|팔|sleeve/i.test(h)) return { key: 'arm', minValue: 40 }
   if (/발길이|발사이즈|footlength|footsize/i.test(h)) return { key: 'footLength', scaleBelow: 40 }
   if (/총장|기장|총기장|전체길이|전장|length/i.test(h)) return LENGTH_KEY[category] ? { key: LENGTH_KEY[category] } : null
   return null
@@ -494,6 +495,11 @@ export function analyzeSizeCharts(rowsListIn, category, optionLabels = []) {
       cells[i - 1].value = m[map.key]
       cells[i - 1].converted = converted !== v
     })
+    // 화장 → 팔길이: 어깨너비의 절반을 빼요 (어깨가 없으면 화장 값은 비교에 쓰지 않아요).
+    if (m.arm != null && mapping.some((x) => x?.key === 'arm' && x.fromNeck)) {
+      if (m.shoulder != null) m.arm = Math.round((m.arm - m.shoulder / 2) * 10) / 10
+      else delete m.arm
+    }
     if (Object.keys(m).length) measures[label] = m
     viewRows.push({ label, shown, cells: cells.slice(0, 10) })
     return [label, ...r.slice(1)]

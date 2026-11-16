@@ -88,20 +88,21 @@ export default function FeedbackForm({ product, perSize, defaultSize, existing, 
         반품했어요
       </label>
 
-      <label className="check">
-        <input type="checkbox" checked={consent} onChange={(e) => changeConsent(e.target.checked)} />
-        {CONSENT_LABEL}
-      </label>
-      <details className="muted small">
-        <summary>어떤 정보가 쓰이나요?</summary>
+      {/* 익명 통계 기여는 선택 사항이라 접어 둬요 */}
+      <details className="muted small contrib">
+        <summary>익명 통계 기여 (선택)</summary>
+        <label className="check">
+          <input type="checkbox" checked={consent} onChange={(e) => changeConsent(e.target.checked)} />
+          {CONSENT_LABEL}
+        </label>
         <ul>
           {CONSENT_SUMMARY.map((t) => <li key={t}>{t}</li>)}
         </ul>
+        {consent && <p className="muted small" role="status">{CONSENT_STATUS_NOTE}</p>}
+        {consent && !toDomain(product.url) && (
+          <p className="muted small" role="status">이 쇼핑몰은 통계 기여 대상이 아니라서 기록은 내 기기에만 남고 기여 대기열에는 담기지 않아요.</p>
+        )}
       </details>
-      {consent && <p className="muted small" role="status">{CONSENT_STATUS_NOTE}</p>}
-      {consent && !toDomain(product.url) && (
-        <p className="muted small" role="status">이 쇼핑몰은 통계 기여 대상이 아니라서 기록은 내 기기에만 남고 기여 대기열에는 담기지 않아요.</p>
-      )}
 
       <button type="submit" className="btn primary block" disabled={!result}>
         기록 저장

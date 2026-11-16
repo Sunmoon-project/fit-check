@@ -64,7 +64,7 @@ export default function MatchedReviews({ matched, others, excluded = [] }) {
       {excluded.length > 0 && (
         <div className="excluded-reviews">
           <h4>제외된 후기 {excluded.length}건</h4>
-          <p className="muted small">이상치로 보여 추천과 체형 유사도 계산에는 쓰지 않았어요. 지우지 않고 사유와 함께 남겨 뒀어요.</p>
+          <p className="muted small">내용이 다른 후기와 너무 달라 추천에는 쓰지 않았어요.</p>
           <ul className="review-list">
             {excluded.map((r, i) => <ReviewItem key={r.id ?? `x${i}`} r={r} showSimilarity={false} />)}
           </ul>

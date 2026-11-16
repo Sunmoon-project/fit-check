@@ -171,7 +171,6 @@ export default function ReviewTab({ reviews, onClear }) {
         )}
       </div>
       {zoom && <Zoom urls={zoom.urls} caps={zoom.caps} start={zoom.start} onClose={closeZoom} />}
-      <p className="muted small">닉네임·리뷰 원문·사진 주소는 이 브라우저에만 저장돼요. 사진은 쇼핑몰 주소에서 불러와요.</p>
       {onClear && <button type="button" className="btn text danger" onClick={onClear}>리뷰만 지우기</button>}
     </div>
   )

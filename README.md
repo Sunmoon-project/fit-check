@@ -157,3 +157,13 @@ fit-check/
 ├─ Dockerfile              # Docker 이미지 빌드
 └─ render.yaml             # Render 배포 설정
 ```
+
+## 모바일 앱 (mobile/)
+
+쇼핑몰을 앱 안 브라우저로 열고, 화면 옆 동그란 ‘핏’ 버튼을 누르면 그 페이지를 분석해요. 분석 코드는 크롬 확장(`extension/content.js`)을 그대로 씁니다.
+
+```bash
+npm run build:mobile      # 확장 빌드를 mobile/injected.js로 묶기 (확장 코드를 고치면 다시 실행)
+cd mobile && npm install
+npx expo start            # Expo Go 앱으로 QR을 찍거나 i(iOS 시뮬레이터)·a(안드로이드)
+```

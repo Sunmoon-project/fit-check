@@ -25,7 +25,6 @@ export default function MeasureMatch({ perSize, compare, selectedSize, recommend
   }
   const current = sizes.find((s) => s.size === selectedSize) || sizes[0]
   const score = perSize.find((p) => p.size === current.size)?.score
-  const hasHeuristic = current.rows.some((r) => r.basis === 'heuristic')
 
   return (
     <div className="card tone-measure">
@@ -79,9 +78,7 @@ export default function MeasureMatch({ perSize, compare, selectedSize, recommend
         )}
       </ul>
       <p className="muted small disclaimer">
-        둘레는 단면×2, 기장은 키로 계산한 표준 기장과 비교했어요. 막대는 왼쪽부터 작을 수 있음 · 타이트 · 적당 · 넉넉 · 매우 넉넉이에요.
-        {hasHeuristic && ' 소매·발길이·총장 기준은 일반적인 착용감을 바탕으로 한 휴리스틱이에요.'}
-        {' '}‘{MEASURE_ONLY_LABEL}’은 내 몸과 비교할 기준이 없어 실측만 보여준다는 뜻이에요.
+        막대는 왼쪽부터 작음 · 타이트 · 적당 · 넉넉 · 매우 넉넉이에요.
       </p>
     </div>
   )

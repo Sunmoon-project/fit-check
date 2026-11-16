@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { CATEGORY_LABEL } from '../data/measurements.js'
 import { TARGET_GENDER_LABEL } from '../lib/targetGender.js'
-import { SIZE_CHART_DB_STORAGE_NOTE } from '../lib/sizeChartDb.js'
 
 // 사이즈표 모음: 분석한 상품의 사이즈표 목록과 브랜드·모델명·품번 검색, 비우기. 이 브라우저에만 저장돼요.
 // db는 createSizeChartDb()가 돌려준 객체(list/search/clear)예요. initialEntries는 첫 화면 목록이고, 이후는 db에서 다시 읽어요.
@@ -35,7 +34,7 @@ export default function SizeChartLibrary({ db, initialEntries = [], onBack, onCh
         <h2 id="chart-library-title">사이즈표 모음 {entries.length}</h2>
         <button type="button" className="btn text" onClick={onBack}>돌아가기</button>
       </div>
-      <p className="muted small">상품을 분석할 때 읽은 사이즈표를 브랜드·품번·모델명과 함께 저장해요. 후기와 체형 정보는 저장하지 않아요. {SIZE_CHART_DB_STORAGE_NOTE}</p>
+      <p className="muted small">분석한 상품의 사이즈표가 자동으로 모여요. 브랜드나 모델명으로 찾아보세요.</p>
       <form className="url-form" onSubmit={search} role="search">
         <input type="text" aria-label="브랜드" placeholder="브랜드 (예: 나이키, nike)" value={q.brand} onChange={(e) => setQ({ ...q, brand: e.target.value })} />
         <input type="text" aria-label="모델명" placeholder="모델명" value={q.model} onChange={(e) => setQ({ ...q, model: e.target.value })} />
