@@ -10,6 +10,8 @@
     "build:file": "vite build --mode file",
     "preview": "vite preview",
     "start": "node server/start.js",
+    "serve": "node server/standalone.js",
+    "icons": "node scripts/makePwaIcons.mjs",
     "smoke": "node scripts/smoke.mjs && node scripts/smokeImageSearch.mjs",
     "validate:fit": "node scripts/validateFit.mjs",
     "eval:fit": "node scripts/evalFit.mjs",

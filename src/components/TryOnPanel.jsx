@@ -90,7 +90,7 @@ export default function TryOnPanel({ product, profile, verdicts, selectedSize, c
       setAiAvailable(false)
       return () => { alive = false }
     }
-    fetch('/api/status')
+    fetch(apiUrl('/api/status'))
       .then((r) => r.json())
       .then((d) => {
         if (!alive) return
@@ -180,7 +180,7 @@ export default function TryOnPanel({ product, profile, verdicts, selectedSize, c
     if (!garmentImage) return setAi((a) => ({ ...a, error: '옷 이미지를 직접 올려주세요.' }))
     setAi({ loading: true, image: null, model: '', error: '', cached: false })
     try {
-      const r = await fetch('/api/tryon', {
+      const r = await fetch(apiUrl('/api/tryon'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ personImage: photo, garmentImage, category: product.category, garmentName: product.name, model: aiModel.id }),

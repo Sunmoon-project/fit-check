@@ -92,6 +92,20 @@ npm run dev      # http://localhost:5173
 | `npm run smoke` | 스모크 테스트 |
 | `npm run eval:fit` | 핏 추천 정확도 지표 측정 ([측정 방법](docs/평가_핏정확도.md)) |
 
+> ⚠️ API(`/api/status`, `/api/product`, `/api/tryon`)는 개발·미리보기 때는 Vite 서버에 붙고, 배포·모바일용으로는 **독립 서버**(`npm run serve`)로 실행해요.
+> `dist/` 폴더만 정적 호스팅에 올리면 **상품 링크 분석과 AI 합성이 동작하지 않아요.**
+
+### 📱 모바일 (PWA · 앱)
+
+| 명령 | 하는 일 |
+| --- | --- |
+| `npm run build && npm run serve` | 독립 서버 실행(기본 `http://localhost:8787`). `/api/*`와 빌드된 화면(`dist/`)을 함께 내려줘요. PWA 설치(홈 화면 추가)·오프라인 화면 캐시가 여기서 동작해요. |
+| `npm run icons` | PWA 아이콘(`public/icons/`)을 다시 만들어요. |
+
+- **화면과 서버가 다른 주소일 때**(Capacitor 앱, 따로 호스팅한 PWA): 서버 `.env`의 `ALLOWED_ORIGINS`에 그 출처를 적고(Android Capacitor `https://localhost`, iOS `capacitor://localhost`), 화면을 빌드할 때 `VITE_API_BASE=https://내-서버`를 지정해요. 목록에 없는 출처는 CORS와 출처 검사에서 막혀요.
+- 서비스 워커(`public/sw.js`)는 앱 화면 파일만 캐시하고 `/api/*`는 캐시하지 않아요. `file://`·개발 서버에서는 등록하지 않아요.
+- 폰에서 PWA 설치는 **HTTPS 주소**여야 해요(localhost 제외). 실제 폰·Chrome 설치 동작은 아직 확인하지 못했어요.
+
 ### Docker
 
 ```bash

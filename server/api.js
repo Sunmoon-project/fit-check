@@ -51,11 +51,13 @@ const isImageInput = (v) =>
 // 다른 사이트에서 몰래 보낸 POST를 막아요 (함께 쓰는 무료 GPU 쿼터 소모, 서버 대리 fetch 악용 방지).
 // - Content-Type이 application/json이어야 해요. 그래야 브라우저가 preflight를 보내고, 다른 출처는 통과하지 못해요.
 // - Origin 헤더가 있으면 이 서버의 주소(Host)와 같아야 해요. curl처럼 Origin이 없는 요청은 허용해요.
-export function checkPostRequest(headers = {}) {
+// - 웹/앱이 다른 주소에서 이 서버를 부를 때(모바일 앱, PWA 배포)는 allowedOrigins(ALLOWED_ORIGINS)에 적힌 출처만 추가로 허용해요.
+export function checkPostRequest(headers = {}, allowedOrigins = []) {
   const type = String(headers['content-type'] || '').split(';')[0].trim().toLowerCase()
   if (type !== 'application/json') return { status: 415, error: 'BAD_CONTENT_TYPE', message: 'JSON 요청만 받아요.' }
   const origin = headers.origin
   if (origin) {
+    if (allowedOrigins.includes(origin)) return null
     let host = null
     try {
       host = new URL(origin).host
@@ -65,6 +67,14 @@ export function checkPostRequest(headers = {}) {
     if (!host || host !== headers.host) return { status: 403, error: 'FORBIDDEN_ORIGIN', message: '허용되지 않은 출처의 요청이에요.' }
   }
   return null
+}
+
+// "https://a.com, capacitor://localhost" → ['https://a.com', 'capacitor://localhost']
+export function parseAllowedOrigins(value) {
+  return String(value || '')
+    .split(',')
+    .map((s) => s.trim().replace(/\/+$/, ''))
+    .filter(Boolean)
 }
 
 async function handleProduct(req, res) {
@@ -141,7 +151,8 @@ async function handlePriceSearch(req, res, priceSearch) {
   }
 }
 
-export function fitCheckApi(env, opts = {}) {
+// connect 방식 미들웨어. Vite 플러그인(개발), 프로덕션 서버(server/start.js), 독립 서버(server/standalone.js)가 모두 이걸 써요.
+export function createApiMiddleware(env = {}, opts = {}) {
   let space = env.HF_SPACE || DEFAULT_SPACE
   if (!isValidSpaceId(space)) {
     console.warn(`[api] HF_SPACE 형식이 올바르지 않아 기본값(${DEFAULT_SPACE})을 써요.`)
@@ -150,13 +161,27 @@ export function fitCheckApi(env, opts = {}) {
   const hf = { space, token: env.HF_TOKEN || '' }
   const imageSearch = opts.imageSearch || createImageSearchService(env)
   const priceSearch = opts.priceSearch || createPriceSearchService(env)
-  const middleware = async (req, res, next) => {
+  const allowedOrigins = parseAllowedOrigins(env.ALLOWED_ORIGINS)
+  return async (req, res, next) => {
     const path = (req.url || '').split('?')[0]
     if (!path.startsWith('/api/')) return next()
+    // 허용 목록에 있는 다른 출처(모바일 앱 등)에만 CORS 헤더를 붙여요. 그 외에는 브라우저가 응답을 막아요.
+    const origin = req.headers.origin
+    if (origin && allowedOrigins.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin)
+      res.setHeader('Vary', 'Origin')
+      if (req.method === 'OPTIONS') {
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+        res.setHeader('Access-Control-Max-Age', '600')
+        res.statusCode = 204
+        return res.end()
+      }
+    }
     try {
       if (path === '/api/status' && req.method === 'GET') return send(res, 200, { tryon: true, provider: 'huggingface', space, token: Boolean(hf.token), ...imageSearch.status(), ...priceSearch.status() })
       if (req.method === 'POST') {
-        const bad = checkPostRequest(req.headers)
+        const bad = checkPostRequest(req.headers, allowedOrigins)
         if (bad) return send(res, bad.status, { error: bad.error, message: bad.message })
       }
       if (path === '/api/product' && req.method === 'POST') return await handleProduct(req, res)
@@ -169,6 +194,10 @@ export function fitCheckApi(env, opts = {}) {
       return send(res, e.status || 500, { error: 'SERVER', message: e.status ? e.message : '서버 오류가 났어요.' })
     }
   }
+}
+
+export function fitCheckApi(env, opts = {}) {
+  const middleware = createApiMiddleware(env, opts)
   return {
     name: 'fit-check-api',
     middleware, // server/start.js(프로덕션·Docker)에서 Vite 없이 씀

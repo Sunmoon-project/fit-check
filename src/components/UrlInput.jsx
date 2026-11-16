@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { SAMPLE_URLS, PRODUCTS, findProductByUrl } from '../data/mockData.js'
 import { CATEGORY_LABEL } from '../data/measurements.js'
-import { NO_SERVER } from '../lib/runtime.js'
+import { NO_SERVER, apiUrl } from '../lib/runtime.js'
 
 // 다른 쇼핑몰 상품 링크를 붙여넣으면 서버(/api/product)가 페이지를 읽어 상품·사이즈표·리뷰를 가져옵니다.
 // 데모 상품은 서버 없이 바로 열려요.
@@ -36,7 +36,7 @@ export default function UrlInput({ onProduct }) {
 
     setLoading(true)
     try {
-      const res = await fetch('/api/product', {
+      const res = await fetch(apiUrl('/api/product'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: target }),
