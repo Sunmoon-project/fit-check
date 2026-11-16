@@ -9,6 +9,18 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { CONTENT_JS, PROFILE_HTML } from './injected'
 
 const STORE_KEY = 'fitcheck.store.v1'
+// 저장소 통로를 쓸 수 있는 쇼핑몰 (확장 manifest의 content_scripts matches와 같아요).
+// 앱 안 브라우저로 다른 사이트에 가도, 그 페이지는 체형 정보를 읽거나 쓸 수 없어요.
+const BRIDGE_HOSTS = ['musinsa.com', '29cm.co.kr', 'wconcept.co.kr', 'bunjang.co.kr', 'fruitsfamily.com', 'arcteryx.co.kr', 'arcteryx.com']
+function isBridgeHost(url) {
+  try {
+    const { protocol, hostname } = new URL(url)
+    return protocol === 'https:' && BRIDGE_HOSTS.some((h) => hostname === h || hostname.endsWith(`.${h}`))
+  } catch {
+    return false
+  }
+}
+const BAD_KEY = new Set(['__proto__', 'constructor', 'prototype'])
 const PROFILE_KEY = 'fitcheckProfile' // src/lib/extProfile.js의 EXT_PROFILE_KEY와 같아야 해요
 const MALLS = [
   ['무신사', 'https://www.musinsa.com'],
@@ -37,7 +49,9 @@ function useStore() {
   )
 
   // WebView가 보낸 저장 요청을 처리하고 같은 WebView에 답을 돌려줘요.
-  async function onMessage(webview, event) {
+  // trusted: 앱이 직접 만든 화면(내 체형 입력)만 true. 쇼핑몰 WebView는 주소가 허용 목록일 때만 받아요.
+  async function onMessage(webview, event, trusted = false) {
+    if (!trusted && !isBridgeHost(event.nativeEvent.url)) return
     let msg
     try {
       msg = JSON.parse(event.nativeEvent.data)
@@ -51,10 +65,12 @@ function useStore() {
     if (msg.op === 'get') {
       const keys = msg.payload == null ? Object.keys(data) : [].concat(typeof msg.payload === 'object' && !Array.isArray(msg.payload) ? Object.keys(msg.payload) : msg.payload)
       result = {}
-      for (const k of keys) if (k in data) result[k] = data[k]
+      for (const k of keys) if (typeof k === 'string' && Object.hasOwn(data, k)) result[k] = data[k]
     } else if (msg.op === 'set' || msg.op === 'remove') {
-      if (msg.op === 'set') Object.assign(data, msg.payload)
-      else for (const k of [].concat(msg.payload)) delete data[k]
+      if (msg.op === 'set') {
+        if (!msg.payload || typeof msg.payload !== 'object' || Array.isArray(msg.payload)) return
+        for (const [k, v] of Object.entries(msg.payload)) if (!BAD_KEY.has(k)) data[k] = v
+      } else for (const k of [].concat(msg.payload)) if (typeof k === 'string' && !BAD_KEY.has(k)) delete data[k]
       setProfile(data[PROFILE_KEY] || null)
       await AsyncStorage.setItem(STORE_KEY, JSON.stringify(data)).catch(() => {})
     } else return
@@ -194,7 +210,7 @@ export default function App() {
                 style={s.web}
                 originWhitelist={['*']}
                 source={{ html: PROFILE_HTML }}
-                onMessage={(e) => store.onMessage(profileWeb.current, e)}
+                onMessage={(e) => store.onMessage(profileWeb.current, e, true)}
               />
             </SafeAreaView>
           </SafeAreaProvider>

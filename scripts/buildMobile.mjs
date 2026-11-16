@@ -7,8 +7,8 @@ const root = resolve(import.meta.dirname, '..')
 const ext = (f) => readFileSync(resolve(root, 'dist-extension', f), 'utf8')
 
 // chrome.* 대용: 저장은 앱(AsyncStorage)에 맡기고 메시지로 주고받아요. 확장이 쓰는 storage.local과 runtime 일부만 흉내 내요.
-// ponytail: 주입한 코드는 페이지와 같은 세계에서 돌아서, 악의적인 쇼핑몰 페이지가 이 통로를 흉내 내면 저장된 체형 정보를 읽을 수 있어요.
-// 스토어에 올릴 때는 열 수 있는 사이트를 허용 목록으로 제한하거나 네이티브 격리 세계(content world)로 옮기세요.
+// 앱(App.js)은 허용 목록의 쇼핑몰 주소에서 온 메시지만 받아요. 남은 한계(ponytail): 허용된 쇼핑몰 페이지 자체는 같은 세계에서 돌아서
+// 이 통로를 흉내 낼 수 있어요. 스토어에 올릴 때는 네이티브 격리 세계(content world)나 세션 토큰으로 옮기세요.
 const SHIM = `function __fcChrome(){
   var seq=0,cbs={};
   window.__fcReply=function(id,data){var f=cbs[id];delete cbs[id];if(f)f(data)};
