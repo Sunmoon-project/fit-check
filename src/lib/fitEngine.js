@@ -134,9 +134,83 @@ export function partVerdicts(bodyValues, measuresForSize, category, calibration 
 
 // 선호 핏에 따른 목표 여유분
 function targetEase(rule, preferredFit) {
-  if (preferredFit === 'slim') return rule.snug + (rule.regular - rule.snug) * 0.25
+  if (preferredFit === 'slim') return rule.snug
   if (preferredFit === 'relaxed') return (rule.regular + rule.relaxed) / 2
   return (rule.snug + rule.regular) / 2
+}
+
+// 은/는: 마지막 글자 받침 기준. 영문·숫자 사이즈 이름은 읽는 소리로 봐요 (M=엠, L=엘, S=에스, 2=이 …).
+const NO_BATCHIM = new Set('AEFHIJKOSUVWXYZ2459'.split(''))
+export function eunNeun(word) {
+  const w = String(word ?? '').replace(/[^0-9A-Za-z가-힣]+$/, '')
+  const c = w.slice(-1)
+  if (!c) return '는'
+  const code = c.charCodeAt(0)
+  if (code >= 0xac00 && code <= 0xd7a3) return (code - 0xac00) % 28 ? '은' : '는'
+  return NO_BATCHIM.has(c.toUpperCase()) ? '는' : '은'
+}
+
+// 부위별 목표 여유분(cm, 신발은 mm). 허리는 오버핏이어도 흘러내리지 않게 레귤러 기준으로 맞춰요 (바지 오버핏은 통이 넓은 것).
+export function partTarget(part, preferredFit = 'regular', calibration = {}, learned = null) {
+  const rule = ruleOf(part, learned)
+  const pref = part === 'waist' && preferredFit === 'relaxed' ? 'regular' : preferredFit
+  return round1(targetEase(rule, pref) + offsetOf(part, calibration, learned))
+}
+
+// 사이즈 추천 근거: 선호 핏 목표 여유분과 추천 사이즈의 실제 여유분을 부위별로 비교하고, 바로 옆 사이즈와도 비교해요.
+// perSize는 generateFitComment 결과의 perSize(사이즈표 순서), label(size)은 화면 이름이에요.
+export function fitRationale({ perSize = [], size, preferredFit = 'regular', calibration = {}, learned = null, label = (x) => x }) {
+  const i = perSize.findIndex((p) => p.size === size)
+  if (i < 0) return null
+  const fitName = preferredFit === 'relaxed' ? '오버핏' : `${FIT_PREF_LABEL[preferredFit] || '레귤러'} 핏`
+  const partsOf = (entry) =>
+    entry.verdicts.map((v) => {
+      const rule = ruleOf(v.part, learned)
+      const target = partTarget(v.part, preferredFit, calibration, learned)
+      const band = Math.max(1, (rule.regular - rule.snug) / 2) // 목표에서 이만큼까지는 '원하는 핏'으로 봐요
+      const diff = round1(v.ease - target)
+      return { ...v, target, diff, status: Math.abs(diff) <= band ? 'good' : diff < 0 ? 'tighter' : 'looser' }
+    })
+  const parts = partsOf(perSize[i])
+  const sign = (n) => `${n > 0 ? '+' : ''}${n}`
+  const ease = (v) => `${sign(v.ease)}${v.unit}`
+  const good = parts.filter((p) => p.status === 'good')
+  const main = parts.filter((p) => !p.isLength)
+  // 옆 사이즈: 부위 판정이 달라지는 곳만 짧게
+  const neighbor = (j, dir) => {
+    const e = perSize[j]
+    if (!e) return null
+    const changed = partsOf(e).filter((p) => {
+      const cur = parts.find((c) => c.part === p.part)
+      return cur && cur.verdict !== p.verdict
+    })
+    const shown = (changed.length ? changed : partsOf(e).filter((p) => !p.isLength)).slice(0, 2)
+    return { size: e.size, label: label(e.size), dir, text: shown.map((p) => `${p.label} ${ease(p)} ${p.verdict}`).join(', ') }
+  }
+  const neighbors = [neighbor(i - 1, 'smaller'), neighbor(i + 1, 'larger')].filter(Boolean)
+  const off = parts.filter((p) => p.status !== 'good' && !p.isLength)
+  const tighter = main.filter((p) => p.status === 'tighter').length
+  const looser = main.filter((p) => p.status === 'looser').length
+  const name = label(size)
+  const lines = [
+    `${fitName}을 원하셔서 부위마다 몸보다 이만큼 여유가 있는 사이즈를 찾았어요: ${main.map((p) => `${p.label} ${sign(p.target)}${p.unit}`).join(', ')}.`,
+    good.length === 0
+      ? `${name}${eunNeun(name)} 원하는 핏보다 전체적으로 ${tighter >= looser ? '몸에 붙어요' : '여유가 남아요'}.`
+      : `${name}${eunNeun(name)} ${parts.length}개 부위 중 ${good.length}개가 원하는 핏 범위 안이에요.` +
+        (off.length ? ` ${off.map((p) => `${p.label}${eunNeun(p.label)} ${p.status === 'tighter' ? '조금 더 붙어요' : '조금 더 남아요'}`).join(', ')}.` : ''),
+  ]
+  // 더 맞는 사이즈가 표에 없거나, 후기 때문에 실측과 다른 사이즈를 고른 경우 그 이유도 밝혀요.
+  const goodMain = main.length - tighter - looser
+  if (i === perSize.length - 1 && tighter > goodMain) lines.push(`사이즈표에서 가장 큰 사이즈라, 이보다 여유 있는 선택지가 없어요.`)
+  else if (i === 0 && looser > goodMain) lines.push(`사이즈표에서 가장 작은 사이즈라, 이보다 붙는 선택지가 없어요.`)
+  const best = perSize.reduce((a, b) => ((b.raw ?? b.score) > (a.raw ?? a.score) ? b : a))
+  if (best.size !== size) {
+    const other = label(best.size)
+    const iGa = eunNeun(other) === '은' ? '이' : '가'
+    const eulReul = eunNeun(name) === '은' ? '을' : '를'
+    lines.push(`사이즈표 실측만 보면 ${other}${iGa} 더 가깝지만, 비슷한 체형의 후기를 함께 반영해 ${name}${eulReul} 골랐어요.`)
+  }
+  return { size, label: label(size), fitName, parts, neighbors, lines }
 }
 
 // 사이즈표의 사이즈 순서 (행 순서 우선)
@@ -189,19 +263,21 @@ export function recommendSize(bodyValues, sizeChart, category, preferredFit = 'r
     let wsum = 0
     for (const v of verdicts) {
       const rule = ruleOf(v.part, learned)
-      const off = offsetOf(v.part, calibration, learned)
       const span = rule.relaxed - rule.tight
-      let p = (Math.abs(v.ease - (targetEase(rule, preferredFit) + off)) / span) * 100
+      let p = (Math.abs(v.ease - partTarget(v.part, preferredFit, calibration, learned)) / span) * 100
       if (v.level === 0) p += 40
-      const w = v.isLength ? 0.5 : 1
+      // 허리는 크면 흘러내려요: 넉넉 이상이면 감점하고, 하의에서는 다른 부위보다 무겁게 봐요.
+      if (v.part === 'waist' && v.level >= 3) p += v.level === 4 ? 40 : 15
+      const w = v.isLength ? 0.5 : v.part === 'waist' ? 2 : 1
       sum += p * w
       wsum += w
     }
-    const score = Math.max(0, Math.min(100, Math.round(100 - sum / wsum)))
-    perSize.push({ size, score, verdicts })
+    const raw = 100 - sum / wsum
+    const score = Math.max(0, Math.min(100, Math.round(raw)))
+    perSize.push({ size, score, raw, verdicts })
   }
   if (perSize.length === 0) return null
-  const best = perSize.reduce((a, b) => (b.score > a.score ? b : a))
+  const best = perSize.reduce((a, b) => (b.raw > a.raw ? b : a))
   return { bestSize: best.size, best, perSize }
 }
 
@@ -352,7 +428,8 @@ export function generateFitComment(profile, product, calibration = {}, model = n
   const reviewParts = est.reviewParts
   const measureResult = recommendSize(values, product.sizeChart, product.category, preferredFit, calibration, learned)
   const disp = makeDisplay(product)
-  const reviewPick = pickFromReviews(matched, sizeList, preferredFit)
+  // 하의는 허리가 맞아야 해서 후기 기반으로도 오버핏 때문에 사이즈를 올리지 않아요.
+  const reviewPick = pickFromReviews(matched, sizeList, product.category === 'bottom' && preferredFit === 'relaxed' ? 'regular' : preferredFit)
   // 오버핏으로 한 치수 올렸는데 사이즈표상 그 사이즈가 이미 '매우 넉넉'(어깨·가슴 등)이면 올리지 않아요 (원래 크게 나온 옷).
   if (reviewPick && preferredFit === 'relaxed' && reviewPick.size !== reviewPick.baseSize) {
     const up = measureResult?.perSize.find((p) => p.size === reviewPick.size)

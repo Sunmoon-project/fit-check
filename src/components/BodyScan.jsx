@@ -155,7 +155,7 @@ export default function BodyScan({ profile, photo, onPhoto, onProfile, onAnchors
               </tbody>
             </table>
             {r.warnings.map((w) => <p key={w} className="small bs-warn">{w}</p>)}
-            <p className="muted small">사진 값과 공식 값을 6:4로 섞고 공식 값의 ±12% 안으로 묶었어요. 옷 두께·자세·렌즈에 따라 ±3~6cm 오차가 날 수 있어요. 직접 잰 치수가 있으면 그 값이 우선해요.</p>
+            <p className="muted small">옷 두께나 자세에 따라 ±3~6cm 오차가 날 수 있어요. 직접 잰 치수가 있으면 그 값을 써요.</p>
             <button type="button" className="btn primary block" onClick={apply}>내 정보에 반영</button>
           </div>
         </div>

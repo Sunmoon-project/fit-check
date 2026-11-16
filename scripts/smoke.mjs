@@ -3191,7 +3191,7 @@ test('색 대비: 제목·막대 색이 흰/연회색 배경에서 기준(글자
 test('가짜 HTML: 머리글 동의어 변형이 같은 부위로 읽히고 단면은 둘레로, 길이는 그대로 읽는다', () => {
   const cases = [
     ['전체길이', 'topLength', 70, 70], ['기장', 'topLength', 70, 70], ['어깨', 'shoulder', 48, 48], ['가슴단면', 'chest', 54, 108], ['가슴둘레', 'chest', 108, 108],
-    ['품', 'chest', 55, 110], ['화장', 'arm', 60, 60], ['팔길이', 'arm', 60, 60], ['소매통', 'sleeveWidth', 20, 40], ['암홀', 'sleeveWidth', 24, 48], ['소매단면', 'sleeveWidth', 18, 36],
+    ['품', 'chest', 55, 110], ['팔길이', 'arm', 60, 60], ['소매통', 'sleeveWidth', 20, 40], ['암홀', 'sleeveWidth', 24, 48], ['소매단면', 'sleeveWidth', 18, 36],
     ['허리둘레', 'waist', 76, 76], ['힙', 'hip', 98, 98], ['엉덩이단면', 'hip', 50, 100], ['허벅지', 'thigh', 60, 60], ['밑위길이', 'rise', 29, 29],
     ['밑단단면', 'hem', 20, 40], ['무릎단면', 'knee', 22, 44],
   ]
@@ -3199,6 +3199,15 @@ test('가짜 HTML: 머리글 동의어 변형이 같은 부위로 읽히고 단�
     const page = sysPage('티셔츠', ['사이즈', head], [['S', raw], ['M', raw + 1]])
     assert.equal(page.sizeChart?.measures?.S?.[key], expect, `${head} -> ${key}`)
   }
+})
+
+test('가짜 HTML: 화장(목 중심~소매 끝)은 어깨 절반을 빼 팔길이로 바꾸고, 어깨가 없으면 팔길이로 쓰지 않는다', () => {
+  const withShoulder = sysPage('셔츠', ['사이즈', '어깨', '화장'], [['M', 46, 84], ['L', 48, 86]])
+  assert.equal(withShoulder.sizeChart.measures.M.arm, 61)
+  assert.equal(withShoulder.sizeChart.measures.L.arm, 62)
+  const noShoulder = sysPage('셔츠', ['사이즈', '가슴단면', '화장'], [['M', 55, 84], ['L', 57, 86]])
+  assert.equal(noShoulder.sizeChart.measures.M.arm, undefined)
+  assert.equal(noShoulder.sizeChart.measures.M.chest, 110)
 })
 
 test('가짜 HTML: 하의 허리단면·허벅지단면·밑위·밑단·총장 + 인치 28~34는 둘레로 바꾸고 밑위·밑단을 따로 읽는다', () => {
@@ -5518,7 +5527,7 @@ test('사이즈표 DB: 웹 화면(서버 렌더)에 목록·점수 근거·저�
   const html = render(WEB.SizeChartLibrary, { db, initialEntries: entries, onBack: noop })
   const text = textOf(html)
   assert.ok(text.includes('사이즈표 모음 1') && text.includes('Nike Club Fleece Hoodie') && text.includes('BV2654-010'))
-  assert.ok(text.includes('이 브라우저에만 저장돼요') && text.includes('사이즈표 모음 비우기') && text.includes('검색'))
+  assert.ok(text.includes('사이즈표 모음 비우기') && text.includes('검색'))
   assert.ok(!text.includes('아직 저장된 사이즈표가 없어요'))
   const empty = textOf(render(WEB.SizeChartLibrary, { db, initialEntries: [], onBack: noop }))
   assert.ok(empty.includes('아직 저장된 사이즈표가 없어요'))
@@ -5950,16 +5959,15 @@ await atest('중고 판매글 content.js(가짜 DOM, vm): 이 브라우저의 �
   assert.ok(texts.some((t) => t.startsWith('사이즈표 DB(근사/추정): 점수 ')))
 })
 
-await atest('중고 판매글 웹: 중고 상품 분석 화면이 후기 없는 결과, 우선순위 근거, 사진 역검색·라벨 인식 준비 중 안내를 보여주고 App에 연결돼 있다', async () => {
+await atest('중고 판매글 웹: 중고 상품 분석 화면이 후기 없는 결과와 우선순위 근거를 보여주고, 꺼진 기능(사진 찾기)과 개발용 안내는 숨기며 App에 연결돼 있다', async () => {
   const result = analyzeUsedListing({ title: U_TITLE, text: `${U_TITLE}\n가슴단면 55 총장 70 어깨 47` }, usedProfile)
   const html = render(WEB.UsedListing, { profile: usedProfile, db: null, imageSearcher: createImageSearcher(null), onBack: noop, initialResult: result })
   const text = textOf(html)
-  assert.ok(text.includes('중고 상품 분석') && text.includes('번개장터·후르츠패밀리'))
+  assert.ok(text.includes('중고 상품 분석') && text.includes('중고 판매글'))
   assert.ok(text.includes('맞음') && text.includes('근거: 판매글 실측'))
   assert.ok(text.includes(USED_NO_REVIEW_NOTE) && text.includes('근거 우선순위: ① 판매글 실측'))
-  assert.ok(text.includes('사진 역검색') && text.includes(IMAGE_SEARCH_DISABLED_TEXT) && text.includes(LABEL_OCR_DISABLED_TEXT))
-  assert.ok(text.includes('추정이고 실제 사이트에서 확인하지 못했어요'))
-  assert.ok(html.includes('<textarea') && /aria-label="사진 주소"[^>]*disabled/.test(html), '사진 주소 입력은 공급자가 없으면 비활성')
+  assert.ok(!text.includes(IMAGE_SEARCH_DISABLED_TEXT) && !text.includes(LABEL_OCR_DISABLED_TEXT) && !text.includes('확인하지 못했어요'), '사용자 화면에 준비 중·미확인 안내 없음')
+  assert.ok(!/aria-label="사진 주소"/.test(html), '공급자가 없으면 사진 찾기 칸 자체를 숨겨요')
   const noResult = textOf(render(WEB.UsedListing, { profile: usedProfile, db: null, imageSearcher: createImageSearcher(null), onBack: noop }))
   assert.ok(!noResult.includes('추천 이유'))
   const app = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
@@ -6310,16 +6318,19 @@ test('웹 렌더: 확장에서 담은 옷장 항목은 부위별 여유 게이�
   assert.ok(txt.includes('사진 모아보기'), '리뷰 탭')
 })
 
-test('웹 렌더: 결과 화면은 onTryOn이 있으면 사진 합성 대신 가상 피팅 바로가기를, TryOnPanel은 모델 선택을 보여준다', () => {
+test('웹 렌더: 결과 화면은 onTryOn이 있으면 가상 피팅 바로가기를, 없으면 가상 피팅 카드를 보여주고, 카드는 AI 입어 보기(상의·아우터만)를 쓴다', () => {
   const clothing = { ...PRODUCTS['https://shop-a.example.com/goods/12345'], source: 'demo' }
   const props = { product: clothing, profile, calibration: {}, feedbackCount: 0, onFeedback: noop, onRestart: noop, wardrobe: [], onSaveWardrobe: noop }
   const linked = textOf(render(WEB.ResultView, { ...props, onTryOn: noop }))
   assert.ok(linked.includes('가상 피팅') && linked.includes('내 사진에 이 옷'))
-  assert.ok(!linked.includes('AI로 합성하기'), '패널은 탭으로 옮겨요')
+  assert.ok(!linked.includes('입어 보기'), '패널은 탭으로 옮겨요')
   const inline = textOf(render(WEB.ResultView, props))
-  assert.ok(inline.includes('AI로 합성하기'), 'onTryOn이 없으면 예전처럼 패널')
-  const panel = textOf(render(WEB.TryOnPanel, { product: { ...clothing, category: 'bottom' }, profile, verdicts: [], selectedSize: 'M', captureRef: { current: null } }))
-  assert.ok(panel.includes('IDM-VTON') && panel.includes('Leffa (실험적)') && panel.includes('상의·하의·원피스'))
+  assert.ok(inline.includes('입어 보기') && inline.includes('Hugging Face'), 'onTryOn이 없으면 결과 화면에 카드')
+  const top = render(WEB.TryOnPanel, { product: clothing, profile, verdicts: [], selectedSize: 'M', captureRef: { current: null } })
+  assert.ok(/<button[^>]*disabled[^>]*>입어 보기<\/button>/.test(top), '사진이 없으면 입어 보기 비활성')
+  assert.ok(!top.includes('Leffa') && !top.includes('IDM-VTON'), '모델 이름은 보여주지 않아요')
+  const bottom = textOf(render(WEB.TryOnPanel, { product: { ...clothing, category: 'bottom' }, profile, verdicts: [], selectedSize: 'M', captureRef: { current: null } }))
+  assert.ok(bottom.includes('상의·아우터만') && !bottom.includes('입어 보기'))
 })
 
 import { measureFromPose, anchorLayout, ellipseCircumference, rowWidth } from '../src/lib/photoBody.js'
@@ -6657,5 +6668,27 @@ await atest('/api/price-search 라우팅: 상태에 켜짐 여부만, 응답·�
   assert.equal(off.status, 503)
   assert.equal((await call({}, { method: 'GET', url: '/api/status' })).json.priceSearch, false)
 })
+
+// ---- 사이즈 추천 근거 (fitRationale) ----
+{
+  const { generateFitComment: gen, fitRationale, eunNeun } = await import('../src/lib/fitEngine.js')
+  const TEE = { unit: 'cm', rows: [['S'], ['M'], ['L'], ['XL']], measures: { S: { shoulder: 44, chest: 104, topLength: 68 }, M: { shoulder: 46, chest: 110, topLength: 70 }, L: { shoulder: 48, chest: 116, topLength: 72 }, XL: { shoulder: 50, chest: 122, topLength: 74 } } }
+  const prof = (f) => ({ gender: 'male', height: 178, weight: 75, preferredFit: f, shape: { shoulder: 'normal', belly: 'none', lower: 'normal' }, usual: {}, measurements: {} })
+  test('추천 근거: 선호 핏 목표 여유분과 실제 여유분을 부위별로 비교하고, 옆 사이즈를 함께 알려준다', () => {
+    const r = gen(prof('regular'), { name: 't', category: 'top', sizeChart: TEE, reviews: [], url: 'x' })
+    const why = fitRationale({ perSize: r.perSize, size: r.recommendedSize, preferredFit: 'regular' })
+    assert.equal(why.size, 'M')
+    assert.ok(why.lines[0].includes('레귤러 핏') && why.lines[1].startsWith('M은'))
+    const chest = why.parts.find((p) => p.part === 'chest')
+    assert.equal(chest.ease, Math.round((110 - chest.body) * 10) / 10)
+    assert.ok(['good', 'tighter', 'looser'].includes(chest.status))
+    assert.deepEqual(why.neighbors.map((n) => [n.size, n.dir]), [['S', 'smaller'], ['L', 'larger']])
+    const slim = fitRationale({ perSize: r.perSize, size: 'M', preferredFit: 'slim' }).parts.find((p) => p.part === 'chest')
+    const over = fitRationale({ perSize: r.perSize, size: 'M', preferredFit: 'relaxed' }).parts.find((p) => p.part === 'chest')
+    assert.ok(slim.target < chest.target && chest.target < over.target, '선호 핏마다 목표 여유분이 달라요')
+    assert.equal(fitRationale({ perSize: r.perSize, size: 'XXL' }), null)
+    assert.deepEqual(['M', 'S', 'XL', '95', '가슴', '어깨'].map(eunNeun), ['은', '는', '은', '는', '은', '는'])
+  })
+}
 
 console.log(`\n${passed}개 통과`)

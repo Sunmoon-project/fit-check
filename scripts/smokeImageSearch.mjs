@@ -280,7 +280,7 @@ const WEB = await loadComponents()
 const profile = buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular' }).profile
 const noop = () => {}
 
-await atest('역검색 웹 화면: 켜졌을 때 외부 전송 고지·동의 체크·버튼(동의 전에는 비활성)과 결과 링크(noopener), 꺼졌을 때 비활성 안내', async () => {
+await atest('역검색 웹 화면: 켜졌을 때 외부 전송 고지·동의 체크·버튼(동의 전에는 비활성)과 결과 링크(noopener), 꺼졌을 때는 칸 자체를 숨김', async () => {
   const on = createImageSearcher(createServerImageProvider(async () => { throw new Error('화면 렌더에서 호출되면 안 돼요') }))
   const html = render(WEB.UsedListing, { profile, db: null, imageSearcher: on, onBack: noop })
   const text = textOf(html)
@@ -300,8 +300,8 @@ await atest('역검색 웹 화면: 켜졌을 때 외부 전송 고지·동의 �
 
   const offHtml = render(WEB.UsedListing, { profile, db: null, imageSearcher: createImageSearcher(null), onBack: noop })
   const offText = textOf(offHtml)
-  assert.ok(offText.includes('준비 중') && offText.includes('IMAGE_SEARCH_API_KEY') && offText.includes('확인하지 못한'))
-  assert.ok(/aria-label="사진 주소"[^>]*disabled/.test(offHtml) && /<button[^>]*disabled[^>]*>사진으로 찾기<\/button>/.test(offHtml) && /type="checkbox"[^>]*disabled/.test(offHtml))
+  assert.ok(!offText.includes('준비 중') && !offText.includes('IMAGE_SEARCH_API_KEY') && !offText.includes('사진으로 찾기'))
+  assert.ok(!/aria-label="사진 주소"/.test(offHtml) && !/type="checkbox"/.test(offHtml))
 })
 
 await atest('역검색 소스 검사: 자동 호출 없음, 분석하기는 검색을 새로 부르지 않음, 키 이름은 서버·문서에만, 확장은 링크만(네트워크 없음), 크롤링 없음', async () => {
@@ -314,7 +314,7 @@ await atest('역검색 소스 검사: 자동 호출 없음, 분석하기는 검�
   const app = read('src/App.jsx')
   assert.ok(!/imageSearcher\.search/.test(app), 'App은 검색을 부르지 않고 켜짐 여부만 물어요')
   for (const f of ['src/App.jsx', 'src/components/UsedListing.jsx', 'src/lib/imageSearch.js', 'extension/content.js']) {
-    assert.ok(!read(f).includes('IMAGE_SEARCH_API_KEY') || f === 'src/components/UsedListing.jsx', `${f}에 키 이름 사용 금지(안내 문구만 허용)`)
+    assert.ok(!read(f).includes('IMAGE_SEARCH_API_KEY'), `${f}에 키 이름 사용 금지`)
     assert.ok(!/API_KEY\s*[:=]\s*['"][^'"]+['"]/.test(read(f)), f)
   }
   const content = read('extension/content.js')

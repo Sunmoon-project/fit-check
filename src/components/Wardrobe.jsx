@@ -10,13 +10,13 @@ import { PART_LABEL, EXTRA_PART_LABEL } from '../data/measurements.js'
 
 const MAX_COMPARE = 4
 
-function Thumb({ item }) {
+export function Thumb({ item }) {
   const src = item.image || item.product.image
   if (!src) return <span className="wd-emoji" aria-hidden>{item.product.emoji || '👕'}</span>
   return <img src={src} alt="" referrerPolicy="no-referrer" />
 }
 
-function VerdictLine({ verdicts, item }) {
+export function VerdictLine({ verdicts, item }) {
   if (!verdicts?.length) {
     // 신발은 사이즈 이름을 mm로 읽지 못하면 이유를 같이 보여줘요 (S/M/L·FREE 등)
     const why = item?.verdictStatus === 'unsupported' ? (item.verdictNote || '판정 없음(사이즈 체계 미지원)') : item?.verdictNote
@@ -127,7 +127,6 @@ function ImportPanel({ onImport }) {
         <input ref={fileRef} type="file" accept=".json,application/json,text/plain" hidden onChange={onFile} />
       </div>
       {msg && <p className={`small ${msg.error ? 'danger' : ''}`} role="status">{msg.text}</p>}
-      <p className="muted small">닉네임·리뷰 원문·사진 주소는 이 브라우저에만 저장돼요. 서버로 보내지 않아요.</p>
     </details>
   )
 }
@@ -165,11 +164,11 @@ export default function Wardrobe({ items, onDelete, onBack, onImport, onClearRev
 
       {items.length === 0 ? (
         <div className="card">
-          <p className="muted">아직 담은 옷이 없어요. 결과 화면에서 ‘옷장에 담기’를 누르면 사이즈·핏 판정과 합성 이미지가 여기에 저장돼요.</p>
+          <p className="muted">아직 담은 옷이 없어요. 사이즈를 확인한 뒤 ‘옷장에 담기’를 누르면 여기에 모여요.</p>
         </div>
       ) : (
         <>
-          <p className="muted small">최대 {MAX_COMPARE}벌을 골라 나란히 비교할 수 있어요. 이 브라우저에만 저장돼요.</p>
+          <p className="muted small">사진을 눌러 최대 {MAX_COMPARE}벌을 나란히 비교할 수 있어요.</p>
           <ul className="wd-grid">
             {items.map((w) => {
               const peer = peers[w.id]

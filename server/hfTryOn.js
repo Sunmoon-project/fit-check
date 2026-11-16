@@ -136,7 +136,7 @@ export async function runHfTryOn({
   if (!isTryOnSupported(category, which)) {
     throw hfError(400, 'UNSUPPORTED', which === 'leffa'
       ? 'AI 합성은 상의·아우터·하의·원피스만 지원해요.'
-      : 'AI 합성은 상의·아우터만 지원해요. 무료 IDM-VTON Space는 상반신만 인식해요. Leffa 모델을 고르면 하의·원피스도 돼요.')
+      : '가상 피팅은 상의·아우터만 할 수 있어요.')
   }
   if (which === 'leffa') {
     space = TRYON_MODELS.leffa.space
