@@ -2,9 +2,10 @@ import { useState } from 'react'
 import { BODY_FIELDS, TOP_SIZES, BOTTOM_SIZES } from '../data/measurements.js'
 import { estimateBody } from '../lib/bodyEstimate.js'
 import { FIT_PREF_LABEL } from '../lib/fitEngine.js'
+import MeasureGuide from './MeasureGuide.jsx'
 
 // 체형 정보를 한 화면에 한 가지씩 순서대로 묻는 온보딩
-const STEPS = ['gender', 'height', 'weight', 'shape', 'usual', 'detail', 'summary']
+const STEPS = ['gender', 'height', 'weight', 'shape', 'usual', 'guide', 'detail', 'summary']
 
 const DEFAULT_PROFILE = {
   gender: '',
@@ -192,10 +193,18 @@ export default function Onboarding({ initial, onComplete, onCancel }) {
         </>
       )}
 
+      {step === 'guide' && (
+        <>
+          <h2 className="q-title">치수는 이렇게 재요</h2>
+          <p className="muted">줄자로 직접 재면 더 정확해요. 부위를 누르면 재는 위치가 그림에 표시돼요.</p>
+          <MeasureGuide />
+        </>
+      )}
+
       {step === 'detail' && (
         <>
           <h2 className="q-title">직접 잰 치수가 있나요?</h2>
-          <p className="muted">선택 사항이에요. 비워두면 키·몸무게·체형으로 추정해요. 입력할수록 추천이 정확해져요.</p>
+          <p className="muted">선택 사항이에요. 비워두면 키·몸무게·체형으로 추정해요. 재는 법은 '이전'을 누르면 다시 볼 수 있어요.</p>
           <div className="measure-grid">
             {BODY_FIELDS.map((f) => (
               <label key={f.key} className="measure-field">
@@ -253,7 +262,7 @@ export default function Onboarding({ initial, onComplete, onCancel }) {
           {idx === 0 ? '닫기' : '이전'}
         </button>
         <button type="button" className="btn primary" onClick={next}>
-          {step === 'summary' ? '저장하고 시작하기' : step === 'detail' && !hasAny(profile.measurements) ? '건너뛰기' : '다음'}
+          {step === 'summary' ? '저장하고 시작하기' : step === 'guide' ? '치수 입력하기' : step === 'detail' && !hasAny(profile.measurements) ? '건너뛰기' : '다음'}
         </button>
       </div>
     </section>

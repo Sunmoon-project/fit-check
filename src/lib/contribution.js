@@ -20,6 +20,8 @@ export const ALLOWED_DOMAINS = [
   'musinsa.com',
   '29cm.co.kr',
   'wconcept.co.kr',
+  'arcteryx.co.kr',
+  'arcteryx.com',
   'coupang.com',
   'ssfshop.com',
   'zigzag.kr',

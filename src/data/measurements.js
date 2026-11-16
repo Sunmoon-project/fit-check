@@ -6,12 +6,14 @@ export const BODY_FIELDS = [
   { key: 'hip', label: '엉덩이둘레', unit: 'cm', min: 75, max: 130, step: 1 },
   { key: 'thigh', label: '허벅지둘레', unit: 'cm', min: 40, max: 80, step: 1 },
   { key: 'arm', label: '팔길이', unit: 'cm', min: 45, max: 75, step: 0.5 },
+  { key: 'leg', label: '다리길이', unit: 'cm', min: 55, max: 100, step: 0.5 },
   { key: 'footLength', label: '발길이', unit: 'mm', min: 210, max: 310, step: 5 },
 ]
 
 export const PART_LABEL = Object.fromEntries(BODY_FIELDS.map((f) => [f.key, f.label.replace(/둘레|너비|길이$/, '')]))
 PART_LABEL.footLength = '발길이'
 PART_LABEL.arm = '팔길이'
+PART_LABEL.leg = '다리길이'
 
 // 사이즈표에는 있지만 신체 비교 기준(BODY_FIELDS, EASE_RULES)이 없는 부위: 실측만 보여줘요.
 export const EXTRA_PART_LABEL = {

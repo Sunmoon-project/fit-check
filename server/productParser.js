@@ -1,6 +1,8 @@
 // 상품 페이지 HTML에서 상품 정보·사이즈표·리뷰를 뽑아냅니다.
 // 사이트마다 구조가 달라서, 표준 메타데이터(JSON-LD, Open Graph)와 HTML 표를 일반적인 규칙으로 읽습니다.
 // 리뷰를 자바스크립트로 따로 불러오는 사이트는 여기서 리뷰를 못 가져올 수 있어요.
+import { extractPrices } from '../src/lib/priceInfo.js'
+import { SITE_ONLY_NAME_RE } from '../src/lib/pageParser.js'
 import * as cheerio from 'cheerio'
 import { classifyCategory, ldCategoryHints, categoryInfo } from '../src/lib/categoryClassifier.js'
 import { guessCategory, buildSizeChart, parseReviewText, CATEGORY_EMOJI } from '../src/lib/productCore.js'
@@ -77,7 +79,8 @@ export function parseProductHtml(html, pageUrl) {
   const product = ld.find((n) => isType(n, 'Product')) || null
   const notes = []
 
-  const name = (product?.name || meta('og:title') || $('title').text() || '').trim()
+  // 쇼핑몰 이름뿐인 제목('[W CONCEPT]')은 건너뛰어요 (확장과 같은 규칙)
+  const name = [product?.name, meta('og:title'), $('h1').first().text(), $('title').text()].map((x) => String(x || '').replace(/\s+/g, ' ').trim()).find((x) => x && !SITE_ONLY_NAME_RE.test(x)) || ''
   const image = first(product?.image)?.url || first(product?.image) || meta('og:image') || null
   const price = formatPrice(product?.offers) || (meta('product:price:amount') ? Number(meta('product:price:amount')).toLocaleString('ko-KR') + '원' : null)
   const mall = meta('og:site_name') || new URL(pageUrl).hostname.replace(/^www\./, '')
@@ -121,6 +124,16 @@ export function parseProductHtml(html, pageUrl) {
     : null
 
   if (!name) return null
+  // 가격: 화면 글 줄(글 조각 순서)과 JSON-LD로 읽어요. 서버가 받은 HTML에 가격 글이 없으면 JSON-LD 값만 써요.
+  const lines = []
+  $('body').find('*').contents().each((_, n) => {
+    if (n.type === 'text' && lines.length < 4000) {
+      const t = String(n.data || '').replace(/\s+/g, ' ').trim()
+      if (t && !['script', 'style', 'noscript'].includes(n.parent?.name)) lines.push(t)
+    }
+  })
+  const ldOffer = first(product?.offers)
+  const prices = extractPrices({ lines, name, ldPrice: Number(ldOffer?.price ?? ldOffer?.lowPrice) || Number(meta('product:price:amount')) || null })
   return {
     url: pageUrl,
     source: 'live',
@@ -131,6 +144,7 @@ export function parseProductHtml(html, pageUrl) {
     categoryEvidence: categoryInfo({ ...cls, category }).evidence,
     categoryCandidates: cls.candidates,
     price,
+    prices: prices.best ? prices : null,
     image: typeof image === 'string' ? new URL(image, pageUrl).toString() : null,
     emoji: CATEGORY_EMOJI[category],
     rating,

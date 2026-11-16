@@ -164,6 +164,7 @@ export function collectDiagnostics(root, pageUrl = '', extVersion = '', extra = 
     bodyExtract: cleanBodyExtract(product?.reviewMeta?.bodyExtract),
     scroll: cleanScroll(extra?.scroll),
     compareFailed: extra?.compareFailed === true,
+    used: cleanUsed(extra?.used),
     structure,
     chartShape: chartShape(root, tables),
   }
@@ -245,6 +246,26 @@ function cleanCandidates(list) {
   }))
 }
 
+// 중고 판매글 읽기 결과: 건수와 정해진 값만 담아요(제목·본문·사진 주소 없음).
+const USED_BASES = ['listing', 'chart-db', 'default', 'none']
+function cleanUsed(u) {
+  if (!u || typeof u !== 'object') return null
+  return {
+    measureCount: smallInt(u.measureCount),
+    sizeCount: smallInt(u.sizeCount),
+    droppedCount: smallInt(u.droppedCount),
+    photoCount: smallInt(u.photoCount),
+    basis: USED_BASES.includes(u.basis) ? u.basis : 'none',
+    siteKnown: u.siteKnown === true,
+  }
+}
+const USED_BASIS_TEXT = { listing: '판매글 실측', 'chart-db': '사이즈표 DB', default: '기본값', none: '없음' }
+function usedLines(d) {
+  const u = d.used
+  if (!u) return []
+  return [`중고 판매글 읽기: 실측 ${u.measureCount}개, 사이즈 표기 ${u.sizeCount}개, 버린 값 ${u.droppedCount}개, 사진 ${u.photoCount}개, 사용한 근거 ${USED_BASIS_TEXT[u.basis]}, 알려진 중고 사이트 주소 ${yn(u.siteKnown)}`]
+}
+
 function hasLdProduct(root) {
   return all(root, 'script[type="application/ld+json"]').some((s) => /"@type"\s*:\s*\[?\s*"Product"/.test(s.textContent || ''))
 }
@@ -262,6 +283,7 @@ export function diagnosticLines(d) {
     ...chartLines(d),
     ...shapeLines(d),
     ...reviewStatLines(d),
+    ...usedLines(d),
   ]
 }
 
