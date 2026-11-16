@@ -22,6 +22,9 @@ setRectProvider((el) => el.getBoundingClientRect())
 const WAIT_MS = 4000 // 늦게 그려지는 표·리뷰를 기다리는 최대 시간
 const RETRY_DELAYS = [1500, 2500] // 못 찾았을 때 다시 읽기 전 기다림. 전체 대기는 약 8초 이내
 const EXT_VERSION = (typeof chrome !== 'undefined' && chrome.runtime?.getManifest?.().version) || ''
+// 모바일 앱(mobile/)은 쇼핑몰을 앱 안 브라우저로 열고 이 파일을 그대로 넣어요. 그때는 chrome 대용 객체에 이 표시가 있어요.
+const MOBILE = typeof chrome !== 'undefined' && chrome.fitcheckMobile === true
+const UNSUPPORTED_MESSAGE = '이 페이지에서는 분석할 수 없어요. 사이즈표, 후기, 옷 사진이 있는 상품 페이지에서 다시 눌러 주세요.'
 const QUIET_MS = 500 // 이 시간 동안 화면 변화가 없으면 다 그려졌다고 봅니다
 const STEP_QUIET_MS = 600 // 리뷰 더 불러오기 한 단계 뒤 화면이 잠잠해질 때까지 기다리는 시간
 const STEP_WAIT_MS = 2500 // 한 단계에서 기다리는 최대 시간
@@ -34,6 +37,12 @@ const CSS = `
 .fab:hover{transform:translateY(-1px);box-shadow:0 10px 26px rgba(0,0,0,.26),0 1px 2px rgba(0,0,0,.2)}
 .fab:active{transform:scale(.96)}
 .fab:disabled{opacity:.8;cursor:default;transform:none}
+.wrap.m{right:10px;bottom:28vh}
+.wrap.m .fab{width:52px;height:52px;padding:0;justify-content:center;font-size:0;opacity:.45;transition:opacity .2s,transform .15s var(--e)}
+.wrap.m .fab::after{content:'핏';font-size:18px;font-weight:800}
+.wrap.m .fab:active,.wrap.m .fab:focus-visible,.wrap.m .fab:disabled{opacity:1}
+.wrap.m .fab:disabled::after{content:none}
+.wrap.m .card,.wrap.m .card.wide{z-index:2;position:fixed;left:8px;right:8px;bottom:8px;width:auto;max-width:none;max-height:78vh}
 .fab:disabled::before{content:'';width:10px;height:10px;border-radius:50%;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;animation:spin .8s linear infinite}
 .card{width:380px;max-width:calc(100vw - 32px);max-height:min(80vh,560px);overflow-y:auto;overscroll-behavior:contain;background:#fff;border:1px solid #e4e4e7;border-radius:16px;padding:0 14px 14px;box-shadow:0 18px 48px rgba(0,0,0,.18),0 2px 6px rgba(0,0,0,.06);font-size:12px;line-height:1.5;transform-origin:bottom right;animation:cardIn .4s var(--e);transition:width .4s var(--e),max-height .4s var(--e);scrollbar-width:thin}
 .card.wide{width:min(760px,calc(100vw - 32px));max-height:calc(100vh - 96px)}
@@ -298,6 +307,11 @@ function ensureUi() {
   fab.type = 'button'
   fab.textContent = '내 사이즈 찾기'
   fab.addEventListener('click', run)
+  // 모바일 앱: 화면 옆에 흐린 동그라미로 떠 있고(글자는 숨김), 결과 카드는 아래에서 올라와요.
+  if (MOBILE) {
+    wrap.classList.add('m')
+    fab.setAttribute('aria-label', '내 사이즈 찾기')
+  }
   wrap.append(panel, fab)
   wrapEl = wrap
   shadow.appendChild(wrap)
@@ -1959,6 +1973,11 @@ function waitForRender() {
   })
 }
 
+// 이 페이지에 분석할 거리가 있는지: 상품 페이지(상품 정보·사이즈표)이거나 중고 판매글이거나 후기가 보이는지
+function canAnalyzeHere() {
+  return isProductPage(document) || isUsedListingPage(document, location.href) || document.querySelector(REVIEW_SELECTOR) != null
+}
+
 async function run() {
   if (busy) return
   busy = true
@@ -1969,13 +1988,21 @@ async function run() {
   try {
     const profile = await readProfile()
     if (!isUsableProfile(profile)) {
-      renderResult({ status: 'no-profile', message: '먼저 확장 프로그램 아이콘을 눌러 키·몸무게 등 체형 정보를 저장해주세요.' })
+      renderResult({ status: 'no-profile', message: MOBILE ? '먼저 아래 ‘내 체형’에서 키·몸무게를 저장해주세요.' : '먼저 확장 프로그램 아이콘을 눌러 키·몸무게 등 체형 정보를 저장해주세요.' })
       return
     }
     chosenExtraRows = null // 새로 분석할 때는 이전 직접 입력 표를 쓰지 않아요
     if (chosenFor !== location.href) chosenCategory = null // 다른 상품 페이지로 옮겼으면 이전 선택은 쓰지 않아요
     stage = 'wait'
     await waitForRender()
+    // 모바일 앱에서는 버튼이 모든 페이지에 떠 있어서, 상품 정보(사이즈표·상품 사진)도 후기도 없는 페이지면 분석하지 않고 바로 알려줘요.
+    if (MOBILE && !canAnalyzeHere()) {
+      await new Promise((r) => setTimeout(r, RETRY_DELAYS[0])) // 늦게 그려지는 페이지일 수 있어 한 번만 더 봐요
+      if (!canAnalyzeHere()) {
+        renderResult({ status: 'unsupported', message: UNSUPPORTED_MESSAGE })
+        return
+      }
+    }
     stage = 'analyze'
     // 사이즈표를 못 찾으면 짧게 기다렸다가 다시 읽어요. 이 단계에서는 클릭·스크롤 없이 화면 글만 읽습니다.
     let result = await analyzeLearning(profile, { categoryOverride: chosenCategory })
@@ -2027,7 +2054,7 @@ if (!window.__fitcheckLoaded) {
   let tries = 0
   const maybeShow = () => {
     if (host) return
-    if (isProductPage(document) || isUsedListingPage(document, location.href)) ensureUi()
+    if (MOBILE || isProductPage(document) || isUsedListingPage(document, location.href)) ensureUi()
     else if (++tries < 4) setTimeout(maybeShow, 1500)
   }
   maybeShow()
