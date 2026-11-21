@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Onboarding from './components/Onboarding.jsx'
+import Intro from './components/Intro.jsx'
 import UrlInput from './components/UrlInput.jsx'
 import ResultView from './components/ResultView.jsx'
 import Wardrobe from './components/Wardrobe.jsx'
 import TryOnStudio from './components/TryOnStudio.jsx'
+import PriceCompare from './components/PriceCompare.jsx'
 import { addImportedItem } from './lib/wardrobeImport.js'
 import { loadProfile, saveProfile, loadFeedback, saveFeedback, loadWardrobe, saveWardrobe, loadSyncSeen, saveSyncSeen, trimNote } from './lib/storage.js'
 import { applyDelivery, syncNotice } from './lib/wardrobeSync.js'
@@ -18,20 +20,20 @@ import { createImageSearcher, createServerImageProvider, fetchImageSearchEnabled
 
 // 흐름: 내 정보(온보딩, 저장된 정보가 없을 때만) → 상품 링크 → 사이즈·핏 추천
 const STEP_LABELS = ['내 정보', '상품 링크', '사이즈 추천']
+// 상단 탭. 한 번에 한 화면만 보여요.
+const TABS = [['home', '사이즈 추천'], ['wardrobe', '옷장'], ['tryon', '가상 피팅'], ['price', '가격 비교'], ['used', '중고 상품 분석'], ['charts', '사이즈표']]
 
 export default function App() {
   const [profile, setProfile] = useState(() => loadProfile())
   const [editing, setEditing] = useState(() => !loadProfile())
+  const [intro, setIntro] = useState(() => !loadProfile()) // 처음 온 사람에게만 소개 화면을 먼저 보여줘요
   const [product, setProduct] = useState(null)
   const [feedback, setFeedback] = useState(() => loadFeedback())
   const calibration = useMemo(() => computeCalibration(feedback), [feedback])
   const [wardrobe, setWardrobe] = useState(() => loadWardrobe())
-  const [showWardrobe, setShowWardrobe] = useState(false)
+  const [view, setView] = useState('home') // 지금 보는 탭 (TABS의 키)
   const [learningModel, setLearningModel] = useState(null) // 학습값 묶음 (이 브라우저의 localStorage에서 읽어요)
-  const [showTryOn, setShowTryOn] = useState(false) // 가상 피팅 탭
   const [tryOnCurrent, setTryOnCurrent] = useState(null) // 결과 화면에서 넘긴 옷 { product, size, verdicts }
-  const [showCharts, setShowCharts] = useState(false)
-  const [showUsed, setShowUsed] = useState(false) // 중고 상품 분석 화면
   const [chartEntries, setChartEntries] = useState([]) // 사이즈표 모음 목록 (이 브라우저의 localStorage)
   const chartDb = useMemo(() => createSizeChartDb(localAdapter()), [])
   const [imageSearcher, setImageSearcher] = useState(() => createImageSearcher(null)) // 사진 역검색: 서버가 켜져 있다고 알려줄 때만 공급자를 꽂아요
@@ -45,11 +47,13 @@ export default function App() {
 
   const step = editing || !profile ? 'onboarding' : product ? 'result' : 'product'
   const stepIndex = step === 'onboarding' ? 0 : step === 'product' ? 1 : 2
-  const wardrobeView = showWardrobe && step !== 'onboarding'
-  const chartsView = showCharts && step !== 'onboarding' && !wardrobeView
-  const usedView = showUsed && step !== 'onboarding' && !wardrobeView && !chartsView
-  const tryOnView = showTryOn && step !== 'onboarding' && !wardrobeView && !chartsView && !usedView
-  const mainView = !wardrobeView && !chartsView && !usedView && !tryOnView
+  const active = step === 'onboarding' ? 'home' : view
+  const mainView = active === 'home'
+
+  function go(v) {
+    setView(v)
+    window.scrollTo(0, 0)
+  }
 
   function handleProfile(p) {
     saveProfile(p)
@@ -173,20 +177,8 @@ export default function App() {
   }
 
   function openTryOn(current = null) {
-    setShowWardrobe(false)
-    setShowCharts(false)
-    setShowUsed(false)
     setTryOnCurrent(current)
-    setShowTryOn(true)
-    window.scrollTo(0, 0)
-  }
-
-  function toggleWardrobe() {
-    setShowTryOn(false)
-    setShowCharts(false)
-    setShowUsed(false)
-    setShowWardrobe((v) => !v)
-    window.scrollTo(0, 0)
+    go('tryon')
   }
 
   return (
@@ -197,27 +189,30 @@ export default function App() {
           <p className="tagline">내 체형으로 고르는 사이즈·핏</p>
         </div>
         {profile && !editing && (
-          <div className="header-actions">
-            <button type="button" className={`btn pill ${showWardrobe ? 'on' : ''}`} onClick={toggleWardrobe}>
-              옷장 {wardrobe.length}
-            </button>
-            <button type="button" className={`btn pill ${chartsView ? 'on' : ''}`} onClick={() => { setShowWardrobe(false); setShowUsed(false); setShowTryOn(false); setShowCharts((v) => !v) }}>
-              사이즈표 {chartEntries.length}
-            </button>
-            <button type="button" className={`btn pill ${usedView ? 'on' : ''}`} onClick={() => { setShowWardrobe(false); setShowCharts(false); setShowTryOn(false); setShowUsed((v) => !v) }}>
-              중고 상품 분석
-            </button>
-            <button type="button" className={`btn pill ${tryOnView ? 'on' : ''}`} onClick={() => (tryOnView ? setShowTryOn(false) : openTryOn(product && tryOnCurrent?.product?.url === product.url ? tryOnCurrent : null))}>
-              가상 피팅
-            </button>
-            <button type="button" className="btn pill" onClick={() => { setShowWardrobe(false); setShowCharts(false); setShowUsed(false); setShowTryOn(false); setEditing(true) }}>
-              내 정보 {profile.height}·{profile.weight}
-            </button>
-          </div>
+          <button type="button" className="profile-chip" aria-label="내 정보 수정" onClick={() => { setView('home'); setEditing(true) }}>
+            {profile.height}cm {profile.weight}kg
+          </button>
+        )}
+        {profile && !editing && (
+          <nav className="tabs" aria-label="메뉴">
+            {TABS.map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={`tab ${active === key ? 'on' : ''}`}
+                aria-current={active === key ? 'page' : undefined}
+                onClick={() => (key === 'tryon' ? openTryOn(product && tryOnCurrent?.product?.url === product.url ? tryOnCurrent : null) : go(key))}
+              >
+                {label}
+                {key === 'wardrobe' && wardrobe.length > 0 && <span className="tab-count">{wardrobe.length}</span>}
+                {key === 'charts' && chartEntries.length > 0 && <span className="tab-count">{chartEntries.length}</span>}
+              </button>
+            ))}
+          </nav>
         )}
       </header>
 
-      {mainView && (
+      {mainView && step !== 'onboarding' && (
         <nav className="steps" aria-label="진행 단계">
           {STEP_LABELS.map((label, i) => (
             <div key={label} className={`step-dot ${i <= stepIndex ? 'done' : ''} ${i === stepIndex ? 'current' : ''}`}>
@@ -231,26 +226,28 @@ export default function App() {
       {notice && (
         <div className={`sync-notice ${notice.error ? 'error' : ''}`} role="status">
           <span>{notice.text}</span>
-          {!notice.error && !showWardrobe && profile && !editing && (
-            <button type="button" className="btn text" onClick={() => { setShowWardrobe(true); setNotice(null) }}>옷장 보기</button>
+          {!notice.error && active !== 'wardrobe' && profile && !editing && (
+            <button type="button" className="btn text" onClick={() => { go('wardrobe'); setNotice(null) }}>옷장 보기</button>
           )}
           <button type="button" className="btn text" onClick={() => setNotice(null)}>닫기</button>
         </div>
       )}
 
       <main className="app-main">
-        {wardrobeView && <Wardrobe items={wardrobe} onDelete={handleDeleteWardrobe} onBack={toggleWardrobe} onImport={handleImportWardrobe} onClearReviews={handleClearReviews} />}
-        {chartsView && <SizeChartLibrary db={chartDb} initialEntries={chartEntries} onBack={() => setShowCharts(false)} onChanged={() => setChartEntries([])} />}
-        {tryOnView && <TryOnStudio wardrobe={wardrobe} profile={profile} current={tryOnCurrent} onSaveImage={handleWardrobeImage} onBack={() => setShowTryOn(false)} onProfile={(p) => { saveProfile(p); setProfile(p) }} />}
-        {usedView && <UsedListing profile={profile} db={chartDb} imageSearcher={imageSearcher} onBack={() => setShowUsed(false)} />}
-        {mainView && step === 'onboarding' && (
+        {active === 'wardrobe' && <Wardrobe items={wardrobe} onDelete={handleDeleteWardrobe} onBack={() => go('home')} onImport={handleImportWardrobe} onClearReviews={handleClearReviews} />}
+        {active === 'charts' && <SizeChartLibrary db={chartDb} initialEntries={chartEntries} onBack={() => go('home')} onChanged={() => setChartEntries([])} />}
+        {active === 'tryon' && <TryOnStudio wardrobe={wardrobe} profile={profile} current={tryOnCurrent} onSaveImage={handleWardrobeImage} onBack={() => go('home')} onProfile={(p) => { saveProfile(p); setProfile(p) }} />}
+        {active === 'price' && <PriceCompare wardrobe={wardrobe} onBack={() => go('home')} />}
+        {active === 'used' && <UsedListing profile={profile} db={chartDb} imageSearcher={imageSearcher} onBack={() => go('home')} />}
+        {mainView && step === 'onboarding' && intro && <Intro onStart={() => { setIntro(false); window.scrollTo(0, 0) }} />}
+        {mainView && step === 'onboarding' && !intro && (
           <Onboarding
             initial={profile}
             onComplete={handleProfile}
             onCancel={profile ? () => setEditing(false) : null}
           />
         )}
-        {mainView && step === 'product' && <UrlInput onProduct={handleProduct} />}
+        {mainView && step === 'product' && <UrlInput onProduct={handleProduct} recent={wardrobe.slice(0, 5)} />}
         {mainView && step === 'result' && (
           <ResultView
             product={product}

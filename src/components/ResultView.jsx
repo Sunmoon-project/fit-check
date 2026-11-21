@@ -21,6 +21,7 @@ import FeedbackForm from './FeedbackForm.jsx'
 import TryOnPanel from './TryOnPanel.jsx'
 import { SimilarInWardrobe } from './Wardrobe.jsx'
 import { FitDistBar } from './FitVisuals.jsx'
+import FitWhy from './FitWhy.jsx'
 
 export default function ResultView({ product: parsedProduct, profile, calibration, feedbackCount, existingFeedback, onFeedback, onRestart, wardrobe = [], onSaveWardrobe, learningModel = null, onLearn, onResetLearning, onExportLearning, onTryOn }) {
   // 분류 신뢰도가 낮을 때 사용자가 고른 카테고리로 다시 분석해요 (자동 분류보다 우선).
@@ -38,6 +39,11 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
     () => compareSizes({ chart: product.sizeChart, bodyValues: result.bodyValues || bodyValuesForProfile(profile).values, measured: result.measured, category: product.category, calibration: calibration || {}, learned, reviewParts: result.reviewParts, photoParts: result.photoParts }),
     [profile, product, calibration, result, learned],
   )
+  // 사이즈 화면 이름 ('1(M)' → '1 (M)'): 부위 비교(compare)가 가진 이름을 써요
+  const labelOf = useMemo(() => {
+    const names = Object.fromEntries((compare?.sizes || []).map((x) => [x.size, x.label]))
+    return (size) => names[size] || size
+  }, [compare])
   const [picked, setPicked] = useState(null)
   const [saving, setSaving] = useState(false)
   const [saveNote, setSaveNote] = useState('')
@@ -101,6 +107,8 @@ export default function ResultView({ product: parsedProduct, profile, calibratio
       {!isShoes && targetGender && <p className="info-box small target-gender" role="note">{targetGender.text}</p>}
 
       <FitComment result={shownResult} />
+
+      {!isShoes && result.recommendedSize && <FitWhy result={result} profile={profile} calibration={calibration} labelOf={labelOf} category={product.category} />}
 
       <LearningNote learning={result.learning} onReset={onResetLearning} onExport={onExportLearning} />
 

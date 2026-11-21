@@ -1,5 +1,5 @@
 import { CONFIDENCE_LABEL, describeEvidence } from '../lib/fitEngine.js'
-import { regionLine, REGION_HYPOTHESIS_NOTE } from '../lib/brandRegion.js'
+import { regionLine } from '../lib/brandRegion.js'
 
 // 추천 사이즈 카드 (후기 투표 + 실측 비교 종합)
 export default function FitComment({ result }) {
@@ -21,31 +21,6 @@ export default function FitComment({ result }) {
         </span>
       </div>
 
-      {evidence && (
-        <div className="evidence">
-          <p className="evidence-summary">{evidence.summary}</p>
-          {evidence.reasons.length > 0 && (
-            <ul className="evidence-why" aria-label={isShoes ? '추천 이유' : '확신도가 더 높지 않은 이유'}>
-              {evidence.reasons.map((r) => <li key={r}>{r}</li>)}
-            </ul>
-          )}
-        </div>
-      )}
-
-      {evidence?.details?.length > 0 && (
-        <ul className="evidence-details" aria-label="추천에 쓰인 근거">
-          {evidence.details.map((d) => <li key={d} className="small">{d}</li>)}
-        </ul>
-      )}
-      {evidence?.details?.some((d) => d.startsWith('브랜드 지역')) && <p className="muted small">{REGION_HYPOTHESIS_NOTE}</p>}
-      {sizeHint && (
-        <div className="info-box size-system-hint" role="note">
-          <p className="small"><strong>{sizeHint.title}</strong></p>
-          <ul>{sizeHint.lines.map((l) => <li key={l} className="small">{l}</li>)}</ul>
-          <p className="muted small">{sizeHint.note}</p>
-        </div>
-      )}
-
       {result.recommendedSize && (
         <div className="reco-size">
           <strong className="size-big">{result.recommendedSize}</strong>
@@ -56,8 +31,31 @@ export default function FitComment({ result }) {
       <h3 className="fit-headline">{result.headline}</h3>
       <p className="fit-body">{result.body}</p>
       {isShoes && !result.recommendedSize && <p className="muted small">추천할 사이즈가 없어요. 아래 사이즈별 판정은 참고로만 봐주세요.</p>}
-      <p className="muted small disclaimer">확신도는 후기·사이즈표 근거가 얼마나 있는지로 나눈 참고 단계예요. 정확도를 측정한 값이 아니에요.</p>
-      <p className="muted small disclaimer">{result.note}</p>
+      {result.note && <p className="muted small disclaimer">{result.note}</p>}
+
+      {sizeHint && (
+        <div className="info-box size-system-hint" role="note">
+          <p className="small"><strong>{sizeHint.title}</strong></p>
+          <ul>{sizeHint.lines.map((l) => <li key={l} className="small">{l}</li>)}</ul>
+          <p className="muted small">{sizeHint.note}</p>
+        </div>
+      )}
+
+      {evidence && (
+        <details className="evidence">
+          <summary className="evidence-summary">{evidence.summary}</summary>
+          {evidence.reasons.length > 0 && (
+            <ul className="evidence-why" aria-label={isShoes ? '추천 이유' : '확신도가 더 높지 않은 이유'}>
+              {evidence.reasons.map((r) => <li key={r}>{r}</li>)}
+            </ul>
+          )}
+          {evidence.details?.length > 0 && (
+            <ul className="evidence-details" aria-label="추천에 쓰인 근거">
+              {evidence.details.map((d) => <li key={d} className="small">{d}</li>)}
+            </ul>
+          )}
+        </details>
+      )}
     </div>
   )
 }

@@ -13,3 +13,6 @@ validation-output/
 
 # 크롬 확장 빌드 결과
 dist-extension
+
+# 모바일 앱에 넣는 확장 묶음 (npm run build:mobile로 생성)
+mobile/injected.js

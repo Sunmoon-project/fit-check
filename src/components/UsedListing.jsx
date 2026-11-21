@@ -1,8 +1,6 @@
 import { useState } from 'react'
 import { analyzeUsedListing, findChartMatches, usedSearchQuery } from '../lib/usedAnalyze.js'
-import { USED_SITES, USED_SITES_NOTE } from '../lib/usedListing.js'
-import { IMAGE_SEARCH_DISABLED_TEXT, IMAGE_SEARCH_NOTICE } from '../lib/imageSearch.js'
-import { LABEL_OCR_DISABLED_TEXT } from '../lib/labelOcr.js'
+import { IMAGE_SEARCH_NOTICE } from '../lib/imageSearch.js'
 
 // 중고 상품 분석: 번개장터·후르츠패밀리 같은 중고 판매글을 붙여넣으면 후기 없이 작음/맞음/큼을 알려줘요.
 // 판매글 글은 이 브라우저 안에서만 분석하고 저장하지 않아요. 사진 역검색은 서버가 켜져 있을 때만 쓸 수 있고,
@@ -60,26 +58,22 @@ export default function UsedListing({ profile, db, imageSearcher, onBack, initia
         <h2 id="used-title">중고 상품 분석</h2>
         <button type="button" className="btn text" onClick={onBack}>돌아가기</button>
       </div>
-      <p className="muted small">
-        {USED_SITES.map((s) => s.name).join('·')} 같은 중고 판매글의 제목과 본문을 붙여넣으면, 후기 없이 판매글에 적힌 실측과 사이즈 표기로 내 체형에 맞을지 알려드려요.
-      </p>
-      <p className="muted small">{USED_SITES_NOTE}</p>
+      <p className="muted small">중고 판매글의 제목과 본문을 붙여넣으면, 적힌 실측과 사이즈로 내 몸에 맞을지 알려드려요.</p>
       <form onSubmit={analyze} className="used-form">
         <input type="text" aria-label="판매글 제목" placeholder="판매글 제목 (예: [L] 나이키 후드티)" value={title} onChange={(e) => setTitle(e.target.value)} disabled={busy} />
         <textarea aria-label="판매글 본문" rows={7} placeholder={'판매글 본문을 붙여넣으세요.\n예) 가슴단면 55 총장 70 어깨 47 소매 60'} value={text} onChange={(e) => setText(e.target.value)} disabled={busy} />
-        <div className="used-photo">
-          <h3 className="section-title">사진으로 같은 상품 찾기 (사진 역검색)</h3>
-          <textarea aria-label="사진 주소" rows={2} placeholder="https:// 사진 주소 (줄마다 하나)" value={photos} onChange={(e) => setPhotos(e.target.value)} disabled={busy || !photoEnabled} />
-          {!photoEnabled && <p className="muted small">{IMAGE_SEARCH_DISABLED_TEXT}</p>}
-          {!photoEnabled && <p className="muted small">서버 설정(IMAGE_SEARCH_PROVIDER, IMAGE_SEARCH_API_KEY)이 있고 웹 서버로 열었을 때 켜져요. 아직 실제 검색 서비스로 확인하지 못한 기능이에요.</p>}
-          <label className="used-consent">
-            <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} disabled={busy || photoBusy || !photoEnabled} />
-            <span>{IMAGE_SEARCH_NOTICE} 동의하고 사진 한 장으로 검색할게요.</span>
-          </label>
-          <button type="button" className="btn" onClick={findByPhoto} disabled={busy || photoBusy || !photoEnabled || !consent || !firstUrl}>{photoBusy ? '찾는 중…' : '사진으로 찾기'}</button>
-          {photoResult && <PhotoResult result={photoResult} />}
-          <p className="muted small">{LABEL_OCR_DISABLED_TEXT}</p>
-        </div>
+        {photoEnabled && (
+          <div className="used-photo">
+            <h3 className="section-title">사진으로 같은 상품 찾기</h3>
+            <textarea aria-label="사진 주소" rows={2} placeholder="https:// 사진 주소 (줄마다 하나)" value={photos} onChange={(e) => setPhotos(e.target.value)} disabled={busy} />
+            <label className="used-consent">
+              <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} disabled={busy || photoBusy} />
+              <span>{IMAGE_SEARCH_NOTICE} 동의하고 사진 한 장으로 검색할게요.</span>
+            </label>
+            <button type="button" className="btn" onClick={findByPhoto} disabled={busy || photoBusy || !consent || !firstUrl}>{photoBusy ? '찾는 중…' : '사진으로 찾기'}</button>
+            {photoResult && <PhotoResult result={photoResult} />}
+          </div>
+        )}
         <button type="submit" className="btn primary" disabled={busy}>{busy ? '분석 중…' : '분석하기'}</button>
       </form>
       {msg && <p className="error" role="alert">{msg}</p>}

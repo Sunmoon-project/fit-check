@@ -10,11 +10,15 @@
     "build:file": "vite build --mode file",
     "preview": "vite preview",
     "start": "node server/start.js",
+    "serve": "node server/standalone.js",
+    "icons": "node scripts/makePwaIcons.mjs",
     "smoke": "node scripts/smoke.mjs && node scripts/smokeImageSearch.mjs",
     "validate:fit": "node scripts/validateFit.mjs",
+    "check:fit": "node scripts/checkPreferredFit.mjs",
     "eval:fit": "node scripts/evalFit.mjs",
     "validate:body": "node scripts/validateBody.mjs",
-    "build:extension": "node scripts/buildExtension.mjs && node scripts/checkExtension.mjs"
+    "build:extension": "node scripts/buildExtension.mjs && node scripts/checkExtension.mjs",
+    "build:mobile": "npm run build:extension && node scripts/buildMobile.mjs"
   },
   "dependencies": {
     "cheerio": "^1.2.0",

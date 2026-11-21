@@ -1,5 +1,5 @@
 // 가상 피팅 탭: 옷장에 담긴 옷(확장에서 보낸 옷 포함)이나 지금 보던 옷, 직접 올린 옷 사진을 내 사진과 합성해요.
-// 합성 자체는 TryOnPanel(미리보기 + 무료 Hugging Face 모델)이 하고, 여기서는 옷 고르기와 옷장 사진 저장만 맡아요.
+// 합성 자체는 TryOnPanel(무료 Hugging Face IDM-VTON 모델)이 하고, 여기서는 옷 고르기와 옷장 사진 저장만 맡아요.
 import { useMemo, useRef, useState } from 'react'
 import { CATEGORY_LABEL } from '../data/measurements.js'
 import TryOnPanel from './TryOnPanel.jsx'
@@ -59,7 +59,7 @@ export default function TryOnStudio({ wardrobe = [], profile, current = null, on
         <h2 className="q-title small-title">가상 피팅</h2>
         <button type="button" className="btn text" onClick={onBack}>← 돌아가기</button>
       </div>
-      <p className="muted small">내 전신 사진에 옷을 입혀 봐요. 옷장에 담은 옷(확장 프로그램에서 보낸 옷 포함)을 고르거나 옷 사진을 직접 올리세요.</p>
+      <p className="muted small">내 전신 사진에 옷을 입혀 봐요. 옷장에 담은 옷을 고르거나 옷 사진을 올려 주세요.</p>
 
       <div className="studio-picker" role="listbox" aria-label="입어볼 옷">
         {options.map((o) => (
@@ -112,8 +112,8 @@ export default function TryOnStudio({ wardrobe = [], profile, current = null, on
 
       {chosen?.itemId && (
         <div className="save-row">
-          <button type="button" className="btn ghost block" onClick={save}>
-            {hasResult ? 'AI 결과를 옷장 사진으로 저장' : '지금 미리보기를 옷장 사진으로 저장'}
+          <button type="button" className="btn ghost block" onClick={save} disabled={!hasResult}>
+            가상 피팅 결과를 옷장 사진으로 저장
           </button>
           {saved && <p className="muted small" role="status">{saved}</p>}
         </div>

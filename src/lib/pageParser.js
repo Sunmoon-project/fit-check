@@ -133,8 +133,30 @@ export function mergeSplitTables(details) {
   return { merged, info }
 }
 
+// 사이즈 이름 칸이 표 밖의 옆 목록으로 따로 있는 표 (무신사 실측표: <ul>cm·내 사이즈·1 (M)·2 (L)…</ul> + <table>).
+// 표의 모든 본문 줄 첫 칸이 숫자(또는 -)이고, 표에서 3단계 안의 형제 요소 중 자식 수가 표 줄 수와 같은 목록이 있으면 줄 앞에 붙여요.
+const BARE_NUM_RE = /^(?:-?\d+(?:\.\d+)?|-)$/
+const SIDE_LABEL_RE = /\b(?:XXS|XS|S|M|L|XL|XXL|\d?XL|F|FREE)\b|^\d{1,3}(?:\s*\(.+\))?$/i
+function withSideLabels(d) {
+  const { rows, el } = d
+  if (rows.length < 3 || !hasHeadWord([rows[0]])) return rows
+  const body = rows.slice(1).filter((r) => r.length >= 2)
+  if (body.length < 2 || !body.every((r) => BARE_NUM_RE.test(r[0]))) return rows
+  for (let e = el, i = 0; e?.parentElement && i < 3; e = e.parentElement, i++) {
+    for (const sib of e.parentElement.children) {
+      if (sib === e || sib.children.length !== rows.length || all(sib, 'table').length) continue
+      const labels = Array.from(sib.children).map(cellTextOf)
+      const bodyLabels = labels.filter((_, j) => j > 0 && rows[j].length >= 2)
+      if (!bodyLabels.every((l) => SIDE_LABEL_RE.test(l))) continue
+      return rows.map((r, j) => [j === 0 ? '사이즈' : labels[j], ...r])
+    }
+  }
+  return rows
+}
+
 export function readTables(root) {
   const details = all(root, 'table').map(readTableDetail)
+  for (const d of details) d.rows = withSideLabels(d)
   const tables = details.map((d) => d.rows)
   // 머리글 표와 본문 표가 따로 있는 경우: 이어 붙인 표를 뒤에 더해요(원래 표는 그대로 둠).
   if (details.length >= 2) for (const m of mergeSplitTables(details).merged) tables.push(m.rows)
@@ -861,11 +883,20 @@ export function parseGender(text, strict = false) {
  * @param pageUrl 현재 주소 (표시용)
  * @returns 서버 파서와 같은 모양의 상품 객체 (엔진 입력). 이름도 못 읽으면 null.
  */
+export const SITE_ONLY_NAME_RE = /^(?:\[?\s*w\s?concept\s*\]?|w컨셉(?:\s*\(w concept\))?|무신사|musinsa|29cm|번개장터|후[르루]츠\s?패밀리)$/i
+
 export function parsePage(root, pageUrl = '', opts = {}) {
   const ld = collectJsonLd(root)
   const ldProduct = ld.find((n) => isType(n, 'Product')) || null
   const h1 = clean(all(root, 'h1')[0]?.textContent)
-  const name = clean(ldProduct?.name || metaContent(root, 'og:title') || h1 || all(root, 'title')[0]?.textContent)
+  // nameOverride: 리뷰 전체보기 페이지처럼 상품명이 없는 페이지에서, 저장해 둔 상품명을 쓸 때
+  // 쇼핑몰 이름뿐인 제목('[W CONCEPT]')은 건너뛰고 다음 후보를 써요.
+  const nameCands = [opts.nameOverride, ldProduct?.name, metaContent(root, 'og:title'), h1, all(root, 'title')[0]?.textContent].map(clean)
+  const name = nameCands.find((n) => n && !SITE_ONLY_NAME_RE.test(n)) || nameCands.find(Boolean) || ''
+  // 대표 사진: og:image → JSON-LD image. https 주소만 써요(화면에 보여주기만 하고 저장·전송하지 않아요).
+  const ldImage = [].concat(ldProduct?.image || [])[0]
+  const imageRaw = metaContent(root, 'og:image') || (typeof ldImage === 'string' ? ldImage : ldImage?.url) || ''
+  const image = /^https:\/\//i.test(imageRaw) ? imageRaw.slice(0, 500) : /^\/\//.test(imageRaw) ? `https:${imageRaw}`.slice(0, 500) : null
   if (!name) return null
 
   const notes = []
@@ -937,6 +968,8 @@ export function parsePage(root, pageUrl = '', opts = {}) {
     // 구조를 찾았으면 상품명이 아닌 실제 본문·옵션·체형 정보로만 해석해요.
     const synthesized = v.structured ? [v.sizePart ? `구매 옵션 ${v.sizePart}.` : '', v.bodyInfo, v.body].filter(Boolean).join(' ') : t
     const parsed = parseReviewText(synthesized, sizeLabels)
+    // 쇼핑몰이 따로 받는 평가 칸('사이즈 정사이즈/커요/작아요', 무신사 만족도)은 본문 단어 세기보다 먼저 믿어요.
+    if (v.shoeFeel?.size) parsed.fit = v.shoeFeel.size
     parsed.gender = v.structured && v.bodyInfo ? parseGender(v.bodyInfo) : parseGender(t, true)
     if (!hasClue(parsed)) {
       reviewDropped.noClue += 1
@@ -991,6 +1024,9 @@ export function parsePage(root, pageUrl = '', opts = {}) {
     url: pageUrl,
     source: 'extension',
     name: name.slice(0, 120),
+    image,
+    // JSON-LD 판매가(숫자). 화면 글에서 가격을 못 읽을 때 씀
+    ldPrice: Number([].concat(ldProduct?.offers || [])[0]?.price ?? [].concat(ldProduct?.offers || [])[0]?.lowPrice) || null,
     category,
     categoryConfidence: cls.category === category ? cls.confidence : 'low',
     categoryEvidence: categoryInfo({ ...cls, category }).evidence,
