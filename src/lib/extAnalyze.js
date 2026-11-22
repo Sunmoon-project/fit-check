@@ -203,6 +203,7 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     chartRecord: opts.collectSamples ? chartRecordFromProduct(product, { pageUrl }) : null,
     learnSamples: opts.collectSamples ? toSamples(product, { pageUrl }) : [],
     compareView: cmpView.view,
+    brand: product.chartBrand || product.pageBrand || '',
     shoeView: shoe,
     // 상품 대상 성별이 프로필 성별과 다를 때만 { gender, text, mismatch } (옷에도 같은 함수)
     targetGender: shoe ? shoe.targetGender : targetGenderNotice(product.targetGender, profile.gender),

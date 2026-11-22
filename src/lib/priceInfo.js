@@ -110,6 +110,7 @@ export function priceEntryOf(product, prices, { pageUrl = '', now = Date.now() }
     url,
     mall,
     name,
+    brand: String(product.chartBrand || product.pageBrand || product.brand || '').slice(0, 40),
     brandKey,
     code: code.length >= 6 ? code : '',
     image: typeof product.image === 'string' && /^https:\/\//.test(product.image) ? product.image.slice(0, 500) : null,
@@ -151,24 +152,27 @@ export const SEARCH_MALLS = [
   { mall: 'musinsa.com', label: '무신사', url: (q) => `https://www.musinsa.com/search/goods?keyword=${q}` },
   { mall: '29cm.co.kr', label: '29CM', url: (q) => `https://www.29cm.co.kr/store/search?keyword=${q}` },
   { mall: 'wconcept.co.kr', label: 'W컨셉', url: (q) => `https://display.wconcept.co.kr/search?keyword=${q}` },
+  { mall: 'kream.co.kr', label: 'KREAM', url: (q) => `https://kream.co.kr/search?keyword=${q}` },
   { mall: 'naver.com', label: '네이버 쇼핑', url: (q) => `https://search.shopping.naver.com/search/all?query=${q}` },
   { mall: 'bunjang.co.kr', label: '번개장터(중고)', url: (q) => `https://m.bunjang.co.kr/search/products?q=${q}` },
   { mall: 'fruitsfamily.com', label: '후르츠패밀리(중고)', url: (q) => `https://fruitsfamily.com/search/${q}` },
 ]
 
-/** 검색어: 대괄호 태그·색상 수·쇼핑몰 꼬리를 뺀 상품명 */
-export function searchQueryOf(name) {
-  return String(name || '')
+/** 검색어: 브랜드 + 대괄호 태그·색상 수·쇼핑몰 꼬리를 뺀 상품명 (상품명에 브랜드가 이미 있으면 한 번만) */
+export function searchQueryOf(name, brand = '') {
+  const base = String(name || '')
     .replace(/\[[^\]]*\]|\([^)]*\)|©|®|™/g, ' ')
     .replace(/_?\d+\s?COLOR\b/gi, ' ')
     .replace(/\s*[|\-–].*$/, '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 40)
+  const b = String(brand || '').replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 20)
+  const withBrand = b && !base.toLowerCase().includes(b.toLowerCase()) ? `${b} ${base}` : base
+  return withBrand.slice(0, 50).trim()
 }
 
-export function searchLinks(name, exceptMall = '') {
-  const q = encodeURIComponent(searchQueryOf(name))
+export function searchLinks(name, exceptMall = '', brand = '') {
+  const q = encodeURIComponent(searchQueryOf(name, brand))
   if (!q) return []
   return SEARCH_MALLS.filter((m) => !String(exceptMall).endsWith(m.mall)).map((m) => ({ label: m.label, url: m.url(q) }))
 }

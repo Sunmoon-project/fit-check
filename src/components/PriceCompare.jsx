@@ -160,12 +160,12 @@ export default function PriceCompare({ wardrobe = [], onBack }) {
         {first && (
           <div className="pc-links">
             <span className="muted small">다른 쇼핑몰에서 찾아보기</span>
-            {searchLinks(first.name, first.mall).map((l) => <a key={l.url} href={l.url} target="_blank" rel="noopener noreferrer" className="chip small">{l.label}</a>)}
+            {searchLinks(first.name, first.mall, first.brand).map((l) => <a key={l.url} href={l.url} target="_blank" rel="noopener noreferrer" className="chip small">{l.label}</a>)}
           </div>
         )}
       </div>
 
-      <NaverSearch initialQuery={first ? searchQueryOf(first.name) : groups[0]?.[0] ? searchQueryOf(groups[0][0].name) : ''} myBest={rows.find((r) => r.cheapest)?.prices.best || first?.prices.best || null} />
+      <NaverSearch initialQuery={first ? searchQueryOf(first.name, first.brand) : groups[0]?.[0] ? searchQueryOf(groups[0][0].name, groups[0][0].brand) : ''} myBest={rows.find((r) => r.cheapest)?.prices.best || first?.prices.best || null} />
 
       {groups.length > 0 && (
         <>
