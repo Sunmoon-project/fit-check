@@ -37,12 +37,11 @@ const CSS = `
 .fab:hover{transform:translateY(-1px);box-shadow:0 10px 26px rgba(0,0,0,.26),0 1px 2px rgba(0,0,0,.2)}
 .fab:active{transform:scale(.96)}
 .fab:disabled{opacity:.8;cursor:default;transform:none}
-.wrap.m{right:10px;bottom:28vh}
-.wrap.m .fab{width:52px;height:52px;padding:0;justify-content:center;font-size:0;opacity:.45;transition:opacity .2s,transform .15s var(--e)}
-.wrap.m .fab::after{content:'핏';font-size:18px;font-weight:800}
+.wrap.m{right:12px;bottom:26vh}
+.wrap.m .fab{width:52px;height:52px;padding:0;justify-content:center;font-size:0;background:#3182f6;opacity:.9;box-shadow:0 6px 18px rgba(49,130,246,.35),0 1px 3px rgba(0,0,0,.15);transition:opacity .2s,transform .15s var(--e)}
+.wrap.m .fab::after{content:'핏';font-size:19px;font-weight:800}
 .wrap.m .fab:active,.wrap.m .fab:focus-visible,.wrap.m .fab:disabled{opacity:1}
 .wrap.m .fab:disabled::after{content:none}
-.wrap.m .card,.wrap.m .card.wide{z-index:2;position:fixed;left:8px;right:8px;bottom:8px;width:auto;max-width:none;max-height:78vh}
 .fab:disabled::before{content:'';width:10px;height:10px;border-radius:50%;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;animation:spin .8s linear infinite}
 .card{width:380px;max-width:min(calc(100vw - 32px),var(--wroom,100vw));max-height:min(80vh,560px,var(--room,100vh));overflow-y:auto;overscroll-behavior:contain;background:#fff;border:1px solid #e4e4e7;border-radius:16px;padding:0 14px 14px;box-shadow:0 18px 48px rgba(0,0,0,.18),0 2px 6px rgba(0,0,0,.06);font-size:12px;line-height:1.5;transform-origin:bottom right;animation:cardIn .4s var(--e);transition:width .4s var(--e),max-height .4s var(--e);scrollbar-width:thin}
 .card.wide{width:min(760px,calc(100vw - 32px),var(--wroom,100vw));max-height:min(calc(100vh - 96px),var(--room,100vh))}
@@ -286,6 +285,18 @@ tr.rec .cv{color:#9fe0ba}
 @keyframes zin{from{opacity:0;transform:scale(.94)}}
 @keyframes wipe{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
 @keyframes spin{to{transform:rotate(360deg)}}
+/* 아이폰 앱: 아래에서 올라오는 시트. 카드 안 글씨·간격은 zoom으로 1.25배(12px 본문 → 15px). */
+.wrap.m .card,.wrap.m .card.wide{z-index:2;position:fixed;left:0;right:0;bottom:0;width:auto;max-width:none;max-height:66vh;zoom:1.25;border:0;border-radius:20px 20px 0 0;padding:0 16px calc(12px + env(safe-area-inset-bottom));box-shadow:0 -8px 32px rgba(0,0,0,.16);transform-origin:bottom center;animation:sheetIn .38s var(--e)}
+.wrap.m .hd{margin:0 -16px 6px;padding:16px 8px 8px 16px;border-bottom:0;cursor:default}
+.wrap.m .hd::before{content:'';position:absolute;top:6px;left:50%;width:32px;height:4px;margin-left:-16px;border-radius:2px;background:#d1d6db}
+.wrap.m .hd .eyebrow{font-size:14px}
+.wrap.m .close{width:32px;height:32px;font-size:16px}
+.wrap.m .size{font-size:36px}
+.wrap.m .sec{border:0;background:#f2f4f6;border-radius:14px}
+.wrap.m .sec[open]{box-shadow:none}
+.wrap.m .sec>summary{padding:12px 14px}
+.wrap.m .btn{padding:9px 14px;border-radius:12px}
+@keyframes sheetIn{from{transform:translateY(40%);opacity:0}}
 @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
 `
 
