@@ -38,7 +38,7 @@ const CSS = `
 .fab:active{transform:scale(.96)}
 .fab:disabled{opacity:.8;cursor:default;transform:none}
 .wrap.m{right:12px;bottom:26vh}
-.wrap.m .fab{width:52px;height:52px;padding:0;justify-content:center;font-size:0;background:#3182f6;opacity:.9;box-shadow:0 6px 18px rgba(49,130,246,.35),0 1px 3px rgba(0,0,0,.15);transition:opacity .2s,transform .15s var(--e)}
+.wrap.m .fab{width:52px;height:52px;padding:0;gap:0;letter-spacing:0;line-height:1;justify-content:center;font-size:0;background:#3182f6;opacity:.9;box-shadow:0 6px 18px rgba(49,130,246,.35),0 1px 3px rgba(0,0,0,.15);transition:opacity .2s,transform .15s var(--e)}
 .wrap.m .fab::after{content:'핏';font-size:19px;font-weight:800}
 .wrap.m .fab:active,.wrap.m .fab:focus-visible,.wrap.m .fab:disabled{opacity:1}
 .wrap.m .fab:disabled::after{content:none}

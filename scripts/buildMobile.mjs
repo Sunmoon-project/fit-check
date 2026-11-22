@@ -46,11 +46,14 @@ details input[type=number],details select{background-color:#fff}
 summary{padding:18px 0;font-size:16px}
 .opt{font-size:14px}
 .guide{background:#fff;border-radius:14px;padding:12px}
+.gb .ga{stroke:#e5e8eb}
 .gchips button{padding:6px 11px;font-size:13px}
 .gt b{font-size:15px}.gt p{font-size:14px;line-height:1.5}
 button.secondary{position:fixed;left:24px;right:24px;bottom:calc(16px + env(safe-area-inset-bottom));width:auto;height:56px;margin:0;border:0;border-radius:16px;background:var(--accent);color:#fff;font-size:17px;box-shadow:0 -12px 24px 12px #fff}
+button.secondary:hover{background:var(--accent)}
 button.secondary:active{transform:scale(.98);background:#1b64da}
-#status{position:fixed;left:0;right:0;bottom:calc(84px + env(safe-area-inset-bottom));text-align:center;font-size:14px;font-weight:600;color:var(--accent);margin:0}
+#status{position:fixed;left:24px;right:24px;bottom:calc(84px + env(safe-area-inset-bottom));padding:12px 16px;border-radius:14px;background:#fff;box-shadow:0 4px 16px rgba(0,0,0,.12);text-align:center;font-size:14px;font-weight:600;line-height:1.45;color:var(--accent);margin:0}
+#status:empty{display:none}
 #status.err{color:#e5484d}`
 
 // 내 체형 입력 화면: 확장 팝업(popup.html)을 그대로 써요. '이 페이지에서 찾기' 버튼은 앱에 탭이 없으니 숨겨요.
