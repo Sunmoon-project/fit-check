@@ -4,10 +4,11 @@
 // 역산값(유사도 가중 평균)을 키·몸무게 공식 추정값과 섞고, 공식값에서 MAX_SHIFT 넘게 옮기지 않아요.
 // 직접 잰 부위, 기장, 신발은 건드리지 않아요. 후기는 각자 취향으로 평가하니 휴리스틱이에요.
 
-export const REVIEW_EST_PARTS = ['shoulder', 'chest', 'waist', 'hip', 'thigh']
+// 어깨는 빼요: 래글런·드롭숄더처럼 옷마다 어깨 재는 위치가 달라서, 후기로 역산하면 몸 어깨가 크게 틀려요(예: 180·80kg 남성이 40cm).
+export const REVIEW_EST_PARTS = ['chest', 'waist', 'hip', 'thigh']
 const PRIOR_WEIGHT = 2 // 공식 추정값을 후기 몇 건(유사도 100%)만큼 믿을지
 const MIN_REVIEWS = 2
-const MAX_SHIFT = 6 // cm
+const MAX_SHIFT = 4 // cm. 키·몸무게 추정의 보통 오차(±3~5cm) 안에서만 옮겨요
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v)
 const half = (v) => Math.round(v * 2) / 2

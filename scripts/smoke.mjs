@@ -5711,9 +5711,13 @@ test('후기 보정 추정: 비슷한 체형이 산 사이즈·핏 평가로 직
   // '작아요'는 더 큰 몸으로 역산해요
   const small = reviewBodyEstimate({ values: base, measured: new Set(), reviews: reviews.map((x) => ({ ...x, fit: 'small' })), measuresOf: (s) => chart[s], rules: EASE_RULES })
   assert.ok(small.values.chest > r.values.chest)
-  // 아무리 많아도 공식값에서 6cm 넘게 옮기지 않아요
+  // 아무리 많아도 공식값에서 4cm 넘게 옮기지 않아요
   const far = reviewBodyEstimate({ values: base, measured: new Set(), reviews: Array.from({ length: 20 }, () => ({ size: 'L', fit: 'small', similarity: 100 })), measuresOf: (s) => ({ L: { chest: 140 } })[s], rules: EASE_RULES })
-  assert.equal(far.values.chest, 103.5)
+  assert.equal(far.values.chest, 101.5)
+  // 어깨는 후기로 옮기지 않아요 (래글런·드롭숄더는 어깨 실측이 몸 어깨와 달라서)
+  const raglan = reviewBodyEstimate({ values: base, measured: new Set(), reviews, measuresOf: () => ({ shoulder: 38, chest: 112 }), rules: EASE_RULES })
+  assert.equal(raglan.values.shoulder, 45.5)
+  assert.ok(!raglan.reviewParts.shoulder)
 })
 
 test('단계형 추천: 키·몸무게만이면 비슷한 체형 후기 2건을 우선하고, 가슴을 직접 재면 실측 비교를 우선한다 (가짜 데이터)', () => {
