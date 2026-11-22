@@ -181,3 +181,17 @@ npm run build:mobile      # 확장 빌드를 mobile/injected.js로 묶기 (확�
 cd mobile && npm install
 npx expo start            # Expo Go 앱으로 QR을 찍거나 i(iOS 시뮬레이터)·a(안드로이드)
 ```
+
+아이폰에 직접 설치(무료 Apple ID, 7일마다 다시 설치): 아이폰을 케이블로 연결하고 Xcode에 Apple ID를 로그인해 둔 뒤
+
+```bash
+cd mobile && npx expo prebuild -p ios        # mobile/ios 생성 (저장소에는 올리지 않아요)
+# mobile/ios/app.xcodeproj를 Xcode로 열어 Signing & Capabilities에서 Team을 고르고,
+# Bundle Identifier를 나만 쓰는 이름(예: com.fitcheck.mobile.내이름)으로 바꿔요
+cd ios && xcodebuild -workspace app.xcworkspace -scheme app -configuration Release \
+  -destination 'generic/platform=iOS' -derivedDataPath build/dd -allowProvisioningUpdates build
+xcrun devicectl list devices                 # 아이폰 ID 확인
+xcrun devicectl device install app --device <아이폰 ID> build/dd/Build/Products/Release-iphoneos/app.app
+```
+
+처음 실행할 때 '신뢰하지 않는 개발자'가 뜨면 아이폰 설정 → 일반 → VPN 및 기기 관리에서 내 Apple ID를 신뢰해 주세요.
