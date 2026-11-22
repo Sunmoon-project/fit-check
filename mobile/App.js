@@ -109,7 +109,7 @@ function Home({ profile, onProfile, onOpen }) {
           <View style={s.meIcon}><Icon name="figure.stand" size={22} color={C.accent} /></View>
           <View style={s.flex}>
             <Text style={s.caption}>내 체형</Text>
-            <Text style={s.meValue}>{num(profile.height)}cm · {num(profile.weight)}kg · {FIT_LABEL[profile.preferredFit] || '레귤러'}</Text>
+            <Text style={s.meValue}>{num(profile.height)}cm · {num(profile.weight)}kg · {Object.hasOwn(FIT_LABEL, profile.preferredFit) ? FIT_LABEL[profile.preferredFit] : '레귤러'}</Text>
           </View>
           <Text style={s.link}>수정</Text>
         </Btn>
