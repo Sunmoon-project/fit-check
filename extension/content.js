@@ -31,7 +31,7 @@ const STEP_WAIT_MS = 2500 // 한 단계에서 기다리는 최대 시간
 
 const CSS = `
 :host{all:initial}
-*{box-sizing:border-box;font-family:'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',-apple-system,BlinkMacSystemFont,sans-serif}
+*{word-break:keep-all;overflow-wrap:anywhere;box-sizing:border-box;font-family:'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',-apple-system,BlinkMacSystemFont,sans-serif}
 .wrap{--e:cubic-bezier(.22,1,.36,1);position:fixed;right:16px;bottom:16px;z-index:2147483647;display:flex;flex-direction:column;align-items:flex-end;gap:10px;color:#18181b;-webkit-font-smoothing:antialiased}
 .fab{display:inline-flex;align-items:center;gap:7px;border:0;border-radius:999px;background:#18181b;color:#fff;padding:11px 16px;font-size:13px;font-weight:600;letter-spacing:-.01em;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.22),0 1px 2px rgba(0,0,0,.2);transition:transform .2s var(--e),box-shadow .2s var(--e),opacity .2s}
 .fab:hover{transform:translateY(-1px);box-shadow:0 10px 26px rgba(0,0,0,.26),0 1px 2px rgba(0,0,0,.2)}
@@ -296,6 +296,8 @@ tr.rec .cv{color:#9fe0ba}
 .wrap.m .sec[open]{box-shadow:none}
 .wrap.m .sec>summary{padding:12px 14px}
 .wrap.m .btn{padding:9px 14px;border-radius:12px}
+/* 마지막 줄에 한두 글자만 남지 않게 */
+.wrap.m p,.wrap.m li,.wrap.m .sum,.wrap.m .note,.wrap.m .tiny,.wrap.m .prd b{text-wrap:pretty}
 @keyframes sheetIn{from{transform:translateY(40%);opacity:0}}
 @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
 `

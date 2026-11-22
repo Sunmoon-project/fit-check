@@ -20,12 +20,13 @@ const SHIM = `function __fcChrome(){
 
 // 쇼핑몰 페이지에 넣는 코드: content.js가 쓰는 chrome을 바깥(window)에 두지 않고 인자로만 넘겨요.
 const contentJs = `(function(){if(window.__fitcheckInjected)return;window.__fitcheckInjected=true;${SHIM}
-(function(chrome){${ext('content.js')}
+(function(chrome){${ext('content.js').replaceAll('이 브라우저에만', '이 기기에만')}
 })(__fcChrome())})();true;`
 
 // 아이폰용 체형 입력 화면: 앱 홈과 같은 색·글씨 크기(17pt 본문, 54pt 칸)로 덮어써요. 제목·닫기는 앱 시트가 그려요.
 const MOBILE_POPUP_CSS = `:root{--ink:#191f28;--sub:#4e5968;--mute:#8b95a1;--line:#e5e8eb;--soft:#f2f4f6;--accent:#3182f6}
-html{-webkit-text-size-adjust:100%}
+html{-webkit-text-size-adjust:100%;word-break:keep-all;overflow-wrap:anywhere}
+p,.gt p,.hint{text-wrap:pretty}
 body{width:auto;padding:8px 24px calc(120px + env(safe-area-inset-bottom));font-size:16px;-webkit-tap-highlight-color:transparent}
 #run,h1{display:none}
 .hint{font-size:15px;line-height:1.5;margin:0 0 28px;color:var(--sub)}
@@ -60,7 +61,7 @@ button.secondary:active{transform:scale(.98);background:#1b64da}
 const profileHtml = ext('popup.html')
   .replace('<link rel="stylesheet" href="popup.css" />', `<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" /><style>${ext('popup.css')}
 ${MOBILE_POPUP_CSS}</style>`)
-  .replace('이 브라우저에만 저장돼요.', '이 기기에만 저장돼요.')
+  .replace('이 브라우저에만 저장돼요.', '이\u00a0기기에만 저장돼요.')
   .replace('체형 정보 저장</button>', '저장하기</button>')
   .replace('<script src="popup.js"></script>', `<script>${SHIM};window.chrome=__fcChrome()</script><script>${ext('popup.js').replace('이 브라우저에만 보관돼요.', '이 기기에만 보관돼요.').replace(/<\/script/g, '<\\/script')}</script>`)
 if (!profileHtml.includes('__fcChrome') || !profileHtml.includes('width=device-width')) throw new Error('popup.html 모양이 바뀌어 모바일용으로 묶지 못했어요.')
