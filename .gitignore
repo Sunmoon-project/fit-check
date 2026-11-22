@@ -16,3 +16,7 @@ dist-extension
 
 # 모바일 앱에 넣는 확장 묶음 (npm run build:mobile로 생성)
 mobile/injected.js
+
+# 아이폰 직접 설치용 네이티브 프로젝트 (npx expo prebuild로 생성)
+mobile/ios/
+mobile/android/
