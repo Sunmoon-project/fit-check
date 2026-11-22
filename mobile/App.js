@@ -102,23 +102,23 @@ function Home({ profile, onProfile, onOpen }) {
   const [address, setAddress] = useState('')
   return (
     <View style={s.home}>
-      <Text style={s.title}>사기 전에{'\n'}내 사이즈부터</Text>
+      <Text lineBreakStrategyIOS="hangul-word" style={s.title}>사기 전에{'\n'}내 사이즈부터</Text>
 
       {profile ? (
         <Btn style={[s.card, s.me]} onPress={onProfile} label="내 체형 수정">
           <View style={s.meIcon}><Icon name="figure.stand" size={22} color={C.accent} /></View>
           <View style={s.flex}>
-            <Text style={s.caption}>내 체형</Text>
-            <Text style={s.meValue}>{num(profile.height)}cm · {num(profile.weight)}kg · {Object.hasOwn(FIT_LABEL, profile.preferredFit) ? FIT_LABEL[profile.preferredFit] : '레귤러'}</Text>
+            <Text lineBreakStrategyIOS="hangul-word" style={s.caption}>내 체형</Text>
+            <Text lineBreakStrategyIOS="hangul-word" style={s.meValue}>{num(profile.height)}cm · {num(profile.weight)}kg · {Object.hasOwn(FIT_LABEL, profile.preferredFit) ? FIT_LABEL[profile.preferredFit] : '레귤러'}</Text>
           </View>
-          <Text style={s.link}>수정</Text>
+          <Text lineBreakStrategyIOS="hangul-word" style={s.link}>수정</Text>
         </Btn>
       ) : (
         <View style={[s.card, s.start]}>
-          <Text style={s.startTitle}>먼저 키와 몸무게를 알려주세요</Text>
-          <Text style={s.body}>이 기기에만 저장되고, 어디로도 보내지 않아요.</Text>
+          <Text lineBreakStrategyIOS="hangul-word" style={s.startTitle}>먼저 키와 몸무게를 알려주세요</Text>
+          <Text lineBreakStrategyIOS="hangul-word" style={s.body}>이 기기에만 저장되고, 어디로도 보내지 않아요.</Text>
           <Btn style={s.primary} onPress={onProfile} label="내 체형 입력하기">
-            <Text style={s.primaryText}>내 체형 입력하기</Text>
+            <Text lineBreakStrategyIOS="hangul-word" style={s.primaryText}>내 체형 입력하기</Text>
           </Btn>
         </View>
       )}
@@ -141,13 +141,13 @@ function Home({ profile, onProfile, onOpen }) {
       </View>
 
       <View style={s.group}>
-        <Text style={s.groupTitle}>쇼핑몰에서 고르기</Text>
+        <Text lineBreakStrategyIOS="hangul-word" style={s.groupTitle}>쇼핑몰에서 고르기</Text>
         <View style={s.card}>
           {MALLS.map(([name, host, link], i) => (
             <Btn key={name} style={[s.mall, i > 0 && s.sep]} onPress={() => onOpen(link)} label={`${name} 열기`}>
               <View style={s.flex}>
-                <Text style={s.mallName}>{name}</Text>
-                <Text style={s.caption}>{host}</Text>
+                <Text lineBreakStrategyIOS="hangul-word" style={s.mallName}>{name}</Text>
+                <Text lineBreakStrategyIOS="hangul-word" style={s.caption}>{host}</Text>
               </View>
               <Icon name="chevron.right" size={14} color={C.mute} />
             </Btn>
@@ -156,8 +156,8 @@ function Home({ profile, onProfile, onOpen }) {
       </View>
 
       <View style={s.tip}>
-        <View style={s.fabDot}><Text style={s.fabDotText}>핏</Text></View>
-        <Text style={[s.body, s.flex]}>상품 페이지에서 화면 옆 <Text style={s.strong}>핏</Text> 버튼을 누르면 내 사이즈를 알려드려요.</Text>
+        <View style={s.fabDot}><Text lineBreakStrategyIOS="hangul-word" style={s.fabDotText}>핏</Text></View>
+        <Text lineBreakStrategyIOS="hangul-word" style={[s.body, s.flex]}>상품 페이지에서 화면 옆 <Text lineBreakStrategyIOS="hangul-word" style={s.strong}>핏</Text> 버튼을 누르면 내 사이즈를 알려드려요.</Text>
       </View>
     </View>
   )
@@ -209,7 +209,7 @@ export default function App() {
               </Btn>
               <View style={s.addr}>
                 <Icon name="lock.fill" size={11} color={C.mute} />
-                <Text style={s.addrText} numberOfLines={1}>{host || address}</Text>
+                <Text lineBreakStrategyIOS="hangul-word" style={s.addrText} numberOfLines={1}>{host || address}</Text>
               </View>
               <Btn style={s.iconBtn} onPress={() => web.current?.reload()} label="새로고침">
                 <Icon name="arrow.clockwise" size={17} color={C.ink} />
@@ -247,7 +247,7 @@ export default function App() {
         <Modal visible={showProfile} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowProfile(false)}>
           <View style={s.sheet}>
             <View style={s.sheetHead}>
-              <Text style={s.sheetTitle}>내 체형</Text>
+              <Text lineBreakStrategyIOS="hangul-word" style={s.sheetTitle}>내 체형</Text>
               <Btn style={s.close} onPress={() => setShowProfile(false)} label="닫기">
                 <Icon name="xmark" size={14} color={C.sub} />
               </Btn>
