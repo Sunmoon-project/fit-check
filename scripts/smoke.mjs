@@ -2333,8 +2333,7 @@ await atest('content.js(가짜 DOM, vm): 리뷰 탭 4개와 사진 모아보기,
   assert.ok(!created.some((e) => e.tagName === 'IMG' && /^(javascript|data):/i.test(e.src || '')))
   const send = created.find((e) => e.tagName === 'BUTTON' && e.textContent === '내 옷장으로 보내기')
   assert.ok(send, '보내기 버튼')
-  const NOTE = '3일 안에 웹을 열지 않으면 대기열에서 지워져요. file://로 연 웹은 크롬 확장 설정에서 ‘파일 URL에 대한 액세스 허용’을 켜야 자동으로 받아요.'
-  assert.ok(texts.includes(NOTE), '안내문은 정확히 두 문장')
+  assert.ok(!texts.some((t) => t.includes('3일 안에') || t.includes('localhost:5173')), '보내기 안내문·개발 서버 링크는 없어요')
   assert.ok(!texts.some((t) => t.includes('닉네임·리뷰 원문') || t.includes('서버로 보내지 않고')), '앞 문장 삭제')
   const more = created.find((e) => e.tagName === 'BUTTON' && e.textContent === '리뷰 더 불러오기')
   const stopBtn = created.findLast((e) => e.tagName === 'BUTTON' && e.textContent === '중단')
@@ -2412,7 +2411,7 @@ await atest('content.js(가짜 DOM, vm): 보내기를 누르면 변환된 항목
   const dump = JSON.stringify(queue)
   assert.ok(!dump.includes('"height":175') || !dump.includes('preferredFit'), '체형 정보 없음')
   assert.ok(!dump.includes('preferredFit') && !dump.includes('footLength'))
-  assert.ok(created.some((e) => e.tagName === 'A' && e.href === 'http://localhost:5173/' && e.rel === 'noopener noreferrer'), '웹 열기 링크')
+  assert.ok(!created.some((e) => e.tagName === 'A' && /개발 서버/.test(e.textContent)), '개발 서버 웹 열기 링크는 없어요')
 })
 
 test('content.js 소스: 보내기는 클릭 핸들러 안에서만 만들고 네트워크 호출을 쓰지 않는다', () => {
@@ -6620,68 +6619,6 @@ test('가격: 서버 파서는 JSON-LD 가격을 숫자로, 옷장 항목은 숫
   const w = (url, name, best) => ({ id: url, savedAt: 1, product: { name, url, category: 'outer' }, prices: { best, sale: best }, priceSeenAt: 1 })
   const html2 = textOf(render(WEB.PriceCompare, { wardrobe: [w('https://www.musinsa.com/products/1', '나이키 클럽 후디 BV2654-063', 79000), w('https://www.29cm.co.kr/products/2', '나이키 클럽 후디 BV2654-063', 69000)], onBack: () => {} }))
   assert.ok(html2.includes('가격 비교') && html2.includes('29CM') && html2.includes('최저') && html2.includes('69,000원'), html2.slice(0, 300))
-})
-
-// ---- 네이버 쇼핑 가격 검색 (가짜 fetch만, 실제 API는 키가 없어 호출하지 않았어요) ----
-import { createPriceSearchService, normalizeItems, cleanShopLink, PriceSearchError } from '../server/priceSearch.js'
-import { fitCheckApi as fitCheckApiPrice } from '../server/api.js'
-import { Readable as ReadablePrice } from 'node:stream'
-
-const NAVER_ENV = { NAVER_CLIENT_ID: 'id-secret-123', NAVER_CLIENT_SECRET: 'sec-secret-456' }
-const naverBody = { items: [
-  { title: '<b>나이키</b> 클럽 후디', link: 'http://search.shopping.naver.com/catalog/1', image: 'https://shopping-phinf.pstatic.net/a.jpg', lprice: '69000', mallName: '네이버', productType: '1', brand: '나이키' },
-  { title: '나이키 클럽 후디 중고', link: 'https://x.example/2', lprice: '20000', mallName: '중고몰', productType: '4' },
-  { title: '나이키 클럽 후디', link: 'https://www.musinsa.com/products/3', lprice: '59000', mallName: '무신사', productType: '2' },
-  { title: '가격 없음', link: 'https://a.example/4', lprice: '0', mallName: 'a', productType: '2' },
-  { title: '<script>x</script>', link: 'javascript:alert(1)', lprice: '50000', mallName: 'b', productType: '2' },
-] }
-
-await atest('가격 검색(네이버, 가짜 fetch): 키 헤더로 shop.json을 부르고, 중고·가격 없음·https 아닌 링크는 빼고 가격순, 같은 검색어는 캐시', async () => {
-  const calls = []
-  const fetch = async (url, init) => { calls.push({ url, init }); return { ok: true, status: 200, json: async () => naverBody } }
-  const svc = createPriceSearchService(NAVER_ENV, { fetch })
-  assert.deepEqual(svc.status(), { priceSearch: true })
-  const r = await svc.search('  나이키 클럽 후디  ')
-  const u = new URL(calls[0].url)
-  assert.equal(u.origin + u.pathname, 'https://openapi.naver.com/v1/search/shop.json')
-  assert.equal(u.searchParams.get('query'), '나이키 클럽 후디')
-  assert.equal(u.searchParams.get('exclude'), 'used:rental:cbshop')
-  assert.equal(calls[0].init.headers['X-Naver-Client-Id'], NAVER_ENV.NAVER_CLIENT_ID)
-  assert.deepEqual(r.items.map((x) => [x.mall, x.price]), [['무신사', 59000], ['네이버', 69000]])
-  assert.equal(r.items[1].title, '나이키 클럽 후디', '<b> 태그 제거')
-  assert.equal(r.items[1].link, 'https://search.shopping.naver.com/catalog/1', '네이버 http 링크는 https로')
-  await svc.search('나이키 클럽 후디')
-  assert.equal(calls.length, 1, '같은 검색어는 캐시')
-  assert.equal(cleanShopLink('http://evil.example/a'), '')
-  assert.equal(normalizeItems({ items: [{ title: 'x', link: 'https://a.example', lprice: 999999999, productType: 1 }] }).length, 0)
-  await assert.rejects(() => createPriceSearchService({}, { fetch }).search('나이키'), (e) => e instanceof PriceSearchError && e.status === 503)
-  await assert.rejects(() => svc.search('a'), (e) => e.code === 'INVALID_QUERY')
-  const bad = createPriceSearchService(NAVER_ENV, { fetch: async () => ({ ok: false, status: 401, json: async () => ({}) }) })
-  await assert.rejects(() => bad.search('나이키 후디'), (e) => e.code === 'AUTH' && !e.message.includes('secret'))
-})
-
-await atest('/api/price-search 라우팅: 상태에 켜짐 여부만, 응답·오류에 키가 없고, 꺼져 있으면 503', async () => {
-  const call = async (env, { method = 'POST', url = '/api/price-search', body, svc } = {}) => {
-    const plugin = fitCheckApiPrice(env, svc ? { priceSearch: svc } : {})
-    let mw
-    plugin.configureServer({ middlewares: { use: (fn) => (mw = fn) } })
-    const raw = body === undefined ? '' : JSON.stringify(body)
-    const req = Object.assign(ReadablePrice.from([Buffer.from(raw)]), { url, method, headers: { 'content-type': 'application/json', host: 'localhost:5173' } })
-    const res = { headers: {}, setHeader(k, v) { this.headers[k] = v }, end(t) { this.body = t } }
-    await mw(req, res, () => {})
-    return { status: res.statusCode, json: res.body ? JSON.parse(res.body) : null, raw: res.body || '' }
-  }
-  const svc = createPriceSearchService(NAVER_ENV, { fetch: async () => ({ ok: true, status: 200, json: async () => naverBody }) })
-  const st = await call(NAVER_ENV, { method: 'GET', url: '/api/status', svc })
-  assert.equal(st.json.priceSearch, true)
-  assert.ok(!st.raw.includes('secret'))
-  const ok = await call(NAVER_ENV, { body: { query: '나이키 클럽 후디' }, svc })
-  assert.equal(ok.status, 200)
-  assert.deepEqual(Object.keys(ok.json), ['items'])
-  assert.ok(!ok.raw.includes('secret'))
-  const off = await call({}, { body: { query: '나이키' } })
-  assert.equal(off.status, 503)
-  assert.equal((await call({}, { method: 'GET', url: '/api/status' })).json.priceSearch, false)
 })
 
 // ---- 사이즈 추천 근거 (fitRationale) ----

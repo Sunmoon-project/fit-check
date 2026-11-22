@@ -8,7 +8,11 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.fitcheck.mobile"
+      "bundleIdentifier": "com.fitcheck.mobile",
+      "infoPlist": {
+        "NSCameraUsageDescription": "전신 사진을 찍어 어깨·가슴·허리·엉덩이 치수를 재요. 사진은 휴대폰 안에서만 분석하고 어디로도 보내지 않아요.",
+        "NSPhotoLibraryUsageDescription": "앨범의 전신 사진으로 치수를 재요. 사진은 휴대폰 안에서만 분석하고 어디로도 보내지 않아요."
+      }
     },
     "android": {
       "adaptiveIcon": {

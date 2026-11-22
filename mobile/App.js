@@ -28,7 +28,32 @@ const MALLS = [
   ['29CM', '29cm.co.kr', 'https://www.29cm.co.kr'],
   ['W컨셉', 'wconcept.co.kr', 'https://www.wconcept.co.kr'],
   ['KREAM', 'kream.co.kr', 'https://kream.co.kr'],
+  ['번개장터', 'bunjang.co.kr', 'https://m.bunjang.co.kr'],
+  ['후루츠패밀리', 'fruitsfamily.com', 'https://fruitsfamily.com'],
 ]
+const HIDDEN_MALLS_KEY = 'fitcheck.malls.hidden.v1' // 홈에서 숨긴 쇼핑몰 이름 (앱만 읽어요, 쇼핑몰 페이지와 나누지 않아요)
+
+// 홈에 보일 쇼핑몰: 사용자가 '편집'에서 끈 것만 숨겨요. 하나도 안 남기지는 못하게 해요.
+function useHiddenMalls() {
+  const [hidden, setHidden] = useState([])
+  useEffect(() => {
+    AsyncStorage.getItem(HIDDEN_MALLS_KEY)
+      .then((raw) => {
+        const v = JSON.parse(raw || '[]')
+        if (Array.isArray(v)) setHidden(v.filter((n) => MALLS.some((m) => m[0] === n)))
+      })
+      .catch(() => {})
+  }, [])
+  function toggle(name) {
+    setHidden((h) => {
+      const next = h.includes(name) ? h.filter((n) => n !== name) : [...h, name]
+      if (next.length >= MALLS.length) return h
+      AsyncStorage.setItem(HIDDEN_MALLS_KEY, JSON.stringify(next)).catch(() => {})
+      return next
+    })
+  }
+  return [hidden, toggle]
+}
 // 저장값은 쇼핑몰 페이지도 쓸 수 있어서 믿지 않아요: 숫자가 아니면 '?'로 보여요(객체를 그리면 앱이 멈춰요).
 const num = (v) => (Number.isFinite(Number(v)) && v !== '' && v !== null ? String(Number(v)) : '?')
 const FIT_LABEL = { slim: '슬림', regular: '레귤러', relaxed: '오버핏' }
@@ -100,6 +125,9 @@ function Btn({ onPress, style, children, label, disabled }) {
 
 function Home({ profile, onProfile, onOpen }) {
   const [address, setAddress] = useState('')
+  const [hidden, toggleMall] = useHiddenMalls()
+  const [editing, setEditing] = useState(false)
+  const malls = editing ? MALLS : MALLS.filter((m) => !hidden.includes(m[0]))
   return (
     <View style={s.home}>
       <Text lineBreakStrategyIOS="hangul-word" style={s.title}>사기 전에{'\n'}내 사이즈부터</Text>
@@ -141,17 +169,30 @@ function Home({ profile, onProfile, onOpen }) {
       </View>
 
       <View style={s.group}>
-        <Text lineBreakStrategyIOS="hangul-word" style={s.groupTitle}>쇼핑몰에서 고르기</Text>
-        <View style={s.card}>
-          {MALLS.map(([name, host, link], i) => (
-            <Btn key={name} style={[s.mall, i > 0 && s.sep]} onPress={() => onOpen(link)} label={`${name} 열기`}>
-              <View style={s.flex}>
-                <Text lineBreakStrategyIOS="hangul-word" style={s.mallName}>{name}</Text>
-                <Text lineBreakStrategyIOS="hangul-word" style={s.caption}>{host}</Text>
-              </View>
-              <Icon name="chevron.right" size={14} color={C.mute} />
-            </Btn>
-          ))}
+        <View style={s.groupHead}>
+          <Text lineBreakStrategyIOS="hangul-word" style={s.groupTitle}>{editing ? '홈에 보일 쇼핑몰을 골라 주세요' : '쇼핑몰에서 고르기'}</Text>
+          <Btn onPress={() => setEditing((v) => !v)} label={editing ? '편집 끝내기' : '쇼핑몰 목록 편집'}>
+            <Text style={s.link}>{editing ? '완료' : '편집'}</Text>
+          </Btn>
+        </View>
+        <View style={s.grid}>
+          {malls.map(([name, host, link]) => {
+            const on = !hidden.includes(name)
+            return (
+              <Btn
+                key={name}
+                style={[s.tile, editing && !on && s.tileOff]}
+                onPress={() => (editing ? toggleMall(name) : onOpen(link))}
+                label={editing ? `${name} ${on ? '숨기기' : '보이기'}` : `${name} 열기`}
+              >
+                <View style={s.flex}>
+                  <Text lineBreakStrategyIOS="hangul-word" style={s.mallName} numberOfLines={1}>{name}</Text>
+                  <Text style={s.caption} numberOfLines={1}>{host}</Text>
+                </View>
+                {editing ? <Icon name={on ? 'checkmark.circle.fill' : 'circle'} size={22} color={on ? C.accent : C.line} /> : <Icon name="chevron.right" size={13} color={C.mute} />}
+              </Btn>
+            )
+          })}
         </View>
       </View>
 
@@ -289,9 +330,11 @@ const s = StyleSheet.create({
   search: { flexDirection: 'row', alignItems: 'center', gap: 10, height: 54, paddingHorizontal: 18, borderRadius: 16, backgroundColor: C.card },
   searchInput: { flex: 1, height: '100%', fontSize: 17, color: C.ink },
   group: { gap: 10 },
-  groupTitle: { fontSize: 15, fontWeight: '600', color: C.sub, paddingHorizontal: 4 },
-  mall: { flexDirection: 'row', alignItems: 'center', minHeight: 62, paddingHorizontal: 20 },
-  sep: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: C.line },
+  groupHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 4 },
+  groupTitle: { fontSize: 15, fontWeight: '600', color: C.sub },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  tile: { width: '48.5%', flexGrow: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 66, paddingHorizontal: 16, borderRadius: 18, backgroundColor: C.card },
+  tileOff: { opacity: 0.55 },
   mallName: { fontSize: 17, fontWeight: '600', color: C.ink },
   caption: { fontSize: 13, color: C.mute, marginTop: 1 },
   body: { fontSize: 15, lineHeight: 22, color: C.sub },

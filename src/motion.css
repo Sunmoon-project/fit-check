@@ -237,9 +237,7 @@ details[open] > summary::after { transform: translateY(1px) rotate(-135deg); }
 .pc-links a { text-decoration: none; }
 .pc-sub { margin: 22px 0 4px; font-size: 15px; }
 @media (prefers-reduced-motion: reduce) { .pc-verdict, .pc-list li { animation: none; } }
-.pc-row { display: flex; gap: 8px; margin: 8px 0; }
-.pc-q { flex: 1; min-width: 0; padding: 13px 14px; border: 1px solid var(--line-strong); border-radius: 12px; font: inherit; font-size: 14px; }
-.pc-input:focus, .pc-q:focus { border-color: var(--focus); box-shadow: 0 0 0 3px rgba(49, 130, 246, .16); outline: none; }
+.pc-input:focus { border-color: var(--focus); box-shadow: 0 0 0 3px rgba(49, 130, 246, .16); outline: none; }
 
 /* 가상 피팅: 입힐 옷 작은 사진, 기다리는 동안 사진 위 안내 */
 .tryon-garment-thumb { position: absolute; right: 8px; bottom: 8px; width: 26%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 10px; border: 2px solid #fff; box-shadow: 0 4px 14px rgba(0, 0, 0, .18); background: #fff; }

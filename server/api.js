@@ -2,13 +2,11 @@
 //   POST /api/product  { url }                          → 상품 페이지를 가져와 상품·사이즈표·리뷰 추출
 //   POST /api/tryon    { personImage, garmentImage, category, garmentName? } → Hugging Face IDM-VTON 가상 피팅 (무료)
 //   POST /api/image-search { imageUrl }                 → 사진 역검색(외부 서비스, 설정이 있을 때만). 미검증: server/imageSearch.js
-//   POST /api/price-search { query }                    → 네이버 쇼핑 검색 API로 쇼핑몰별 표시 최저가(설정이 있을 때만): server/priceSearch.js
 //   GET  /api/status                                    → 서버 기능 사용 가능 여부와 사용하는 Space, imageSearch 켜짐 여부
 // 키 없이도 동작해요. 선택 토큰(HF_TOKEN)과 사진 역검색 키(IMAGE_SEARCH_API_KEY)는 서버에만 있고 브라우저로 보내지 않습니다.
 import { safeFetchHtml, FetchError } from './safeFetch.js'
 import { parseProductHtml } from './productParser.js'
 import { createImageSearchService, ImageSearchError } from './imageSearch.js'
-import { createPriceSearchService, PriceSearchError } from './priceSearch.js'
 import { runHfTryOn, isValidSpaceId, isTryOnSupported, DEFAULT_SPACE } from './hfTryOn.js'
 
 const MAX_BODY = 15 * 1024 * 1024 // 사진 두 장(data URI) 기준
@@ -140,17 +138,6 @@ async function handleImageSearch(req, res, imageSearch) {
   }
 }
 
-async function handlePriceSearch(req, res, priceSearch) {
-  const { query } = await readJson(req)
-  try {
-    const r = await priceSearch.search(query)
-    return send(res, 200, { items: r.items })
-  } catch (e) {
-    if (e instanceof PriceSearchError) return send(res, e.status, { error: e.code, message: e.message })
-    throw e
-  }
-}
-
 // connect 방식 미들웨어. Vite 플러그인(개발), 프로덕션 서버(server/start.js), 독립 서버(server/standalone.js)가 모두 이걸 써요.
 export function createApiMiddleware(env = {}, opts = {}) {
   let space = env.HF_SPACE || DEFAULT_SPACE
@@ -160,7 +147,6 @@ export function createApiMiddleware(env = {}, opts = {}) {
   }
   const hf = { space, token: env.HF_TOKEN || '' }
   const imageSearch = opts.imageSearch || createImageSearchService(env)
-  const priceSearch = opts.priceSearch || createPriceSearchService(env)
   const allowedOrigins = parseAllowedOrigins(env.ALLOWED_ORIGINS)
   return async (req, res, next) => {
     const path = (req.url || '').split('?')[0]
@@ -179,7 +165,7 @@ export function createApiMiddleware(env = {}, opts = {}) {
       }
     }
     try {
-      if (path === '/api/status' && req.method === 'GET') return send(res, 200, { tryon: true, provider: 'huggingface', space, token: Boolean(hf.token), ...imageSearch.status(), ...priceSearch.status() })
+      if (path === '/api/status' && req.method === 'GET') return send(res, 200, { tryon: true, provider: 'huggingface', space, token: Boolean(hf.token), ...imageSearch.status() })
       if (req.method === 'POST') {
         const bad = checkPostRequest(req.headers, allowedOrigins)
         if (bad) return send(res, bad.status, { error: bad.error, message: bad.message })
@@ -187,7 +173,6 @@ export function createApiMiddleware(env = {}, opts = {}) {
       if (path === '/api/product' && req.method === 'POST') return await handleProduct(req, res)
       if (path === '/api/tryon' && req.method === 'POST') return await handleTryOn(req, res, hf)
       if (path === '/api/image-search' && req.method === 'POST') return await handleImageSearch(req, res, imageSearch)
-      if (path === '/api/price-search' && req.method === 'POST') return await handlePriceSearch(req, res, priceSearch)
       return send(res, 404, { error: 'NOT_FOUND' })
     } catch (e) {
       console.error('[api]', e)
