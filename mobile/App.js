@@ -29,6 +29,8 @@ const MALLS = [
   ['W컨셉', 'wconcept.co.kr', 'https://www.wconcept.co.kr'],
   ['KREAM', 'kream.co.kr', 'https://kream.co.kr'],
 ]
+// 저장값은 쇼핑몰 페이지도 쓸 수 있어서 믿지 않아요: 숫자가 아니면 '?'로 보여요(객체를 그리면 앱이 멈춰요).
+const num = (v) => (Number.isFinite(Number(v)) && v !== '' && v !== null ? String(Number(v)) : '?')
 const FIT_LABEL = { slim: '슬림', regular: '레귤러', relaxed: '오버핏' }
 
 // 확장의 chrome.storage.local 대용. 값 전체를 한 덩어리로 저장해요.
@@ -107,7 +109,7 @@ function Home({ profile, onProfile, onOpen }) {
           <View style={s.meIcon}><Icon name="figure.stand" size={22} color={C.accent} /></View>
           <View style={s.flex}>
             <Text style={s.caption}>내 체형</Text>
-            <Text style={s.meValue}>{profile.height}cm · {profile.weight}kg · {FIT_LABEL[profile.preferredFit] || '레귤러'}</Text>
+            <Text style={s.meValue}>{num(profile.height)}cm · {num(profile.weight)}kg · {FIT_LABEL[profile.preferredFit] || '레귤러'}</Text>
           </View>
           <Text style={s.link}>수정</Text>
         </Btn>
