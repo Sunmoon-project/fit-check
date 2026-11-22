@@ -44,8 +44,13 @@ const CSS = `
 .wrap.m .fab:disabled::after{content:none}
 .wrap.m .card,.wrap.m .card.wide{z-index:2;position:fixed;left:8px;right:8px;bottom:8px;width:auto;max-width:none;max-height:78vh}
 .fab:disabled::before{content:'';width:10px;height:10px;border-radius:50%;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;animation:spin .8s linear infinite}
-.card{width:380px;max-width:calc(100vw - 32px);max-height:min(80vh,560px);overflow-y:auto;overscroll-behavior:contain;background:#fff;border:1px solid #e4e4e7;border-radius:16px;padding:0 14px 14px;box-shadow:0 18px 48px rgba(0,0,0,.18),0 2px 6px rgba(0,0,0,.06);font-size:12px;line-height:1.5;transform-origin:bottom right;animation:cardIn .4s var(--e);transition:width .4s var(--e),max-height .4s var(--e);scrollbar-width:thin}
-.card.wide{width:min(760px,calc(100vw - 32px));max-height:calc(100vh - 96px)}
+.card{width:380px;max-width:min(calc(100vw - 32px),var(--wroom,100vw));max-height:min(80vh,560px,var(--room,100vh));overflow-y:auto;overscroll-behavior:contain;background:#fff;border:1px solid #e4e4e7;border-radius:16px;padding:0 14px 14px;box-shadow:0 18px 48px rgba(0,0,0,.18),0 2px 6px rgba(0,0,0,.06);font-size:12px;line-height:1.5;transform-origin:bottom right;animation:cardIn .4s var(--e);transition:width .4s var(--e),max-height .4s var(--e);scrollbar-width:thin}
+.card.wide{width:min(760px,calc(100vw - 32px),var(--wroom,100vw));max-height:min(calc(100vh - 96px),var(--room,100vh))}
+.wrap.al{align-items:flex-start}
+.wrap.al .card{transform-origin:bottom left}
+.wrap.at{flex-direction:column-reverse}
+.wrap.at .card{transform-origin:top right}
+.wrap.al.at .card{transform-origin:top left}
 .card.still,.card.still .size{animation:none}
 .card.min .fold{display:none}
 .fold{animation:fade .3s ease}
@@ -337,7 +342,8 @@ function makeDraggable(handle) {
     const sy = e.clientY
     const ox = dragX
     const oy = dragY
-    const box = wrapEl.getBoundingClientRect()
+    // 버튼이 화면 안에 남게만 막아요 (크게 펼친 카드도 옮길 수 있게). 놓으면 남은 자리만큼 카드 크기를 맞춰요.
+    const box = fab.getBoundingClientRect()
     let moved = false
     const move = (ev) => {
       const dx = ev.clientX - sx
@@ -352,19 +358,48 @@ function makeDraggable(handle) {
       wrapEl.style.transform = `translate(${dragX}px, ${dragY}px)`
     }
     const up = () => {
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', up)
+      handle.removeEventListener('pointermove', move)
+      handle.removeEventListener('pointerup', up)
+      handle.removeEventListener('pointercancel', up)
       wrapEl.classList.remove('dragging')
       if (!moved) return
+      anchorWrap()
       // 끈 직후 따라오는 클릭 한 번만 막아요 (클릭이 안 오면 바로 풀어서 페이지 클릭을 막지 않아요).
       const eat = (ev) => { ev.stopPropagation(); ev.preventDefault() }
       window.addEventListener('click', eat, { capture: true, once: true })
       setTimeout(() => window.removeEventListener('click', eat, { capture: true }), 0)
     }
     wrapEl.classList.add('dragging')
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', up)
+    // 글자 선택·브라우저 끌어놓기가 시작되면 중간에 pointercancel로 끊겨요. 기본 동작을 막아요 (클릭은 그대로 와요).
+    e.preventDefault()
+    handle.setPointerCapture?.(e.pointerId)
+    handle.addEventListener('pointermove', move)
+    handle.addEventListener('pointerup', up)
+    handle.addEventListener('pointercancel', up)
   })
+}
+
+// 옮긴 뒤 화면 반을 기준으로 붙는 쪽을 정해요: 왼쪽 반이면 왼쪽에 붙여 카드가 오른쪽으로 펼쳐지고, 오른쪽 반이면 왼쪽으로.
+// 위쪽 반이면 위에 붙여 아래로 펼쳐지고(버튼이 위), 아래쪽 반이면 위로 펼쳐져요. 펼칠 수 있는 남은 폭·높이만큼만 커져요.
+function anchorWrap() {
+  const fabR = fab.getBoundingClientRect()
+  const W = window.innerWidth
+  const H = window.innerHeight
+  const left = fabR.left + fabR.width / 2 < W / 2
+  const top = fabR.top + fabR.height / 2 < H / 2
+  const st = wrapEl.style
+  st.transform = ''
+  dragX = 0
+  dragY = 0
+  // 버튼 자리를 기준으로 붙여요 (카드가 열려 있든 닫혀 있든 버튼은 그 자리에 남아요).
+  if (left) Object.assign(st, { left: `${Math.round(fabR.left)}px`, right: 'auto' })
+  else Object.assign(st, { right: `${Math.round(W - fabR.right)}px`, left: 'auto' })
+  if (top) Object.assign(st, { top: `${Math.round(fabR.top)}px`, bottom: 'auto' })
+  else Object.assign(st, { bottom: `${Math.round(H - fabR.bottom)}px`, top: 'auto' })
+  wrapEl.classList.toggle('al', left)
+  wrapEl.classList.toggle('at', top)
+  st.setProperty('--wroom', `${Math.round(left ? W - fabR.left - 16 : fabR.right - 16)}px`)
+  st.setProperty('--room', `${Math.round(top ? H - fabR.bottom - 26 : fabR.top - 26)}px`)
 }
 
 // 닫았던 카드가 같은 페이지 것이면 다시 분석하지 않고 그대로 열어요. 새로 분석하려면 카드의 ↻를 눌러요.
