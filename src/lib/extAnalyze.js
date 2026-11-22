@@ -134,22 +134,17 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
   // KREAM: 사이즈표·체형 후기가 없어서 전체 후기의 사이즈 감과 거래 내역의 사이즈 이름을 따로 읽어요.
   if (isKreamUrl(pageUrl)) {
     const k = readKream(String(root.body?.innerText || '').split('\n'))
-    if (k.feel.total) product.sizeFeel = k.feel
+    // 운동화는 KREAM에서 추천하지 않아요. 이름으로 종류를 모를 때(예: 'Nike Dunk Low')도 사이즈가 전부 mm(250·260…)면 신발로 봐요.
+    const mm = k.sizes.filter((x) => /^\d{3}$/.test(x) && Number(x) >= 200 && Number(x) <= 330)
+    if (product.category === 'shoes' || (mm.length >= 2 && mm.length === k.sizes.length)) {
+      return { status: 'unsupported', sizeFeelUsed: true, name: product.name, message: 'KREAM 운동화는 사이즈 추천을 하지 않아요. 옷 상품 페이지에서 눌러 주세요.' }
+    }
+    // KREAM 후기는 로그인 상태에 따라 안 보일 수 있어요. 사이즈 감을 하나도 못 읽으면 그 점을 알려요.
+    if (!k.feel.total) {
+      return { status: 'no-data', sizeFeelUsed: true, name: product.name, message: 'KREAM 후기의 사이즈 감(정사이즈·커요 등)을 읽지 못했어요. 로그인해야 후기가 보이는 경우가 있어요. 로그인한 뒤 후기가 보이면 다시 눌러 주세요.' }
+    }
+    product.sizeFeel = k.feel
     if (!product.optionLabels?.length && k.sizes.length) product.optionLabels = k.sizes
-    // 신발: 사이즈(mm)는 거래 내역·후기에 일부만 보여서 220~310(5mm 간격)으로 채우고, 후기(산 사이즈·체감)는 신발 판정에 넘겨요.
-    // ponytail: 크림 운동화 사이즈 범위를 220~310으로 가정했어요. 범위 밖 사이즈는 본 사이즈만 써요.
-    const mm = k.sizes.filter((x) => /^\d{3}$/.test(x)).map(Number).filter((v) => v >= 200 && v <= 330)
-    // 이름으로 종류를 모를 때(예: 'Nike Dunk Low') 사이즈가 전부 mm(250·260…)면 신발이에요. 직접 고른 종류는 그대로 둬요.
-    if (!opts.categoryOverride && product.category !== 'shoes' && mm.length >= 2 && mm.length === k.sizes.length) {
-      product.category = 'shoes'
-      product.categoryConfidence = 'medium'
-    }
-    if (product.category === 'shoes' && mm.length) {
-      const all = new Set(mm)
-      for (let v = 220; v <= 310; v += 5) all.add(v)
-      if (!product.shoeOptionLabels?.length) product.shoeOptionLabels = [...all].sort((a, b) => a - b).map(String)
-      if (!product.reviews.length) product.reviews = k.reviews.map((r) => ({ size: r.size, fit: r.fit, text: r.text }))
-    }
   }
 
   // 사이즈표도 없고 참고할 리뷰도 거의 없으면 추천하지 않고 솔직하게 알립니다.
