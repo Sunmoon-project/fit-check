@@ -24,6 +24,7 @@ const RETRY_DELAYS = [1500, 2500] // 못 찾았을 때 다시 읽기 전 기다�
 const EXT_VERSION = (typeof chrome !== 'undefined' && chrome.runtime?.getManifest?.().version) || ''
 // 모바일 앱(mobile/)은 쇼핑몰을 앱 안 브라우저로 열고 이 파일을 그대로 넣어요. 그때는 chrome 대용 객체에 이 표시가 있어요.
 const MOBILE = typeof chrome !== 'undefined' && chrome.fitcheckMobile === true
+const FAB_POS_KEY = 'fitcheckFabPos' // 모바일 앱에서 옮긴 '핏' 버튼 자리(화면 비율)
 const UNSUPPORTED_MESSAGE = '이 페이지에서는 분석할 수 없어요. 사이즈표, 후기, 옷 사진이 있는 상품 페이지에서 다시 눌러 주세요.'
 const QUIET_MS = 500 // 이 시간 동안 화면 변화가 없으면 다 그려졌다고 봅니다
 const STEP_QUIET_MS = 600 // 리뷰 더 불러오기 한 단계 뒤 화면이 잠잠해질 때까지 기다리는 시간
@@ -38,7 +39,7 @@ const CSS = `
 .fab:active{transform:scale(.96)}
 .fab:disabled{opacity:.8;cursor:default;transform:none}
 .wrap.m{right:12px;bottom:26vh}
-.wrap.m .fab{width:52px;height:52px;padding:0;gap:0;letter-spacing:0;line-height:1;justify-content:center;font-size:0;background:#3182f6;opacity:.9;box-shadow:0 6px 18px rgba(49,130,246,.35),0 1px 3px rgba(0,0,0,.15);transition:opacity .2s,transform .15s var(--e)}
+.wrap.m .fab{touch-action:none;width:52px;height:52px;padding:0;gap:0;letter-spacing:0;line-height:1;justify-content:center;font-size:0;background:#3182f6;opacity:.9;box-shadow:0 6px 18px rgba(49,130,246,.35),0 1px 3px rgba(0,0,0,.15);transition:opacity .2s,transform .15s var(--e)}
 .wrap.m .fab::after{content:'핏';font-size:19px;font-weight:800}
 .wrap.m .fab:active,.wrap.m .fab:focus-visible,.wrap.m .fab:disabled{opacity:1}
 .wrap.m .fab:disabled::after{content:none}
@@ -96,8 +97,11 @@ const CSS = `
 .plinks a{padding:4px 9px;border:1px solid #e4e4e7;border-radius:999px;color:#18181b;font-size:11.5px;text-decoration:none}
 .prd img{width:52px;height:52px;flex:none;object-fit:cover;border-radius:8px;background:#f4f4f5}
 .prd b{font-size:12.5px;font-weight:700;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.why{margin:6px 0 0;padding-left:16px;color:#52525b;font-size:12px}
-.why li+li{margin-top:2px}
+.why{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:8px;color:#27272a;font-size:12.5px;line-height:1.55}
+.why li{position:relative;padding-left:14px}
+.why li::before{content:'';position:absolute;left:2px;top:.62em;width:5px;height:5px;border-radius:50%;background:#0a7a3c}
+.wh{margin:2px 0 0;font-size:14px;line-height:1.4;color:#09090b}
+.wb{margin:4px 0 0;color:#3f3f46;font-size:12.5px;line-height:1.6}
 .dl{list-style:none;margin:4px 0 0;padding:0;font-size:12.5px;line-height:1.6;color:#27272a}
 .dl li{padding:6px 0;border-top:1px solid #f0f0f2}
 .dl li:first-child{border-top:0;padding-top:2px}
@@ -298,6 +302,12 @@ tr.rec .cv{color:#9fe0ba}
 .wrap.m .btn{padding:9px 14px;border-radius:12px}
 /* 마지막 줄에 한두 글자만 남지 않게 */
 .wrap.m p,.wrap.m li,.wrap.m .sum,.wrap.m .note,.wrap.m .tiny,.wrap.m .prd b{text-wrap:pretty}
+/* 내리기: 머리줄(약 46px)만 남기고 아래로. 내용은 그대로 두고 시트만 움직여요. */
+.wrap.m .card{transition:transform .38s var(--e)}
+.wrap.m .card.min{transform:translateY(calc(100% - 46px - env(safe-area-inset-bottom) / 1.25));overflow:hidden}
+.wrap.m .card.min .fold{display:block}
+.wrap.m .card.min .hd{cursor:pointer}
+.wrap.m .ex{display:none}
 @keyframes sheetIn{from{transform:translateY(40%);opacity:0}}
 @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
 `
@@ -333,16 +343,28 @@ function ensureUi() {
   fab.type = 'button'
   fab.textContent = '내 사이즈 찾기'
   fab.addEventListener('click', openOrRun)
-  if (!MOBILE) makeDraggable(fab)
-  // 모바일 앱: 화면 옆에 흐린 동그라미로 떠 있고(글자는 숨김), 결과 카드는 아래에서 올라와요.
+  makeDraggable(fab)
+  // 모바일 앱: 화면 옆에 동그라미로 떠 있고(글자는 숨김), 결과 카드는 아래에서 올라와요. 끌어서 옮긴 자리는 앱에 저장해 다음 페이지에서도 써요.
   if (MOBILE) {
     wrap.classList.add('m')
-    fab.setAttribute('aria-label', '내 사이즈 찾기')
+    fab.setAttribute('aria-label', '내 사이즈 찾기 (끌어서 옮길 수 있어요)')
   }
   wrap.append(panel, fab)
   wrapEl = wrap
   shadow.appendChild(wrap)
   document.documentElement.appendChild(host)
+  if (MOBILE) {
+    chrome.storage.local.get(FAB_POS_KEY, (d) => {
+      const p = d?.[FAB_POS_KEY]
+      if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return
+      // 저장한 건 화면 비율(0~1)이라 화면 크기가 달라도 같은 쪽에 놓여요.
+      const r = fab.getBoundingClientRect()
+      dragX = Math.min(Math.max(p.x, 0), 1) * window.innerWidth - (r.left + r.width / 2)
+      dragY = Math.min(Math.max(p.y, 0), 1) * window.innerHeight - (r.top + r.height / 2)
+      wrapEl.style.transform = `translate(${dragX}px, ${dragY}px)`
+      anchorWrap()
+    })
+  }
 }
 
 // 카드·버튼을 끌어서 옮겨요 (이 페이지에서만, 저장하지 않음). 4px 넘게 움직이면 그 클릭은 무시해요.
@@ -377,6 +399,10 @@ function makeDraggable(handle) {
       wrapEl.classList.remove('dragging')
       if (!moved) return
       anchorWrap()
+      if (MOBILE) {
+        const r = fab.getBoundingClientRect()
+        chrome.storage.local.set({ [FAB_POS_KEY]: { x: (r.left + r.width / 2) / window.innerWidth, y: (r.top + r.height / 2) / window.innerHeight } })
+      }
       // 끈 직후 따라오는 클릭 한 번만 막아요 (클릭이 안 오면 바로 풀어서 페이지 클릭을 막지 않아요).
       const eat = (ev) => { ev.stopPropagation(); ev.preventDefault() }
       window.addEventListener('click', eat, { capture: true, once: true })
@@ -467,7 +493,7 @@ function showCard(build) {
     big.textContent = wide ? '⤡' : '⤢'
     big.setAttribute('aria-label', wide ? '작게 보기' : '크게 보기')
   })
-  ctl.append(big)
+  if (!MOBILE) ctl.append(big) // 모바일은 시트가 화면 폭을 다 써서 크게 보기가 필요 없어요
   const mini = el('button', 'close', '−')
   mini.type = 'button'
   mini.setAttribute('aria-label', '접기')
@@ -476,6 +502,10 @@ function showCard(build) {
     card.classList.toggle('min', on)
     mini.textContent = on ? '+' : '−'
     mini.setAttribute('aria-label', on ? '펼치기' : '접기')
+  })
+  // 모바일: 내리면 머리줄만 남기고 화면 아래로 내려가요. 그 줄을 누르면 다시 올라와요.
+  if (MOBILE) head.addEventListener('click', (e) => {
+    if (card.classList.contains('min') && !e.target.closest?.('button')) mini.click()
   })
   const close = el('button', 'close', '×')
   close.type = 'button'
@@ -529,7 +559,7 @@ function reportBlock(report) {
   const btns = el('div', 'btns')
   btns.append(btn)
   box.append(btns, done)
-  box.append(el('p', 'tiny', '주소 경로·개수·화면 구조만 담겨요. 체형 정보·리뷰 글은 없어요.'))
+  box.append(el('p', 'tiny ex', '주소 경로·개수·화면 구조만 담겨요. 체형 정보·리뷰 글은 없어요.'))
   return box
 }
 
@@ -574,7 +604,7 @@ function manualForm(r) {
     })
     const goRow = el('div', 'btns')
     goRow.append(go)
-    box.append(cols, lines, goRow, msg, el('p', 'tiny', '저장·전송하지 않고 이번 분석에만 써요.'))
+    box.append(cols, lines, goRow, msg, el('p', 'tiny ex', '저장·전송하지 않고 이번 분석에만 써요.'))
   })
   const openRow = el('div', 'btns')
   openRow.append(open)
@@ -713,7 +743,7 @@ function compareBlock(cv) {
   })
   box.append(tabs, ...panels)
   const conv = cv.sizes.some((s) => s.rows.some((r) => r.raw))
-  box.append(el('p', 'note', `${conv ? '옷 실측은 사이즈표에 적힌 값 그대로이고, → 뒤는 계산에 쓴 값(단면×2 등)이에요. ' : ''}(추정)은 키·몸무게로, (후기 추정)은 비슷한 체형 후기로 보정한 값이에요. 막대: 작음 · 타이트 · 적당 · 넉넉 · 매우 넉넉`))
+  box.append(el('p', 'note ex', `${conv ? '옷 실측은 사이즈표에 적힌 값 그대로이고, → 뒤는 계산에 쓴 값(단면×2 등)이에요. ' : ''}(추정)은 키·몸무게로, (후기 추정)은 비슷한 체형 후기로 보정한 값이에요. 막대: 작음 · 타이트 · 적당 · 넉넉 · 매우 넉넉`))
   return box
 }
 
@@ -1205,12 +1235,7 @@ function exportBlock(r) {
     if (!queued) {
       msg.textContent = '자동으로 보내지 못했어요. 아래 ‘붙여넣기용으로 복사’를 눌러 웹 옷장에 붙여넣어주세요.'
     } else {
-      msg.textContent = '보냈어요. 핏체크 웹이 열려 있으면 바로, 아니면 열 때 내 옷장에 자동으로 담겨요.'
-      const link = el('a', 'weblink', '개발 서버 웹 열기 (localhost:5173)')
-      link.href = WEB_APP_OPEN_URL
-      link.target = '_blank'
-      link.rel = 'noopener noreferrer'
-      extra.append(link)
+      msg.textContent = '내 옷장으로 보냈어요.'
     }
     const copy = el('button', 'btn', '붙여넣기용으로 복사')
     copy.type = 'button'
@@ -1228,7 +1253,7 @@ function exportBlock(r) {
   })
   const sendRow = el('div', 'btns')
   sendRow.append(btn)
-  box.append(sendRow, msg, extra, el('p', 'tiny', '3일 안에 웹을 열지 않으면 대기열에서 지워져요. file://로 연 웹은 크롬 확장 설정에서 ‘파일 URL에 대한 액세스 허용’을 켜야 자동으로 받아요.'))
+  box.append(sendRow, msg, extra)
   return box
 }
 
@@ -1554,7 +1579,7 @@ function learningBlock(r) {
   const box = el('div', 'tiny lrn')
   const line = el('p', 'tiny', l.text)
   line.setAttribute('role', 'status')
-  box.append(line, el('p', 'tiny', `${LEARNING_NOTE} ${LEARNING_STORAGE_NOTE}`))
+  box.append(line, el('p', 'tiny ex', `${LEARNING_NOTE} ${LEARNING_STORAGE_NOTE}`))
   const btn = el('button', 'btn', '학습값 초기화')
   btn.type = 'button'
   btn.addEventListener('click', async () => {
@@ -1575,7 +1600,7 @@ function learningBlock(r) {
 function chartDbBlock(r) {
   if (!r.chartRecord) return null
   const box = el('div', 'tiny lrn')
-  const line = el('p', 'tiny', `이 상품의 사이즈표를 사이즈표 모음에 저장했어요. ${SIZE_CHART_DB_STORAGE_NOTE}`)
+  const line = el('p', 'tiny ex', `이 상품의 사이즈표를 사이즈표 모음에 저장했어요. ${SIZE_CHART_DB_STORAGE_NOTE}`)
   line.setAttribute('role', 'status')
   const btn = el('button', 'btn', '사이즈표 모음 비우기')
   btn.type = 'button'
@@ -1718,7 +1743,7 @@ function shoeBlock(sv) {
   for (const t of sv.reasons) box.append(el('p', 'tiny', t))
   if (sv.widthLine) box.append(el('p', 'tiny', sv.widthLine))
   for (const t of sv.notes) box.append(el('p', 'tiny', t))
-  box.append(el('p', 'tiny', sv.heuristicNote))
+  box.append(el('p', 'tiny ex', sv.heuristicNote))
   return box
 }
 
@@ -1896,7 +1921,7 @@ function pricePane(r) {
     }
     box.append(ul)
   } else {
-    box.append(el('p', 'tiny', '다른 쇼핑몰에서 본 같은 상품이 아직 없어요. 아래에서 열고 \'내 사이즈 찾기\'를 누르면 가격이 함께 기록돼요.'))
+    box.append(el('p', 'tiny ex', '다른 쇼핑몰에서 본 같은 상품이 아직 없어요. 아래에서 열고 \'내 사이즈 찾기\'를 누르면 가격이 함께 기록돼요.'))
   }
   const links = searchLinks(r.name, rows.find((x) => x.current)?.mall || '', r.brand)
   if (links.length) {
@@ -1911,7 +1936,7 @@ function pricePane(r) {
     }
     box.append(lw)
   }
-  box.append(el('p', 'tiny', '본 시점의 가격이에요. 카드·간편결제 할인과 적립금은 빼고 비교해요.'))
+  box.append(el('p', 'tiny ex', '본 시점의 가격이에요. 카드·간편결제 할인과 적립금은 빼고 비교해요.'))
   return box
 }
 
@@ -1962,7 +1987,7 @@ function usedCard(card, r) {
   photoLink.href = WEB_APP_OPEN_URL
   photoLink.target = '_blank'
   photoLink.rel = 'noopener noreferrer'
-  card.append(photoLink)
+  if (!MOBILE) card.append(photoLink) // 모바일 앱에는 웹 앱이 없어요
   const fold = el('div', 'fold')
   const why = section('추천 이유', true)
   const ul = el('ul', 'why')
@@ -2039,12 +2064,12 @@ function renderResult(r) {
     fold.append(summarySlot)
 
     const why = section('추천 이유')
+    why.body.append(el('h3', 'wh', r.headline), el('p', 'wb', r.body))
     if (r.reasons.length) {
       const ul = el('ul', 'why')
       for (const t of r.reasons) ul.append(el('li', null, t))
       why.body.append(ul)
     }
-    why.body.append(el('h3', null, r.headline), el('p', null, r.body))
     fold.append(why.det)
 
     // 추천에 쓰인 근거를 줄별로 (후기 건수·제외, 학습값·샘플 수, 브랜드/지역 보정, 부위별 여유분, 브랜드 지역)
@@ -2057,7 +2082,7 @@ function renderResult(r) {
       const ss = section(r.sizeSystem.title)
       const sul = el('ul', 'why')
       for (const t of r.sizeSystem.lines) sul.append(el('li', null, t))
-      ss.body.append(sul, el('p', 'tiny', r.sizeSystem.note))
+      ss.body.append(sul, el('p', 'tiny ex', r.sizeSystem.note))
       fold.append(ss.det)
     }
 
@@ -2077,7 +2102,7 @@ function renderResult(r) {
       fold.append(cp.det)
     }
     const ch = section(r.chartView ? '읽은 사이즈표 (페이지 그대로)' : '사이즈표 (읽지 못함)', !r.chartView)
-    if (r.chartView) ch.body.append(chartTable(r.chartView), el('p', 'tiny', '읽은 표가 다르면 직접 입력으로 고칠 수 있어요.'))
+    if (r.chartView) ch.body.append(chartTable(r.chartView), el('p', 'tiny ex', '읽은 표가 다르면 직접 입력으로 고칠 수 있어요.'))
     ch.body.append(manual)
     fold.append(ch.det)
     const summary = sizeSummaryBlock(r, { cp: cpSec?.det || null, ch: ch.det, manual })
@@ -2089,7 +2114,8 @@ function renderResult(r) {
     // 학습값·사이즈표 모음 안내는 길어서 접어 둬요 (내용과 버튼은 그대로).
     const learnBox = learningBlock(r)
     const chartDbBox = chartDbBlock(r)
-    if (learnBox || chartDbBox) {
+    // 모바일 앱에서는 저장 데이터 관리 칸을 보이지 않아요(값은 그대로 저장·사용해요).
+    if (!MOBILE && (learnBox || chartDbBox)) {
       const data = section('이 브라우저에 저장된 데이터')
       if (learnBox) data.body.append(learnBox)
       if (chartDbBox) data.body.append(chartDbBox)

@@ -1,70 +1,13 @@
 // 가격 비교 탭: 같은 옷의 쇼핑몰별 정가·판매가·쿠폰/혜택가를 모아 최대 할인가가 가장 싼 곳을 알려줘요.
 // 가격은 (1) 붙여넣은 상품 주소를 서버(/api/product)가 읽은 값, (2) 확장에서 옷장으로 보낸 상품의 가격(본 시점)이에요.
 // 카드·간편결제 할인, 적립금처럼 조건이 붙은 혜택은 빼고 비교해요.
-import { useEffect, useMemo, useState } from 'react'
-import { priceEntryOf, comparePrices, rankPrices, isSameItem, searchLinks, searchQueryOf, won } from '../lib/priceInfo.js'
+import { useMemo, useState } from 'react'
+import { priceEntryOf, comparePrices, rankPrices, isSameItem, searchLinks, won } from '../lib/priceInfo.js'
 import { NO_SERVER, apiUrl } from '../lib/runtime.js'
 
 const MAX_URLS = 6
 const MALL_LABEL = { 'musinsa.com': '무신사', '29cm.co.kr': '29CM', 'wconcept.co.kr': 'W컨셉', 'arcteryx.co.kr': '아크테릭스' }
 const mallName = (m) => MALL_LABEL[m] || m
-
-// 네이버 쇼핑 검색 API(서버 설정이 있을 때만): 같은 상품을 파는 쇼핑몰과 표시 최저가. 버튼을 눌렀을 때만 상품명을 보내요.
-function NaverSearch({ initialQuery, myBest }) {
-  const [enabled, setEnabled] = useState(null)
-  const [query, setQuery] = useState(initialQuery || '')
-  const [items, setItems] = useState(null)
-  const [state, setState] = useState({ loading: false, error: '' })
-  useEffect(() => {
-    if (NO_SERVER) return setEnabled(false)
-    let alive = true
-    fetch(apiUrl('/api/status')).then((r) => (r.ok ? r.json() : null)).then((d) => alive && setEnabled(d?.priceSearch === true)).catch(() => alive && setEnabled(false))
-    return () => { alive = false }
-  }, [])
-  useEffect(() => { if (initialQuery) setQuery(initialQuery) }, [initialQuery])
-
-  async function search() {
-    setState({ loading: true, error: '' })
-    try {
-      const res = await fetch(apiUrl('/api/price-search'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) })
-      const data = await res.json().catch(() => null)
-      if (!res.ok) return setState({ loading: false, error: data?.message || '가격 검색에 실패했어요.' })
-      setItems(data.items || [])
-      setState({ loading: false, error: '' })
-    } catch {
-      setState({ loading: false, error: '서버에 연결하지 못했어요.' })
-    }
-  }
-
-  if (enabled !== true) return null
-  return (
-    <div className="card pc-naver">
-      <p className="small"><b>네이버 쇼핑에서 최저가 찾기</b></p>
-      <div className="pc-row">
-        <input className="pc-q" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="상품명 (예: 나이키 클럽 후디)" aria-label="네이버 쇼핑에서 찾을 상품명" maxLength={60} />
-        <button type="button" className="btn" disabled={state.loading || query.trim().length < 2} onClick={search}>{state.loading ? '찾는 중…' : '찾기'}</button>
-      </div>
-      {state.error && <p className="small error">{state.error}</p>}
-      {items && items.length === 0 && <p className="muted small">검색 결과가 없어요. 상품명을 짧게 바꿔 보세요.</p>}
-      {items?.length > 0 && (
-        <ul className="pc-list">
-          {items.slice(0, 8).map((it, i) => (
-            <li key={it.link} className={i === 0 ? 'cheap' : ''}>
-              <div className="pc-mall">
-                <a href={it.link} target="_blank" rel="noopener noreferrer">{it.mall}</a>
-                {i === 0 && <span className="pc-badge">최저</span>}
-                <span className="muted small pc-name">{it.title}</span>
-              </div>
-              <div className="pc-price"><strong>{won(it.price)}</strong></div>
-              {myBest && i === 0 && it.price !== myBest && <div className="pc-detail muted small">{it.price < myBest ? `위에서 비교한 최저가보다 ${won(myBest - it.price)} 싸요` : `위에서 비교한 최저가가 ${won(it.price - myBest)} 더 싸요`}</div>}
-            </li>
-          ))}
-        </ul>
-      )}
-      {items?.length > 0 && <p className="muted small">쿠폰·카드 할인 전 가격이고, 비슷한 다른 상품이 섞일 수 있어요.</p>}
-    </div>
-  )
-}
 
 function PriceRows({ rows }) {
   if (!rows.length) return null
@@ -165,7 +108,6 @@ export default function PriceCompare({ wardrobe = [], onBack }) {
         )}
       </div>
 
-      <NaverSearch initialQuery={first ? searchQueryOf(first.name, first.brand) : groups[0]?.[0] ? searchQueryOf(groups[0][0].name, groups[0][0].brand) : ''} myBest={rows.find((r) => r.cheapest)?.prices.best || first?.prices.best || null} />
 
       {groups.length > 0 && (
         <>

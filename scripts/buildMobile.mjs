@@ -1,6 +1,8 @@
 // `npm run build:mobile`: 확장 빌드(dist-extension/)를 모바일 앱(mobile/)이 WebView에 넣을 문자열로 묶어요 → mobile/injected.js
 // 모바일 앱은 쇼핑몰을 앱 안 브라우저로 열고 확장의 content.js를 그대로 실행해요. 분석 코드는 한 벌만 유지해요.
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { build } from 'vite'
 import { resolve } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..')
@@ -55,7 +57,26 @@ button.secondary:hover{background:var(--accent)}
 button.secondary:active{transform:scale(.98);background:#1b64da}
 #status{position:fixed;left:24px;right:24px;bottom:calc(84px + env(safe-area-inset-bottom));padding:12px 16px;border-radius:14px;background:#fff;box-shadow:0 4px 16px rgba(0,0,0,.12);text-align:center;font-size:14px;font-weight:600;line-height:1.45;color:var(--accent);margin:0}
 #status:empty{display:none}
-#status.err{color:#e5484d}`
+#status.err{color:#e5484d}
+.scan{margin:0;padding:18px;border-radius:16px;background:var(--soft)}
+.scan-btn{margin:0;height:52px;border:0;border-radius:14px;background:#fff;color:var(--accent);font-size:16px}
+.scan-btn:disabled{opacity:.5}
+.scan-tip{margin:12px 2px 0;font-size:14px;line-height:1.5;color:var(--sub);text-wrap:pretty}
+.scan-msg{margin:10px 2px 0;font-size:14px;font-weight:600;line-height:1.5;color:var(--accent)}
+.scan-msg:empty{display:none}
+.scan-msg.err{color:#e5484d}`
+
+// 사진으로 치수 재기(mobile/scan.js): 앱에만 넣어요. 확장은 외부 코드를 받지 않지만, 앱은 웹과 같이 MediaPipe를 내려받아요.
+const tmp = mkdtempSync(resolve(tmpdir(), 'fitcheck-scan-'))
+await build({
+  configFile: false,
+  root,
+  logLevel: 'warn',
+  publicDir: false,
+  build: { outDir: tmp, emptyOutDir: true, minify: true, target: 'es2020', lib: { entry: resolve(root, 'mobile/scan.js'), formats: ['iife'], name: 'fitcheck_scan', fileName: () => 'scan.js' } },
+})
+const scanJs = readFileSync(resolve(tmp, 'scan.js'), 'utf8')
+rmSync(tmp, { recursive: true, force: true })
 
 // 내 체형 입력 화면: 확장 팝업(popup.html)을 그대로 써요. '이 페이지에서 찾기' 버튼은 앱에 탭이 없으니 숨겨요.
 const profileHtml = ext('popup.html')
@@ -63,7 +84,7 @@ const profileHtml = ext('popup.html')
 ${MOBILE_POPUP_CSS}</style>`)
   .replace('이 브라우저에만 저장돼요.', '이\u00a0기기에만 저장돼요.')
   .replace('체형 정보 저장</button>', '저장하기</button>')
-  .replace('<script src="popup.js"></script>', `<script>${SHIM};window.chrome=__fcChrome()</script><script>${ext('popup.js').replace('이 브라우저에만 보관돼요.', '이 기기에만 보관돼요.').replace(/<\/script/g, '<\\/script')}</script>`)
+  .replace('<script src="popup.js"></script>', () => `<script>${SHIM};window.chrome=__fcChrome()</script><script>${ext('popup.js').replace('이 브라우저에만 보관돼요.', '이 기기에만 보관돼요.').replace(/<\/script/g, '<\\/script')}</script><script>${scanJs.replace(/<\/script/g, '<\\/script')}</script>`)
 if (!profileHtml.includes('__fcChrome') || !profileHtml.includes('width=device-width')) throw new Error('popup.html 모양이 바뀌어 모바일용으로 묶지 못했어요.')
 
 writeFileSync(
