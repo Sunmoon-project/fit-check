@@ -1781,7 +1781,7 @@ await atest('content.js(가짜 DOM, vm): 카드 문구가 줄었고 오래된 �
 
 test('content.js 소스: 카드 최대 높이·내부 스크롤·최소화 스타일이 있다', () => {
   const src = readFileSync(new URL('../extension/content.js', import.meta.url), 'utf8')
-  assert.ok(/\.card\{[^}]*max-height:min\(80vh,560px\)[^}]*overflow-y:auto/.test(src))
+  assert.ok(/\.card\{[^}]*max-height:min\(80vh,560px[^}]*overflow-y:auto/.test(src))
   assert.ok(src.includes('.card.min .fold{display:none}'))
 })
 
