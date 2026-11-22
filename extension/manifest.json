@@ -34,7 +34,8 @@
         "*://fruitsfamily.com/*",
         "*://www.fruitsfamily.com/*",
         "*://*.arcteryx.co.kr/*",
-        "*://*.arcteryx.com/*"
+        "*://*.arcteryx.com/*",
+        "*://kream.co.kr/*"
       ],
       "js": [
         "content.js"

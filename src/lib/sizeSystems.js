@@ -77,3 +77,19 @@ export function sizeSystemHint({ category, gender = null, optionLabels = [] } = 
     note: '사이즈표·후기·판매글 실측이 없어 표기의 뜻만 보여드려요. 몸 치수 기준 호칭이라 옷 실측과 달라요. 추천 계산에는 쓰지 않았어요. 표준 원문은 아직 확인하지 못했어요.',
   }
 }
+
+// 키·몸무게로 추정한 가슴(상의)·허리(하의) → 글자 사이즈(근사). 사이즈표·후기 체형이 없는 쇼핑몰(KREAM)에서 기준 사이즈로만 써요.
+// KS 호칭 간격(남성 가슴 95=M, 5cm / 여성 가슴 86=M, 4cm)을 쓴 대략값이고, 브랜드마다 달라요.
+const LETTERS = ['XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL']
+const LETTER_BASE = {
+  male: { top: ['chest', 95, 5], bottom: ['waist', 81, 5] },
+  female: { top: ['chest', 86, 4], bottom: ['waist', 68, 4] },
+}
+export function estimateLetterSize({ gender, category, values } = {}) {
+  if (category === 'shoes') return null
+  const [part, mid, step] = LETTER_BASE[gender === 'female' ? 'female' : 'male'][category === 'bottom' ? 'bottom' : 'top']
+  const v = values?.[part]
+  if (!Number.isFinite(v)) return null
+  const idx = Math.max(0, Math.min(LETTERS.length - 1, 3 + Math.round((v - mid) / step)))
+  return { size: LETTERS[idx], part, value: v, letters: LETTERS }
+}
