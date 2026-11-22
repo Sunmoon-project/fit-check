@@ -35,6 +35,13 @@ export function compareSizes({ chart, bodyValues = {}, measured = [], category, 
     const m = key == null ? null : chart.measures[key]
     if (!m) continue
     const judged = new Map(partVerdicts(bodyValues, m, cat, calibration, learned).map((v) => [v.part, v]))
+    // 페이지 표에 적힌 원래 값(단면·신체 치수·화장 등). 계산에 쓴 값과 다르면 비교 표에 함께 보여줘요.
+    const viewRow = chart.view?.rows?.find((r) => r.label === key)
+    const pageRaw = (part) => {
+      const i = chart.view?.keys?.indexOf(part) ?? -1
+      const raw = i >= 0 ? viewRow?.cells?.[i]?.raw : null
+      return raw != null && parseFloat(String(raw).replace(/,/g, '')) !== m[part] ? String(raw).slice(0, 20) : null
+    }
     const order = [...new Set([...(CATEGORY_PARTS[cat] || []).filter((p) => p in m), ...Object.keys(m)])]
     const rows = []
     for (const part of order) {
@@ -45,7 +52,7 @@ export function compareSizes({ chart, bodyValues = {}, measured = [], category, 
       const basis = !EASE_RULES[part] ? 'none' : HEURISTIC_PARTS.includes(part) ? 'heuristic' : 'rule'
       if (v) {
         rows.push({
-          part, label: v.label, unit: v.unit, garment, body: v.body,
+          part, label: v.label, unit: v.unit, garment, raw: pageRaw(part), body: v.body,
           bodyKind: part === 'inseam' && mine.has('leg') ? 'leg' : isLength ? 'standard' : mine.has(part) ? 'measured' : reviewParts?.[part] ? 'review' : photoParts.includes(part) ? 'photo' : 'estimated',
           ease: v.ease, verdict: v.verdict, level: v.level, key: v.key, isLength, basis, note: basis === 'heuristic' ? '휴리스틱 기준' : '',
         })
@@ -53,7 +60,7 @@ export function compareSizes({ chart, bodyValues = {}, measured = [], category, 
       } else {
         if (basis === 'none') onlyParts.add(part)
         rows.push({
-          part, label: partLabel(part), unit: partUnit(part), garment, body: null, bodyKind: null,
+          part, label: partLabel(part), unit: partUnit(part), garment, raw: pageRaw(part), body: null, bodyKind: null,
           ease: null, verdict: null, level: null, key: null, isLength, basis: 'none',
           note: basis === 'none' ? MEASURE_ONLY_LABEL : NO_BODY_LABEL,
         })
@@ -71,7 +78,7 @@ export function compactCompare(cmp) {
       size: s.size,
       label: s.label,
       rows: s.rows.map((r) => ({
-        label: r.label, unit: r.unit, garment: r.garment, body: r.body, bodyKind: r.bodyKind, ease: r.ease,
+        label: r.label, unit: r.unit, garment: r.garment, raw: r.raw ?? null, body: r.body, bodyKind: r.bodyKind, ease: r.ease,
         verdict: r.verdict, level: r.level, key: r.key, isLength: r.isLength, note: r.note,
       })),
     })),

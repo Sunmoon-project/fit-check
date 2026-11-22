@@ -62,7 +62,7 @@ export function summarizeSizeChart({ sizes, recommended = null, category } = {})
   }
   if (!base) return out
   const parts = pickRows(base.rows.filter((r) => isNum(r.garment)), category)
-  out.keyParts = parts.map((r) => ({ label: r.label, value: r.garment, unit: r.unit }))
+  out.keyParts = parts.map((r) => ({ label: r.label, value: r.garment, unit: r.unit, raw: r.raw ?? null }))
   const named = (s) => ({ label: labelOf(s), rows: s.rows })
   if (idx > 0) out.neighbors.lowerDiff = diffText(named(list[idx - 1]), parts)
   if (idx < list.length - 1) out.neighbors.upperDiff = diffText(named(list[idx + 1]), parts)

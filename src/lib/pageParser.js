@@ -1036,6 +1036,8 @@ export function parsePage(root, pageUrl = '', opts = {}) {
     targetGender: classifyTargetGender({ name, breadcrumb: classifyInput.breadcrumb, jsonLdGender: classifyInput.jsonLdGender, optionLabels: [...optionLabels, ...shoeOptionLabels], isShoes: category === 'shoes' }),
     emoji: CATEGORY_EMOJI[category],
     ...ldBrandCode(ld),
+    // 가격 비교 검색어용 브랜드: JSON-LD에 없으면 상품 메타 태그에서 (검색 링크에만 써요)
+    pageBrand: String(root.querySelector?.('meta[property="product:brand"],meta[property="og:brand"],meta[name="brand"]')?.getAttribute?.('content') || '').trim().slice(0, 40),
     sizeChart: sizeChart
       ? {
           unit: sizeChart.unit,

@@ -5668,13 +5668,13 @@ await atest('지역·근거 표시: 확장 카드(가짜 DOM, vm)에 브랜드 �
   const ld = '<script type="application/ld+json">{"@type":"Product","name":"x","brand":{"name":"나이키"},"offers":{"priceCurrency":"USD"}}</script>'
   const { texts } = await runContentInFakeDom(wrapBody(ld + VIEW_HTML(chartTable(OPTION_LIST_LABELS()))))
   assert.ok(!texts.some((t) => t.includes('분석 중 문제가 생겼어요')))
-  assert.ok(texts.some((t) => t.startsWith('브랜드 지역: 미국(추정) 근거: ') && t.includes('브랜드 사전(추정)') && t.includes('통화 USD')), '지역 근거 줄')
+  assert.ok(texts.includes('브랜드 지역') && texts.some((t) => t.startsWith('미국(추정) 근거: ') && t.includes('브랜드 사전(추정)') && t.includes('통화 USD')), '지역 근거 줄')
   assert.ok(texts.includes('추천에 쓰인 근거 (자세히)'))
-  assert.ok(texts.some((t) => t.startsWith('후기 근거: 불러온 후기 ')))
-  assert.ok(texts.some((t) => t.startsWith('부위별 여유분 판정: ')))
+  assert.ok(texts.includes('후기 근거') && texts.some((t) => t.startsWith('불러온 후기 ')))
+  assert.ok(texts.includes('부위별 여유분 판정'))
   assert.ok(!texts.some((t) => t.includes('검증 전 가설')), '가설 긴 안내는 카드에서 뺐어요(지역 줄의 "(추정)"으로 충분)')
   const unknown = await runContentInFakeDom(VIEW_HTML(chartTable(OPTION_LIST_LABELS())))
-  assert.ok(unknown.texts.some((t) => t.startsWith('브랜드 지역: 알 수 없음')), '근거가 없으면 알 수 없음')
+  assert.ok(unknown.texts.some((t) => t.startsWith('알 수 없음')), '근거가 없으면 알 수 없음')
   // 판단 결과 자체는 analyzePage에도 담겨요
   const out = analyzePage(fakeDocument(wrapBody(ld + VIEW_HTML(chartTable(OPTION_LIST_LABELS())))), 'https://shop.example/products/1', buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular' }).profile, '0.1.0')
   assert.equal(out.regionInfo.region, 'us')
@@ -5949,7 +5949,7 @@ await atest('중고 판매글 content.js(가짜 DOM, vm): 번개장터·후르�
   assert.ok(b.texts.includes('맞음'), '판정 글자')
   assert.ok(b.texts.some((t) => t.includes('후기 없이 계산했어요')))
   assert.ok(b.texts.some((t) => t.startsWith('근거: 판매글 실측')))
-  assert.ok(b.texts.some((t) => t.startsWith('판매글에서 읽은 실측: 가슴 55(단면→둘레 110)')))
+  assert.ok(b.texts.includes('판매글에서 읽은 실측') && b.texts.some((t) => t.startsWith('가슴 55(단면→둘레 110)')))
   assert.ok(b.texts.includes('문제가 있나요? 진단 리포트'))
   assert.ok(!b.texts.some((t) => t.includes('리뷰 불러오는 중')), '중고 판매글은 후기 불러오기를 하지 않아요')
   assert.ok(!b.texts.some((t) => t.includes('리뷰 원문')))
@@ -5967,7 +5967,7 @@ await atest('중고 판매글 content.js(가짜 DOM, vm): 이 브라우저의 �
   const html = `<html><head><meta property="og:title" content="[M] 나이키 Club Fleece Hoodie 후드 티셔츠"><meta property="og:description" content="품번 BV2654-010 새상품"></head><body></body></html>`
   const { texts } = await runContentInFakeDom(html, { location: { href: 'https://bunjang.co.kr/products/5' } }, {}, store)
   assert.ok(texts.some((t) => t.startsWith('근거: 사이즈표 DB(근사) (근사/추정)')), texts.filter((t) => t.includes('근거')).join('|'))
-  assert.ok(texts.some((t) => t.startsWith('사이즈표 DB(근사/추정): 점수 ')))
+  assert.ok(texts.includes('사이즈표 DB(근사/추정)') && texts.some((t) => t.startsWith('점수 ')))
 })
 
 await atest('중고 판매글 웹: 중고 상품 분석 화면이 후기 없는 결과와 우선순위 근거를 보여주고, 꺼진 기능(사진 찾기)과 개발용 안내는 숨기며 App에 연결돼 있다', async () => {
@@ -6701,5 +6701,23 @@ await atest('/api/price-search 라우팅: 상태에 켜짐 여부만, 응답·�
     assert.deepEqual(['M', 'S', 'XL', '95', '가슴', '어깨'].map(eunNeun), ['은', '는', '은', '는', '은', '는'])
   })
 }
+
+await atest('사이즈표 비교의 옷 실측은 사이즈표에 적힌 값(단면)을 그대로 보여주고, 중고 판매글도 비교·읽은 표가 나오며, 가격 검색어에 브랜드가 붙는다', async () => {
+  const { chart } = analyzeSizeCharts([[['사이즈', '어깨', '가슴단면'], ['M', '45', '55'], ['L', '47', '58']]], 'top', [])
+  const cmp = compareSizes({ chart, bodyValues: { shoulder: 44, chest: 96 }, category: 'top' })
+  const chestM = cmp.sizes.find((x) => x.size === 'M').rows.find((r) => r.part === 'chest')
+  assert.equal(chestM.garment, 110)
+  assert.equal(chestM.raw, '55')
+  assert.equal(cmp.sizes[0].rows.find((r) => r.part === 'shoulder').raw, null, '같으면 원래 값을 따로 두지 않아요')
+  const used = analyzeUsedListing({ title: '나이키 후드티 M', text: '나이키 후드티 M 사이즈\n어깨 50 가슴 단면 58 총장 70\n가격 30,000원' }, buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: 'regular' }).profile)
+  assert.equal(used.compareView.recommended, 'M')
+  assert.equal(used.compareView.sizes[0].rows.find((r) => r.label === '가슴').raw, '58')
+  assert.deepEqual(used.chartView.headers, ['어깨', '가슴', '총장'])
+  assert.equal(searchQueryOf('스탠다드 후드 [블랙]', '무신사 스탠다드'), '무신사 스탠다드 스탠다드 후드')
+  assert.equal(searchQueryOf('나이키 클럽 후디', '나이키'), '나이키 클럽 후디', '이미 들어 있으면 한 번만')
+  const links = searchLinks('클럽 후디', 'musinsa.com', 'Nike')
+  assert.ok(links.some((l) => l.label === 'KREAM' && l.url === 'https://kream.co.kr/search?keyword=Nike%20%ED%81%B4%EB%9F%BD%20%ED%9B%84%EB%94%94'))
+  assert.ok(!links.some((l) => l.label === '무신사'))
+})
 
 console.log(`\n${passed}개 통과`)

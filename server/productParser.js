@@ -139,6 +139,8 @@ export function parseProductHtml(html, pageUrl) {
     source: 'live',
     mall,
     name: name.slice(0, 120),
+    // 가격 비교 검색어용 브랜드 이름 (JSON-LD → 상품 메타 태그)
+    brand: String((typeof product?.brand === 'string' ? product.brand : product?.brand?.name) || meta('product:brand') || '').trim().slice(0, 40),
     category,
     categoryConfidence: cls.category === category ? cls.confidence : 'low',
     categoryEvidence: categoryInfo({ ...cls, category }).evidence,

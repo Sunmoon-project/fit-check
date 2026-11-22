@@ -12,6 +12,7 @@ import { CATEGORY_LABEL } from '../data/measurements.js'
 import { classifyBrandRegion, regionLine, REGION_HYPOTHESIS_NOTE } from './brandRegion.js'
 import { representativeMeasure, SIZE_SYSTEM_FLAG } from './sizeSystems.js'
 import { parseListingText, listingText, PART_WORD } from './usedListing.js'
+import { compareSizes, compactCompare } from './sizeCompare.js'
 
 export const USED_DB_MIN_SCORE = 60 // 사이즈표 DB 일치로 인정하는 최소 점수 (설계상의 판단)
 export const USED_MAX_CONFIDENCE = 'medium'
@@ -48,6 +49,32 @@ function partLine(v, measured) {
 
 const flat = (parts) => Object.fromEntries(Object.entries(parts).map(([k, p]) => [k, p.cm]))
 const measureText = (key, p) => `${PART_LABEL_KO[key] || PART_WORD[key] || key} ${p.raw}${p.kind === 'section' ? '(단면→둘레 ' + p.cm + ')' : ''}`
+
+// 판매글 실측·사이즈표 DB → 상품 페이지와 같은 '읽은 사이즈표'·'사이즈표 비교'용 표.
+// bySize: { 사이즈: { 부위: { cm, raw } | 숫자 } }. 화장(yuki)은 팔길이 칸에 원래 값으로 보여줘서 따로 두지 않아요.
+export function usedChartOf(bySize, category) {
+  const sizes = Object.keys(bySize || {}).slice(0, 20)
+  const cm = (v) => (typeof v === 'number' ? v : v?.cm ?? null)
+  const keys = [...new Set(sizes.flatMap((sz) => Object.keys(bySize[sz] || {})))].filter((k) => k !== 'yuki').slice(0, 10)
+  const measures = {}
+  const rows = []
+  for (const sz of sizes) {
+    const m = {}
+    const cells = keys.map((k) => {
+      const v = bySize[sz][k]
+      if (cm(v) == null) return { raw: '-', value: null, converted: false }
+      m[k] = cm(v)
+      const raw = typeof v === 'number' ? v : v.raw ?? v.cm
+      return { raw: String(raw), value: m[k], converted: Number(raw) !== m[k] }
+    })
+    if (Object.keys(m).length) {
+      measures[sz] = m
+      rows.push({ label: sz, shown: sz, cells })
+    }
+  }
+  if (!rows.length) return null
+  return { measures, category, view: { headers: keys.map((k) => PART_LABEL_KO[k] || PART_WORD[k] || k), used: keys.map(() => true), keys, rows } }
+}
 
 // ---------- 1순위: 판매글 실측 ----------
 function fromListing(parsed, ctx) {
@@ -87,7 +114,7 @@ function fromListing(parsed, ctx) {
   if (parts.some(([, p]) => p.inferred)) lines.push('단면/둘레 표기가 없는 값은 숫자 크기로 짐작했어요. 틀릴 수 있어요.')
   if (pickNote) lines.push(pickNote)
   const perSize = per.length > 1 ? per.map((p) => ({ size: p.size, verdict: p.verdict, label: USED_VERDICT_LABEL[p.verdict] })) : []
-  return { basis: 'listing', basisLabel: '판매글 실측', approx: false, size: primary.size, verdict: primary.verdict, verdicts: primary.verdicts, perSize, confidence, lines }
+  return { basis: 'listing', basisLabel: '판매글 실측', approx: false, size: primary.size, verdict: primary.verdict, verdicts: primary.verdicts, perSize, confidence, lines, chart: usedChartOf(candidates, parsed.category) }
 }
 
 // ---------- 2순위: 사이즈표 DB ----------
@@ -104,13 +131,14 @@ function fromChartDb(parsed, matches, ctx) {
   const where = [top.entry.brand, top.entry.model].filter(Boolean).join(' ')
   const lines = [head, `일치한 상품: ${where || '(이름 없음)'}${top.viaPhoto ? ' (사진 검색 후보로 찾음)' : ''}`]
   const confidenceBase = top.score >= 90 ? 'medium' : 'low'
+  const dbChart = usedChartOf(chart.measures, cat)
   if (key) {
     const verdicts = partVerdicts(values, chart.measures[key], cat)
     const verdict = usedVerdictFrom(verdicts, pref)
-    if (verdict) return { basis: 'chart-db', basisLabel: '사이즈표 DB(근사)', approx: true, size: key, verdict, verdicts, perSize: [], confidence: confidenceBase, lines: [...lines, ...verdicts.map((v) => partLine(v, measured))] }
+    if (verdict) return { basis: 'chart-db', basisLabel: '사이즈표 DB(근사)', approx: true, size: key, verdict, verdicts, perSize: [], confidence: confidenceBase, lines: [...lines, ...verdicts.map((v) => partLine(v, measured))], chart: dbChart }
   }
   const rec = recommendSize(values, chart, cat, pref)
-  if (rec) return { basis: 'chart-db', basisLabel: '사이즈표 DB(근사)', approx: true, size: null, verdict: null, verdicts: [], perSize: [], confidence: 'low', recommended: rec.bestSize, lines: [...lines, `판매 사이즈를 판매글에서 읽지 못했어요. 이 사이즈표 기준으로는 ${rec.bestSize}가 내 체형에 가장 가까워요.`] }
+  if (rec) return { basis: 'chart-db', basisLabel: '사이즈표 DB(근사)', approx: true, size: null, verdict: null, verdicts: [], perSize: [], confidence: 'low', recommended: rec.bestSize, lines: [...lines, `판매 사이즈를 판매글에서 읽지 못했어요. 이 사이즈표 기준으로는 ${rec.bestSize}가 내 체형에 가장 가까워요.`], chart: dbChart }
   return { miss: `${head.replace('사이즈표 DB(근사): ', '')} — 하지만 이 사이즈표로 비교할 수 있는 부위가 없었어요` }
 }
 
@@ -210,8 +238,23 @@ export function analyzeUsedListing(listing, profile, opts = {}) {
   details.push(regionLine(region))
   if (region.region !== 'unknown' || region.evidence.length) details.push(REGION_HYPOTHESIS_NOTE)
 
+  // 상품 페이지처럼 '사이즈표 비교'와 '읽은 사이즈표'를 보여줄 값 (판매글 실측이나 사이즈표 DB를 쓴 경우만)
+  const recSize = chosen?.size || chosen?.recommended || null
+  let compareView = null
+  if (chosen?.chart && parsed.category !== 'shoes') {
+    try {
+      const cmp = compareSizes({ chart: chosen.chart, bodyValues: values, measured, category: chosen.chart.category })
+      if (cmp.sizes.length) compareView = { ...compactCompare(cmp), recommended: recSize ? String(recSize).toUpperCase() : null }
+    } catch {
+      compareView = null
+    }
+  }
+  const chartView = chosen?.chart ? { ...chosen.chart.view, recommended: recSize, fromDb: chosen.basis === 'chart-db' } : null
+
   return {
     status: 'used',
+    compareView,
+    chartView,
     site: opts.site || null,
     title: String(listing.title || '').slice(0, 200),
     brand: parsed.brand?.text || '',

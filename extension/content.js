@@ -51,6 +51,9 @@ const CSS = `
 .fold{animation:fade .3s ease}
 .hd{position:sticky;top:0;z-index:2;margin:0 -14px 2px;padding:9px 8px 7px 14px;background:rgba(255,255,255,.94);backdrop-filter:blur(8px);border-bottom:1px solid #f0f0f2}
 .hd .eyebrow{font-weight:700;color:#18181b}
+.hd{cursor:grab;touch-action:none;user-select:none}
+.dragging,.dragging *{cursor:grabbing!important;user-select:none}
+.card.off{display:none}
 .ctl{display:flex;gap:2px}
 .close{width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:8px;background:none;font-size:15px;line-height:1;cursor:pointer;color:#52525b;transition:background .15s,color .15s,transform .15s var(--e)}
 .close:hover{background:#f4f4f5;color:#18181b}
@@ -91,6 +94,11 @@ const CSS = `
 .prd b{font-size:12.5px;font-weight:700;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .why{margin:6px 0 0;padding-left:16px;color:#52525b;font-size:12px}
 .why li+li{margin-top:2px}
+.dl{list-style:none;margin:4px 0 0;padding:0;font-size:12.5px;line-height:1.6;color:#27272a}
+.dl li{padding:6px 0;border-top:1px solid #f0f0f2}
+.dl li:first-child{border-top:0;padding-top:2px}
+.dl b{font-weight:700;color:#09090b;margin-right:6px}
+.dl em{font-style:normal;font-weight:700;color:#0a7a3c;white-space:nowrap}
 h3{margin:10px 0 2px;font-size:13px}
 p{margin:0}
 .det{margin:8px 0 0;padding-left:16px;color:#52525b;font-size:11px}
@@ -306,7 +314,8 @@ function ensureUi() {
   fab.className = 'fab'
   fab.type = 'button'
   fab.textContent = '내 사이즈 찾기'
-  fab.addEventListener('click', run)
+  fab.addEventListener('click', openOrRun)
+  if (!MOBILE) makeDraggable(fab)
   // 모바일 앱: 화면 옆에 흐린 동그라미로 떠 있고(글자는 숨김), 결과 카드는 아래에서 올라와요.
   if (MOBILE) {
     wrap.classList.add('m')
@@ -316,6 +325,57 @@ function ensureUi() {
   wrapEl = wrap
   shadow.appendChild(wrap)
   document.documentElement.appendChild(host)
+}
+
+// 카드·버튼을 끌어서 옮겨요 (이 페이지에서만, 저장하지 않음). 4px 넘게 움직이면 그 클릭은 무시해요.
+let dragX = 0
+let dragY = 0
+function makeDraggable(handle) {
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || (handle !== fab && e.target.closest?.('button'))) return
+    const sx = e.clientX
+    const sy = e.clientY
+    const ox = dragX
+    const oy = dragY
+    const box = wrapEl.getBoundingClientRect()
+    let moved = false
+    const move = (ev) => {
+      const dx = ev.clientX - sx
+      const dy = ev.clientY - sy
+      if (!moved && Math.hypot(dx, dy) < 4) return
+      moved = true
+      // 화면 밖으로 나가지 않게 막아요.
+      const cx = Math.min(Math.max(dx, -box.left), window.innerWidth - box.right)
+      const cy = Math.min(Math.max(dy, -box.top), window.innerHeight - box.bottom)
+      dragX = ox + cx
+      dragY = oy + cy
+      wrapEl.style.transform = `translate(${dragX}px, ${dragY}px)`
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      wrapEl.classList.remove('dragging')
+      if (!moved) return
+      // 끈 직후 따라오는 클릭 한 번만 막아요 (클릭이 안 오면 바로 풀어서 페이지 클릭을 막지 않아요).
+      const eat = (ev) => { ev.stopPropagation(); ev.preventDefault() }
+      window.addEventListener('click', eat, { capture: true, once: true })
+      setTimeout(() => window.removeEventListener('click', eat, { capture: true }), 0)
+    }
+    wrapEl.classList.add('dragging')
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  })
+}
+
+// 닫았던 카드가 같은 페이지 것이면 다시 분석하지 않고 그대로 열어요. 새로 분석하려면 카드의 ↻를 눌러요.
+let cardUrl = null
+function openOrRun() {
+  const card = panel?.firstElementChild
+  if (card?.classList.contains('off') && cardUrl === location.href) {
+    card.classList.remove('off')
+    return
+  }
+  run()
 }
 
 // 페이지 글은 모두 textContent로만 넣습니다 (HTML로 해석하지 않음).
@@ -332,13 +392,24 @@ let wide = false
 function showCard(build) {
   cancelAnim()
   // 이미 카드가 떠 있으면 다시 그릴 때 등장 애니메이션을 생략해요 (깜빡임 방지).
-  const fresh = !panel.children || panel.children.length === 0
+  const fresh = !panel.firstElementChild || panel.firstElementChild.classList.contains('off')
   panel.replaceChildren()
+  cardUrl = location.href
   const card = el('div', fresh ? 'card' : 'card still')
   if (wide) card.classList.toggle('wide', true)
   const head = el('div', 'row hd')
   head.append(el('span', 'eyebrow', '핏체크'))
+  if (!MOBILE) {
+    head.title = '끌어서 옮길 수 있어요'
+    makeDraggable(head)
+  }
   const ctl = el('span', 'ctl')
+  const again = el('button', 'close', '↻')
+  again.type = 'button'
+  again.setAttribute('aria-label', '다시 분석')
+  again.title = '다시 분석'
+  again.addEventListener('click', () => run())
+  ctl.append(again)
   const big = el('button', 'close', wide ? '⤡' : '⤢')
   big.type = 'button'
   big.setAttribute('aria-label', wide ? '작게 보기' : '크게 보기')
@@ -363,13 +434,14 @@ function showCard(build) {
   close.setAttribute('aria-label', '닫기')
   close.addEventListener('click', () => {
     cancelAnim()
+    // 지우지 않고 숨겨 둬요. '내 사이즈 찾기'를 다시 누르면 그대로 열려요.
     if (typeof card.animate !== 'function' || reducedMotion()) {
-      panel.replaceChildren()
+      card.classList.add('off')
       return
     }
-    // 닫힐 때 살짝 줄어들며 사라져요. 그사이 새 카드가 그려졌으면 그 카드는 건드리지 않아요.
+    // 닫힐 때 살짝 줄어들며 사라져요.
     const a = card.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(8px) scale(.97)' }], { duration: 180, easing: 'ease-in' })
-    a.onfinish = () => card.remove()
+    a.onfinish = () => card.classList.add('off')
   })
   ctl.append(mini, close)
   head.append(ctl)
@@ -466,6 +538,22 @@ function manualForm(r) {
 // ---------- 접을 수 있는 구역 / 읽은 그대로 보여주기 (페이지 글은 전부 textContent로만 넣어요) ----------
 // 섹션마다 색을 달리해 무엇에 대한 내용인지 구분해요 (추천 이유 초록 / 리뷰 보라 / 사이즈표 청회색 / 문제 해결 주황).
 const SECTION_TONE = [[/추천 이유/, 's-why'], [/리뷰/, 's-rv'], [/사이즈표/, 's-ch'], [/진단|문제/, 's-dx']]
+// 근거 줄: 'X: 내용'이면 X를 굵게, '→ 판정'은 강조해서 한 줄씩 나눠 보여줘요 (모두 textContent).
+function detailList(lines) {
+  const ul = el('ul', 'dl')
+  for (const t of lines || []) {
+    const li = el('li')
+    const m = /^([^:：]{1,24})[:：]\s*(.*)$/.exec(String(t))
+    const body = m ? m[2] : String(t)
+    if (m) li.append(el('b', null, m[1]))
+    const arrow = body.lastIndexOf('→ ')
+    if (arrow > 0) li.append(el('span', null, body.slice(0, arrow)), el('em', null, body.slice(arrow)))
+    else li.append(el('span', null, body))
+    ul.append(li)
+  }
+  return ul
+}
+
 function section(title, open = false) {
   const tone = (SECTION_TONE.find(([re]) => re.test(title)) || [])[1]
   const det = el('details', tone ? `sec ${tone}` : 'sec')
@@ -524,6 +612,15 @@ function chartTable(v) {
 }
 
 // 사이즈 탭 + 부위별 비교 표: 내 치수 / 옷 실측 / 여유 / 판정. 비교 기준이 없는 부위는 '실측만 표시'로 구분해요. 모든 글은 textContent로만 넣습니다.
+// 옷 실측 칸: 사이즈표에 적힌 값을 그대로 보여주고, 계산에 쓴 값(단면×2·신체 치수 여유·화장→팔길이)이 다르면 → 뒤에 붙여요.
+function garmentCell(r) {
+  const td = el('td')
+  if (r.garment == null) return (td.textContent = '-'), td
+  if (!r.raw) return (td.textContent = `${r.garment}${r.unit}`), td
+  td.append(el('span', null, r.raw), el('span', 'cv', `→ ${r.garment}${r.unit}`))
+  return td
+}
+
 function compareBlock(cv) {
   const box = el('div')
   const tabs = el('div', 'tabs')
@@ -542,11 +639,11 @@ function compareBlock(cv) {
       const tr = el('tr')
       tr.append(el('th', null, r.label))
       if (r.verdict == null) {
-        tr.append(el('td', null, r.body == null ? '-' : fmt(r.body, r.unit)), el('td', null, fmt(r.garment, r.unit)), el('td', null, '-'))
+        tr.append(el('td', null, r.body == null ? '-' : fmt(r.body, r.unit)), garmentCell(r), el('td', null, '-'))
         tr.append(el('td', 'mo', r.note))
       } else {
         const kind = r.bodyKind === 'measured' ? '' : r.bodyKind === 'standard' ? ' (표준)' : r.bodyKind === 'leg' ? ' (다리길이로 계산)' : r.bodyKind === 'review' ? ' (후기 추정)' : r.bodyKind === 'photo' ? ' (사진 추정)' : ' (추정)'
-        tr.append(el('td', null, `${fmt(r.body, r.unit)}${kind}`), el('td', null, fmt(r.garment, r.unit)), el('td', null, `${r.ease > 0 ? '+' : ''}${r.ease}${r.unit}`))
+        tr.append(el('td', null, `${fmt(r.body, r.unit)}${kind}`), garmentCell(r), el('td', null, `${r.ease > 0 ? '+' : ''}${r.ease}${r.unit}`))
         const td = el('td', 'vd', r.note ? `${r.verdict} (${r.note})` : r.verdict)
         const bar = el('span', 'bar')
         for (let i = 0; i < 5; i++) bar.append(el('i', i === r.level ? 'on' : null))
@@ -567,7 +664,8 @@ function compareBlock(cv) {
     tabs.append(btn)
   })
   box.append(tabs, ...panels)
-  box.append(el('p', 'note', '둘레는 단면×2, (추정)은 키·몸무게로, (후기 추정)은 비슷한 체형 후기로 보정해 계산했어요. 총장·소매 기준은 휴리스틱이에요. 막대: 작음 · 타이트 · 적당 · 넉넉 · 매우 넉넉'))
+  const conv = cv.sizes.some((s) => s.rows.some((r) => r.raw))
+  box.append(el('p', 'note', `${conv ? '옷 실측은 사이즈표에 적힌 값 그대로이고, → 뒤는 계산에 쓴 값(단면×2 등)이에요. ' : ''}(추정)은 키·몸무게로, (후기 추정)은 비슷한 체형 후기로 보정한 값이에요. 막대: 작음 · 타이트 · 적당 · 넉넉 · 매우 넉넉`))
   return box
 }
 
@@ -1538,7 +1636,7 @@ function sizeSummaryBlock(r, targets) {
   const chips = el('div', 'ssc')
   for (const t of sm.sizes) chips.append(el('span', t === sm.recommended ? 'on' : null, t === sm.recommended ? `${t} 추천` : t))
   box.append(chips)
-  if (sm.keyParts.length) box.append(el('p', null, `${sm.recommended} 실측 ${sm.keyParts.map((k) => `${k.label} ${k.value}${k.unit}`).join(' · ')}`))
+  if (sm.keyParts.length) box.append(el('p', null, `${sm.recommended} 실측 ${sm.keyParts.map((k) => (k.raw ? `${k.label} ${k.raw}${k.unit}(계산 ${k.value})` : `${k.label} ${k.value}${k.unit}`)).join(' · ')}`))
   const near = [sm.neighbors.lowerDiff, sm.neighbors.upperDiff].filter(Boolean)
   if (near.length) box.append(el('p', 'tiny', near.join(' / ')))
   if (sm.verdictLine) box.append(el('p', null, sm.verdictLine))
@@ -1752,7 +1850,7 @@ function pricePane(r) {
   } else {
     box.append(el('p', 'tiny', '다른 쇼핑몰에서 본 같은 상품이 아직 없어요. 아래에서 열고 \'내 사이즈 찾기\'를 누르면 가격이 함께 기록돼요.'))
   }
-  const links = searchLinks(r.name, rows.find((x) => x.current)?.mall || '')
+  const links = searchLinks(r.name, rows.find((x) => x.current)?.mall || '', r.brand)
   if (links.length) {
     box.append(el('p', 'tiny', '다른 쇼핑몰에서 찾아보기'))
     const lw = el('div', 'plinks')
@@ -1823,10 +1921,19 @@ function usedCard(card, r) {
   for (const t of r.reasons) ul.append(el('li', null, t))
   why.body.append(ul)
   fold.append(why.det)
+  // 상품 페이지와 같은 사이즈표 비교·읽은 사이즈표 (판매글 실측이나 비슷한 상품의 사이즈표를 쓴 경우)
+  if (r.compareView) {
+    const cp = section('사이즈표 비교 (내 치수 vs 옷 실측)', true)
+    cp.body.append(compareBlock(r.compareView))
+    fold.append(cp.det)
+  }
+  if (r.chartView) {
+    const ch = section(r.chartView.fromDb ? '읽은 사이즈표 (비슷한 상품, 근사)' : '읽은 사이즈표 (판매글 실측)')
+    ch.body.append(chartTable(r.chartView))
+    fold.append(ch.det)
+  }
   const dt = section('추천에 쓰인 근거 (자세히)')
-  const dul = el('ul', 'why details')
-  for (const t of r.details) dul.append(el('li', null, t))
-  dt.body.append(dul)
+  dt.body.append(detailList(r.details))
   fold.append(dt.det)
   if (r.diagnostics) {
     const rep = section('문제가 있나요? 진단 리포트')
@@ -1893,9 +2000,7 @@ function renderResult(r) {
     // 추천에 쓰인 근거를 줄별로 (후기 건수·제외, 학습값·샘플 수, 브랜드/지역 보정, 부위별 여유분, 브랜드 지역)
     if (r.details?.length) {
       const dt = section('추천에 쓰인 근거 (자세히)')
-      const dul = el('ul', 'why details')
-      for (const t of r.details) dul.append(el('li', null, t))
-      dt.body.append(dul)
+      dt.body.append(detailList(r.details))
       fold.append(dt.det)
     }
     if (r.sizeSystem) {
@@ -2047,7 +2152,10 @@ async function run() {
 if (!window.__fitcheckLoaded) {
   window.__fitcheckLoaded = true
   chrome.runtime.onMessage.addListener((msg) => {
-    if (msg?.type === 'fitcheck-run') run()
+    if (msg?.type === 'fitcheck-run') {
+      ensureUi()
+      openOrRun()
+    }
   })
   // 상품 페이지로 보일 때만 버튼을 띄웁니다. 늦게 그려지는 페이지는 몇 번 다시 확인해요.
   // 팝업에서 직접 실행한 경우(메시지)에는 어느 페이지든 버튼과 결과를 보여줘요.
