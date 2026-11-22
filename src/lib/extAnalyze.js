@@ -14,6 +14,7 @@ import { toSamples } from './learnSamples.js'
 import { chartRecordFromProduct } from './sizeChartDb.js'
 import { usedSiteOf, readListing, listingText } from './usedListing.js'
 import { analyzeUsedListing } from './usedAnalyze.js'
+import { isKreamUrl, readKream } from './kream.js'
 // 사용자가 직접 적은 사이즈표: 열 이름(예: 어깨 가슴 총장)과 줄(예: M 50 57 68) → buildSizeChart 입력 모양.
 // 저장하지 않고 이번 분석에만 씁니다. 잘못된 줄은 버려요.
 export function manualChartRows(columnsText, linesText) {
@@ -130,11 +131,31 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
   if (usedSite) return analyzeUsedPage(root, pageUrl, profile, extVersion, opts, usedSite)
   const product = parsePage(root, pageUrl, opts)
   if (!product) return { status: 'no-product', message: NOT_PRODUCT_MESSAGE }
+  // KREAM: 사이즈표·체형 후기가 없어서 전체 후기의 사이즈 감과 거래 내역의 사이즈 이름을 따로 읽어요.
+  if (isKreamUrl(pageUrl)) {
+    const k = readKream(String(root.body?.innerText || '').split('\n'))
+    if (k.feel.total) product.sizeFeel = k.feel
+    if (!product.optionLabels?.length && k.sizes.length) product.optionLabels = k.sizes
+    // 신발: 사이즈(mm)는 거래 내역·후기에 일부만 보여서 220~310(5mm 간격)으로 채우고, 후기(산 사이즈·체감)는 신발 판정에 넘겨요.
+    // ponytail: 크림 운동화 사이즈 범위를 220~310으로 가정했어요. 범위 밖 사이즈는 본 사이즈만 써요.
+    const mm = k.sizes.filter((x) => /^\d{3}$/.test(x)).map(Number).filter((v) => v >= 200 && v <= 330)
+    // 이름으로 종류를 모를 때(예: 'Nike Dunk Low') 사이즈가 전부 mm(250·260…)면 신발이에요. 직접 고른 종류는 그대로 둬요.
+    if (!opts.categoryOverride && product.category !== 'shoes' && mm.length >= 2 && mm.length === k.sizes.length) {
+      product.category = 'shoes'
+      product.categoryConfidence = 'medium'
+    }
+    if (product.category === 'shoes' && mm.length) {
+      const all = new Set(mm)
+      for (let v = 220; v <= 310; v += 5) all.add(v)
+      if (!product.shoeOptionLabels?.length) product.shoeOptionLabels = [...all].sort((a, b) => a - b).map(String)
+      if (!product.reviews.length) product.reviews = k.reviews.map((r) => ({ size: r.size, fit: r.fit, text: r.text }))
+    }
+  }
 
   // 사이즈표도 없고 참고할 리뷰도 거의 없으면 추천하지 않고 솔직하게 알립니다.
   // 신발은 사이즈표 없이 옵션 범위(예: '250 (250-255)')와 발길이만으로도 비교할 수 있어 이 조건을 통과시켜요.
   const canCompareShoe = product.category === 'shoes' && !!shoeViewFor(product, profile)
-  if (!product.sizeChart && product.reviews.length < MIN_REVIEWS_WITHOUT_CHART && !canCompareShoe) {
+  if (!product.sizeChart && product.reviews.length < MIN_REVIEWS_WITHOUT_CHART && !canCompareShoe && !(product.sizeFeel?.total >= 3)) {
     const diagnostics = collectDiagnostics(root, pageUrl, extVersion, { categoryOverride: opts.categoryOverride })
     return {
       status: 'no-data',
@@ -203,6 +224,8 @@ export function analyzePage(root, pageUrl, profile, extVersion = '', opts = {}) 
     chartRecord: opts.collectSamples ? chartRecordFromProduct(product, { pageUrl }) : null,
     learnSamples: opts.collectSamples ? toSamples(product, { pageUrl }) : [],
     compareView: cmpView.view,
+    // 전체 후기 사이즈 감으로 추천했으면(KREAM) 리뷰 더 불러오기·리뷰 원문은 보여주지 않아요.
+    sizeFeelUsed: (result.evidence?.sizeFeelTotal ?? 0) > 0 || isKreamUrl(pageUrl),
     brand: product.chartBrand || product.pageBrand || '',
     shoeView: shoe,
     // 상품 대상 성별이 프로필 성별과 다를 때만 { gender, text, mismatch } (옷에도 같은 함수)

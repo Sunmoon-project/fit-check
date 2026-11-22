@@ -11,7 +11,7 @@ import { CONTENT_JS, PROFILE_HTML } from './injected'
 const STORE_KEY = 'fitcheck.store.v1'
 // 저장소 통로를 쓸 수 있는 쇼핑몰 (확장 manifest의 content_scripts matches와 같아요).
 // 앱 안 브라우저로 다른 사이트에 가도, 그 페이지는 체형 정보를 읽거나 쓸 수 없어요.
-const BRIDGE_HOSTS = ['musinsa.com', '29cm.co.kr', 'wconcept.co.kr', 'bunjang.co.kr', 'fruitsfamily.com', 'arcteryx.co.kr', 'arcteryx.com']
+const BRIDGE_HOSTS = ['musinsa.com', '29cm.co.kr', 'wconcept.co.kr', 'bunjang.co.kr', 'fruitsfamily.com', 'arcteryx.co.kr', 'arcteryx.com', 'kream.co.kr']
 function isBridgeHost(url) {
   try {
     const { protocol, hostname } = new URL(url)
@@ -26,6 +26,7 @@ const MALLS = [
   ['무신사', 'https://www.musinsa.com'],
   ['29CM', 'https://www.29cm.co.kr'],
   ['W컨셉', 'https://www.wconcept.co.kr'],
+  ['KREAM', 'https://kream.co.kr'],
 ]
 const STEPS = [
   ['내 체형 저장하기', '키와 몸무게만 있어도 돼요.'],

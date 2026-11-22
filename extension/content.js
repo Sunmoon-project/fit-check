@@ -2018,8 +2018,10 @@ function renderResult(r) {
     if (r.recommendedSize) card.append(el('div', 'size', r.recommendedLabel || r.recommendedSize))
     card.append(el('p', 'sum', r.manual ? `${r.summary} · 직접 입력한 사이즈표` : r.summary))
     const fold = el('div', 'fold')
-    fold.append(loadMoreBlock(r))
-    if (r.loadInfo) fold.append(el('p', 'tiny', r.loadInfo))
+    if (!r.sizeFeelUsed) {
+      fold.append(loadMoreBlock(r))
+      if (r.loadInfo) fold.append(el('p', 'tiny', r.loadInfo))
+    }
     const summarySlot = el('div')
     fold.append(summarySlot)
 
@@ -2046,7 +2048,7 @@ function renderResult(r) {
       fold.append(ss.det)
     }
 
-    if (r.reviewViews) {
+    if (r.reviewViews && !r.sizeFeelUsed) {
       // 신발은 키·몸무게 기준 '비슷한 체형' 판정을 추천에 쓰지 않으므로 제목에도 쓰지 않아요.
       const rv = section(r.reviewViews.isShoes ? `리뷰 원문 (불러온 ${r.reviewsLoaded}건)` : `리뷰 원문 (비슷한 체형 ${r.reviewViews.matchedTotal}건 / 불러온 ${r.reviewsLoaded}건${r.reviewViews.excludedTotal ? ` / 제외 ${r.reviewViews.excludedTotal}건` : ''})`)
       rv.body.append(reviewsBlock(r.reviewViews))
@@ -2152,7 +2154,7 @@ async function run() {
       result = await analyzeLearning(profile, { categoryOverride: chosenCategory })
     }
     // 리뷰가 AUTO_TARGET건보다 적으면 자동으로 더 불러온 뒤 다시 분석해요 (상품 페이지로 읽힌 경우만).
-    if ((result.status === 'ok' || result.status === 'no-data') && !result.usedSite && (result.reviewsLoaded ?? 0) < AUTO_TARGET) {
+    if ((result.status === 'ok' || result.status === 'no-data') && !result.usedSite && !result.sizeFeelUsed && (result.reviewsLoaded ?? 0) < AUTO_TARGET) {
       stage = 'load'
       fab.textContent = '리뷰 불러오는 중…'
       const res = await loadMoreReviews('auto', showAutoLoading())

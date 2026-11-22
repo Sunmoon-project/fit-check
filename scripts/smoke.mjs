@@ -1408,7 +1408,7 @@ test('확장 manifest: MV3, 최소 권한, 광범위 호스트 권한·원격 �
   assert.deepEqual([...EXT_MANIFEST.permissions].sort(), ['activeTab', 'scripting', 'storage'])
   assert.equal(EXT_MANIFEST.host_permissions, undefined)
   // 쇼핑몰마다 한 줄씩 늘어나요. 너무 넓은 주소는 checkManifest가 따로 막아요.
-  assert.ok(EXT_MANIFEST.content_scripts[0].matches.length <= 10)
+  assert.ok(EXT_MANIFEST.content_scripts[0].matches.length <= 12)
   assert.equal(EXT_MANIFEST.background, undefined, 'service worker 없음')
 })
 
@@ -6722,6 +6722,31 @@ await atest('사이즈표 비교의 옷 실측은 사이즈표에 적힌 값(단
   const links = searchLinks('클럽 후디', 'musinsa.com', 'Nike')
   assert.ok(links.some((l) => l.label === 'KREAM' && l.url === 'https://kream.co.kr/search?keyword=Nike%20%ED%81%B4%EB%9F%BD%20%ED%9B%84%EB%94%94'))
   assert.ok(!links.some((l) => l.label === '무신사'))
+})
+
+await atest('KREAM: 요약 칩·후기 카드·거래 내역에서 사이즈 감과 사이즈 이름을 읽고, 체형 후기·사이즈표 없이 기준 사이즈에서 후기 다수 의견만큼 옮겨 추천한다', async () => {
+  const { readKream, isKreamUrl } = await import('../src/lib/kream.js')
+  const { estimateLetterSize } = await import('../src/lib/sizeSystems.js')
+  assert.ok(isKreamUrl('https://kream.co.kr/products/1') && !isKreamUrl('https://kream.co.kr.evil.com/x'))
+  const lines = ['일반 리뷰 240', '4.9', '정사이즈예요 181', '두께감이 보통이에요 156', '커요 40', '5', 'M', '구매', '∙', '정사이즈예요', '핏 좋아요', '5', 'L', '구매', '∙', '오버핏이에요', '기장은 짧아요', '옵션', '거래가', 'XL', '119,000원', 'S', '129,000원']
+  const k = readKream(lines)
+  assert.deepEqual(k.feel, { small: 0, true: 181, large: 40, total: 240 }, '비율은 전체 후기 수(일반 리뷰 240)로')
+  assert.deepEqual(k.reviews.map((r) => [r.size, r.fit]), [['M', 'true'], ['L', 'large']])
+  assert.deepEqual(k.sizes, ['M', 'L', 'XL', 'S'])
+  const shoe = readKream(['일반 리뷰 59', '정사이즈로 나왔어요 51', '정사이즈로 구매했어요 44', '5', '290', '구매', '∙', '정사이즈로 나왔어요', '예뻐요', '4', '260', '구매', '∙', '반 사이즈 작게 나왔어요', '발볼 좁아요'])
+  assert.deepEqual(shoe.feel, { small: 0, true: 51, large: 0, total: 59 }, '산 방식 칩은 세지 않아요')
+  assert.deepEqual(shoe.reviews.map((r) => [r.size, r.fit]), [['290', 'true'], ['260', 'small']])
+  assert.equal(estimateLetterSize({ gender: 'male', category: 'top', values: { chest: 96 } }).size, 'M')
+  assert.equal(estimateLetterSize({ gender: 'male', category: 'top', values: { chest: 101.5 } }).size, 'L')
+  assert.equal(estimateLetterSize({ gender: 'male', category: 'shoes', values: {} }), null)
+  const p = (fit, usual = '') => buildProfile({ gender: 'male', height: '175', weight: '70', preferredFit: fit, usualTop: usual }).profile
+  const product = { name: 'IAB Studio Hoodie', category: 'top', reviews: [], optionLabels: ['S', 'M', 'L', 'XL'], sizeChart: null }
+  const reg = generateFitComment(p('regular'), { ...product, sizeFeel: k.feel })
+  assert.equal(reg.recommendedSize, 'M')
+  assert.ok(reg.body.includes('240건 중 75%가 정사이즈'), reg.body)
+  assert.equal(generateFitComment(p('relaxed'), { ...product, sizeFeel: k.feel }).recommendedSize, 'L', '오버핏이면 한 치수 크게')
+  assert.equal(generateFitComment(p('regular'), { ...product, sizeFeel: { small: 1, true: 2, large: 7, total: 10 } }).recommendedSize, 'S', '크게 나온다는 의견이 많으면 한 치수 작게')
+  assert.equal(generateFitComment(p('regular'), { ...product, sizeFeel: { small: 1, true: 1, large: 1, total: 2 } }).recommendedSize, null, '후기 3건 미만이면 쓰지 않아요')
 })
 
 console.log(`\n${passed}개 통과`)

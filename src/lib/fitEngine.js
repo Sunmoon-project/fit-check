@@ -7,7 +7,7 @@ import { estimateBody } from './bodyEstimate.js'
 import { detectReviewOutliers } from './reviewOutliers.js'
 import { resolveLearned, learningStatus, brandKeyOf } from './learnedModel.js'
 import { classifyBrandRegion, regionInputOf, regionLine } from './brandRegion.js'
-import { sizeSystemHint } from './sizeSystems.js'
+import { sizeSystemHint, estimateLetterSize } from './sizeSystems.js'
 import { reviewBodyEstimate, REVIEW_EST_PARTS } from './reviewBodyEstimate.js'
 import { outerKindOf } from './outerKind.js'
 
@@ -396,6 +396,41 @@ function usualSizeFor(profile, category) {
   return u.top
 }
 
+// 전체 후기의 사이즈 감(product.sizeFeel: { small, true, large, total })으로 고르기. 체형 정보 있는 후기·사이즈표가 없을 때만 써요.
+// 기준: 평소 사이즈 → 없으면 키·몸무게로 본 글자 사이즈(근사). 후기 40% 이상이 한쪽(크게/작게)이면 한 치수 옮기고, 오버핏이면 한 치수 올려요.
+const FEEL_PCT = 0.4
+function sizeFeelPick(profile, product, values, allowedKeys, preferredFit) {
+  const f = product.sizeFeel
+  if (!f || !(f.total >= 3) || product.category === 'shoes') return null
+  const est = estimateLetterSize({ gender: profile.gender, category: product.category, values })
+  if (!est) return null
+  const letters = est.letters
+  const list = (allowedKeys.length ? allowedKeys : letters).filter((k) => letters.includes(k)).sort((a, b) => letters.indexOf(a) - letters.indexOf(b))
+  if (!list.length) return null
+  const usual = usualSizeFor(profile, product.category)
+  const usualKey = usual ? String(usual).toUpperCase().trim() : ''
+  const fromUsual = letters.includes(usualKey)
+  const baseKey = fromUsual ? usualKey : est.size
+  // 목록에 없으면 가장 가까운 사이즈
+  const near = (k) => list.reduce((b, x) => (Math.abs(letters.indexOf(x) - letters.indexOf(k)) < Math.abs(letters.indexOf(b) - letters.indexOf(k)) ? x : b), list[0])
+  const base = near(baseKey)
+  const big = f.large / f.total
+  const small = f.small / f.total
+  const feelShift = big >= FEEL_PCT && big > small ? -1 : small >= FEEL_PCT && small > big ? 1 : 0
+  const prefShift = preferredFit === 'relaxed' ? 1 : 0
+  const i = Math.max(0, Math.min(list.length - 1, list.indexOf(base) + feelShift + prefShift))
+  const pct = (n) => Math.round((n / f.total) * 100)
+  const top = [['정사이즈', f.true], ['크게 나온다', f.large], ['작게 나온다', f.small]].sort((a, b) => b[1] - a[1])[0]
+  const partWord = est.part === 'waist' ? '허리' : '가슴'
+  const lines = [
+    fromUsual ? `평소 사이즈 ${base}를 기준으로 봤어요.` : `키·몸무게로 본 ${partWord} 약 ${Math.round(est.value)}cm는 보통 ${base} 사이즈예요(근사).`,
+    `구매 후기 ${f.total}건 중 ${pct(top[1])}%가 ${top[0]}고 했어요.`,
+    feelShift < 0 ? '크게 나온다는 의견이 많아 한 치수 작게 골랐어요.' : feelShift > 0 ? '작게 나온다는 의견이 많아 한 치수 크게 골랐어요.' : '',
+    prefShift ? '오버핏을 원해서 한 치수 크게 골랐어요.' : '',
+  ].filter(Boolean)
+  return { size: list[i], lines }
+}
+
 function describeVerdicts(verdicts) {
   if (!verdicts.length) return ''
   return verdicts.map((v) => `${v.label} ${v.verdict}`).join(', ') + '.'
@@ -443,6 +478,7 @@ export function generateFitComment(profile, product, calibration = {}, model = n
   const calibrated = Object.keys(calibration).length > 0
 
   let recommendedSize = null
+  let feelPick = null
   let confidence = 'low'
   let headline = '아직 추천이 어려워요'
   const body = []
@@ -489,6 +525,11 @@ export function generateFitComment(profile, product, calibration = {}, model = n
     else if (reviewPick.votes >= 2 && topSim >= 65) confidence = 'medium'
     body.push(reviewSentence)
     notes.push('사이즈표 실측이 없어 후기 위주로 판단했어요.')
+  } else if ((feelPick = sizeFeelPick(profile, product, formula.values, allowedKeys, preferredFit))) {
+    // 사이즈표도 체형 정보 있는 후기도 없지만, 전체 후기의 사이즈 감 집계가 있는 경우(KREAM)
+    recommendedSize = feelPick.size
+    body.push(...feelPick.lines)
+    notes.push('후기에 리뷰어 체형이 없어, 기준 사이즈에서 전체 후기의 사이즈 감만큼만 옮겼어요. 브랜드마다 달라 참고용이에요.')
   } else {
     const usual = usualSizeFor(profile, product.category)
     const usualKey = usual != null ? String(usual).toUpperCase() : null
@@ -543,6 +584,7 @@ export function generateFitComment(profile, product, calibration = {}, model = n
     measuredParts: compared.filter((v) => measured.has(v.part)).length,
     estimatedParts: compared.filter((v) => !measured.has(v.part)).length,
     calibrated,
+    sizeFeelTotal: feelPick ? product.sizeFeel.total : 0,
     // 자세한 근거 줄(describeEvidence)에 쓰는 값. 모두 이 분석에서 센 값이고 정확도를 잰 값은 아니에요.
     learnedState: !model ? 'none' : learning?.used ? 'used' : learning ? 'collecting' : 'none',
     learnedCategorySamples: learned?.categorySamples ?? 0,
@@ -641,7 +683,8 @@ export function describeEvidence(evidence, confidence) {
   const e = evidence || {}
   const word = CONFIDENCE_LABEL[confidence]?.text ?? CONFIDENCE_LABEL.low.text
   const parts = []
-  if ('reviewTotalOnPage' in e) {
+  if (e.sizeFeelTotal > 0) parts.push(`구매 후기 ${e.sizeFeelTotal}건의 사이즈 감 기준(리뷰어 체형 정보 없음)`)
+  else if ('reviewTotalOnPage' in e) {
     // 확장: 페이지에 불러온 리뷰만 읽었다는 점을 숨기지 않아요.
     const scope = e.reviewTotalOnPage > e.reviewTotal ? `(전체 약 ${e.reviewTotalOnPage}건 중 일부)` : ''
     if (e.reviewTotal > 0) parts.push(`페이지에 불러온 리뷰 ${e.reviewTotal}건 기준${scope}, 비슷한 체형 ${e.reviewMatched}건`)
@@ -656,7 +699,8 @@ export function describeEvidence(evidence, confidence) {
 
   const reasons = []
   if (confidence !== 'high') {
-    if (!e.reviewTotal) reasons.push('참고할 리뷰가 없어요.')
+    if (e.sizeFeelTotal > 0) reasons.push('리뷰어 체형 정보가 없어, 전체 후기의 사이즈 감과 내 키·몸무게로만 판단했어요.')
+    else if (!e.reviewTotal) reasons.push('참고할 리뷰가 없어요.')
     else if (!e.reviewMatched) reasons.push(`리뷰 ${e.reviewTotal}건 중 비슷한 체형의 후기가 없어요.`)
     else if (e.reviewVotes < 2) reasons.push(`비슷한 체형 후기 ${e.reviewMatched}건 중 사이즈와 핏을 밝힌 후기가 ${e.reviewVotes}건뿐이에요.`)
     if (!e.sizeChart) reasons.push('사이즈표를 읽지 못해 실측 비교를 하지 못했어요.')
@@ -673,7 +717,8 @@ const signed = (v) => `${v > 0 ? '+' : ''}${v}`
 export function evidenceDetails(evidence) {
   const e = evidence || {}
   const lines = []
-  if (isNum(e.reviewTotal)) {
+  if (e.sizeFeelTotal > 0) lines.push(`후기 근거: 구매 후기 ${e.sizeFeelTotal}건의 사이즈 감 집계(리뷰어 키·몸무게 없음)`)
+  else if (isNum(e.reviewTotal)) {
     lines.push(
       e.reviewTotal > 0
         ? `후기 근거: 불러온 후기 ${e.reviewTotal}건 중 이상치 제외 ${e.reviewExcluded || 0}건, 비슷한 체형 ${e.reviewMatched}건, 그중 사이즈·핏을 밝힌 후기 ${e.reviewVotes}건`
